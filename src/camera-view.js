@@ -1,5 +1,5 @@
 // Tab Kamera: jendela bidik, shutter, penghitung sisa jatah
-import { openCamera, stopCamera, captureFromVideo, captureFromFile } from "./camera.js";
+import { openCamera, stopCamera, captureFromVideo, captureFromFile, CAMERA_HELP } from "./camera.js";
 import { shoot, flushQueue } from "./shoot.js";
 import { queue } from "./queue.js";
 import { rpc, friendly, errorCode } from "./supabase.js";
@@ -76,16 +76,33 @@ export async function renderCamera(root, status, go) {
   }
 
   async function start() {
+    const msg = placeholder.querySelector("p");
+    const openBtn = placeholder.querySelector('[data-act="open"]');
     try {
-      stopCamera(stream);
+      stopCamera(stream); stream = null;
+      openBtn.disabled = true;
+      msg.textContent = "Membuka kamera…";
       stream = await openCamera(video, facing);
       video.classList.toggle("mirror", facing === "user");
-      placeholder.hidden = true;
       flip.disabled = false;
+      if (stream.needsTap) {
+        // iOS menolak memutar otomatis: minta satu ketukan lagi
+        msg.textContent = "Ketuk untuk menyalakan jendela bidik.";
+        openBtn.textContent = "Mulai";
+        openBtn.disabled = false;
+        openBtn.onclick = async () => {
+          try { await video.play(); placeholder.hidden = true; } catch { /* tetap tampil */ }
+          openBtn.onclick = start;
+          refresh();
+        };
+      } else {
+        placeholder.hidden = true;
+      }
     } catch (e) {
-      placeholder.querySelector("p").textContent =
-        "Kamera tidak bisa dibuka (izin ditolak atau tidak didukung). Gunakan tombol di bawah.";
-      placeholder.querySelector('[data-act="open"]').hidden = true;
+      const help = CAMERA_HELP[e.code] || CAMERA_HELP.OTHER;
+      msg.textContent = help + (e.detail ? ` (${e.detail})` : "") + " Sementara itu, foto bisa diambil dengan tombol di bawah.";
+      openBtn.textContent = "Coba lagi";
+      openBtn.disabled = false;
       fileLabel.hidden = false;
     }
     refresh();
@@ -116,7 +133,9 @@ export async function renderCamera(root, status, go) {
   view.querySelector('[data-act="open"]').onclick = start;
   flip.onclick = () => { facing = facing === "user" ? "environment" : "user"; start(); };
   shutter.onclick = () => {
-    if (stream) take(() => captureFromVideo(video));
+    if (!stream) return;
+    if (!video.videoWidth || video.paused) return toast("Jendela bidik belum menyala. Ketuk Mulai dulu.");
+    take(() => captureFromVideo(video));
   };
   fileInput.onchange = () => {
     const f = fileInput.files[0];

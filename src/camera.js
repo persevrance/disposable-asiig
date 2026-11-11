@@ -1,14 +1,73 @@
 // Buka kamera, ambil bingkai, kompres. Menggambar ulang lewat canvas membuang EXIF/GPS.
 
+export class CameraError extends Error {
+  constructor(code, detail) { super(code); this.code = code; this.detail = detail; }
+}
+
+// Browser bawaan aplikasi (Instagram, Facebook, LINE, dll.) sering memblokir kamera
+export function inAppBrowser() {
+  return /FBAN|FBAV|Instagram|Line\/|MicroMessenger|GSA\/|Twitter|TikTok|musical_ly|Snapchat/i.test(navigator.userAgent);
+}
+
 export async function openCamera(video, facing = "environment") {
-  const stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1920 } },
-    audio: false,
-  });
-  video.srcObject = stream; // <video playsinline muted autoplay>
-  await video.play();
+  if (!window.isSecureContext) throw new CameraError("NOT_HTTPS");
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new CameraError(inAppBrowser() ? "IN_APP" : "UNSUPPORTED");
+  }
+
+  // iOS butuh atribut ini sebagai properti juga, bukan hanya di HTML
+  video.setAttribute("playsinline", "");
+  video.setAttribute("webkit-playsinline", "");
+  video.muted = true;
+  video.playsInline = true;
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      audio: false,
+    });
+  } catch (e) {
+    if (e.name === "NotAllowedError" || e.name === "SecurityError") throw new CameraError("DENIED", e.name);
+    // Batasan resolusi/kamera tidak cocok: coba tanpa batasan
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (e2) {
+      if (e2.name === "NotAllowedError") throw new CameraError("DENIED", e2.name);
+      if (e2.name === "NotFoundError") throw new CameraError("NO_CAMERA", e2.name);
+      if (e2.name === "NotReadableError") throw new CameraError("BUSY", e2.name);
+      throw new CameraError("OTHER", `${e2.name}: ${e2.message}`);
+    }
+  }
+
+  video.srcObject = stream;
+  try {
+    await video.play();
+  } catch {
+    // iOS kadang menolak play() di luar ketukan; aliran tetap ada,
+    // pemanggil menampilkan tombol "ketuk untuk mulai".
+    stream.needsTap = true;
+  }
+  // Tunggu ukuran bingkai tersedia (iOS bisa 0 sesaat setelah play)
+  if (!video.videoWidth) {
+    await new Promise((res) => {
+      const done = () => res();
+      video.addEventListener("loadedmetadata", done, { once: true });
+      setTimeout(done, 2000);
+    });
+  }
   return stream;
 }
+
+export const CAMERA_HELP = {
+  NOT_HTTPS: "Kamera hanya bisa dibuka lewat alamat HTTPS. Buka https://disposable-asiig.my.id.",
+  IN_APP: "Link ini terbuka di browser bawaan aplikasi, yang memblokir kamera. Ketuk menu (⋯ atau ⋮) lalu pilih \"Buka di Safari\" / \"Open in browser\".",
+  UNSUPPORTED: "Browser ini tidak mendukung kamera web. Di iPhone, pakai Safari (iOS 14.3 ke atas).",
+  DENIED: "Izin kamera ditolak. Di iPhone: ketuk \"aA\" di bilah alamat Safari -> Pengaturan Situs Web -> Kamera -> Izinkan, lalu muat ulang. Atau Pengaturan iPhone -> Safari -> Kamera -> Tanya/Izinkan.",
+  NO_CAMERA: "Kamera tidak ditemukan di perangkat ini.",
+  BUSY: "Kamera sedang dipakai aplikasi lain. Tutup aplikasi itu lalu coba lagi.",
+  OTHER: "Kamera tidak bisa dibuka.",
+};
 
 export function stopCamera(stream) {
   stream?.getTracks().forEach((t) => t.stop());
@@ -48,6 +107,7 @@ function drawScaled(source, sw, sh, maxSide) {
 
 // Satu bingkai -> { photo (1600 px), thumb (400 px) }. Foto tidak dicerminkan.
 export async function captureFromVideo(video) {
+  if (!video.videoWidth || video.paused) throw new Error("Jendela bidik belum menyala");
   const full = drawScaled(video, video.videoWidth, video.videoHeight, 1600);
   return finish(full);
 }
