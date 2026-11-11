@@ -39,5 +39,6 @@ drop function if exists
   admin_set_settings(jsonb), admin_events(text), admin_users(text),
   admin_ban(uuid, boolean), admin_audit(int),
   my_verified_email(), admin_overdue_events(), admin_client_errors(int),
-  log_client_error(uuid, text, text, text)
+  log_client_error(uuid, text, text, text),
+  my_event_quota(), admin_set_event_limit(text, int, int)
 cascade;

@@ -3,7 +3,7 @@
 import { rpc, friendly } from "./supabase.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles } from "./owner.js";
-import { el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet } from "./ui.js";
+import { el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal } from "./ui.js";
 
 const TABS = [
   ["ringkasan", "Ringkasan"],
@@ -213,6 +213,8 @@ async function peran(body, me) {
           <select name="role"><option value="creator">Pembuat acara</option><option value="superadmin">Superadmin</option></select>
           <button class="btn primary">Simpan</button>
         </div>
+        <label class="limit-field">Batas jumlah acara (khusus pembuat acara, kosongkan = tanpa batas)
+          <input name="limit" type="number" min="0" max="10000" placeholder="Tanpa batas" /></label>
       </form>
       <div class="card"><h3>Daftar peran</h3><div class="list"><p class="hint">Memuat…</p></div></div>
     </div>`);
@@ -227,8 +229,10 @@ async function peran(body, me) {
         <tbody>${rows.map((r) => `
           <tr>
             <td><b>${esc(r.email)}</b><br><small>${r.user_name ? esc(r.user_name) : "belum pernah login"} · ditambahkan ${esc(fmtDate(r.added_at))}${r.added_by ? ` oleh ${esc(r.added_by)}` : ""}</small></td>
-            <td><span class="tag ${r.role === "superadmin" ? "hot" : ""}">${r.role === "superadmin" ? "Superadmin" : "Pembuat acara"}</span></td>
+            <td><span class="tag ${r.role === "superadmin" ? "hot" : ""}">${r.role === "superadmin" ? "Superadmin" : "Pembuat acara"}</span>
+              ${r.role === "creator" ? `<br><small>${limitText(r)}</small>` : ""}</td>
             <td class="actions">${r.email === me.email.toLowerCase() ? `<small>Anda</small>` : `
+              ${r.role === "creator" ? `<button class="btn small ghost" data-limit="${esc(r.email)}">Atur batas</button>` : ""}
               <button class="btn small ghost" data-swap="${esc(r.email)}" data-role="${r.role === "superadmin" ? "creator" : "superadmin"}">${r.role === "superadmin" ? "Jadikan pembuat" : "Jadikan superadmin"}</button>
               <button class="btn small danger" data-del="${esc(r.email)}">Cabut</button>`}
             </td>
@@ -236,22 +240,81 @@ async function peran(body, me) {
         </tbody>
       </table>`));
     list.querySelectorAll("[data-swap]").forEach((b) => (b.onclick = () => setRole(b.dataset.swap, b.dataset.role)));
+    list.querySelectorAll("[data-limit]").forEach((b) => (b.onclick = async () => {
+      const r = rows.find((x) => x.email === b.dataset.limit);
+      if (r && (await limitDialog(r))) await load();
+    }));
     list.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
       confirmDialog({ title: `Cabut peran ${b.dataset.del}?`, text: "Acara yang sudah dibuatnya tetap ada.", ok: "Cabut peran", danger: true })
         .then((ok) => ok && setRole(b.dataset.del, null));
     }));
   }
-  async function setRole(email, role) {
-    try { await rpc("admin_set_role", { p_email: email, p_role: role }); toast("Tersimpan."); await load(); }
-    catch (e) { toast(friendly(e)); }
+  async function setRole(email, role, limit) {
+    try {
+      await rpc("admin_set_role", { p_email: email, p_role: role });
+      if (limit !== undefined) await rpc("admin_set_event_limit", { p_email: email, p_limit: limit });
+      toast("Tersimpan.");
+      await load();
+      return true;
+    } catch (e) { toast(friendly(e)); return false; }
   }
-  view.querySelector("form").onsubmit = async (e) => {
+  const form = view.querySelector("form");
+  const syncLimit = () => { form.querySelector(".limit-field").hidden = form.elements.role.value !== "creator"; };
+  form.elements.role.onchange = syncLimit;
+  syncLimit();
+  form.onsubmit = async (e) => {
     e.preventDefault();
-    const f = e.target.elements;
-    await setRole(f.email.value.trim(), f.role.value);
-    f.email.value = "";
+    const f = form.elements;
+    const raw = f.limit.value.trim();
+    const limit = f.role.value === "creator" && raw !== "" ? Number(raw) : undefined;
+    if (await setRole(f.email.value.trim(), f.role.value, limit)) {
+      f.email.value = "";
+      f.limit.value = "";
+    }
   };
   await load();
+}
+
+const limitText = (r) => r.event_limit === null || r.event_limit === undefined
+  ? `${r.events_created ?? 0} acara dibuat · tanpa batas`
+  : `${r.events_created ?? 0} dari ${r.event_limit} acara${r.events_created >= r.event_limit ? " · habis" : ""}`;
+
+// Dialog atur batas acara satu pembuat acara. Resolve true jika tersimpan.
+function limitDialog(r) {
+  return new Promise((resolve) => {
+    let saved = false;
+    const { box, close } = modal(`
+      <form class="dialog">
+        <h3>Batas acara</h3>
+        <p>${esc(r.email)}</p>
+        <label>Maks. acara yang boleh dibuat
+          <input name="limit" type="number" min="0" max="10000" placeholder="Tanpa batas" value="${r.event_limit ?? ""}" autofocus /></label>
+        <label>Acara yang sudah dibuat
+          <input name="used" type="number" min="0" value="${r.events_created ?? 0}" /></label>
+        <p class="hint">Kosongkan batas untuk tanpa batas. Hitungan tidak berkurang saat acara dihapus; ubah angkanya (misalnya ke 0) untuk memberi jatah baru.</p>
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost" data-act="no">Batal</button>
+          <button class="btn primary">Simpan</button>
+        </div>
+      </form>`, { onClose: () => resolve(saved) });
+    const f = box.querySelector("form");
+    box.querySelector('[data-act="no"]').onclick = close;
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const limit = f.elements.limit.value.trim();
+      const used = f.elements.used.value.trim();
+      try {
+        await rpc("admin_set_event_limit", {
+          p_email: r.email,
+          p_limit: limit === "" ? null : Number(limit),
+          p_used: used === "" ? null : Number(used),
+        });
+        toast("Batas acara tersimpan.");
+        saved = true;
+        close();
+      } catch (err) { toast(friendly(err)); }
+    };
+  });
 }
 
 // ---------- Pengguna ----------
@@ -363,7 +426,8 @@ const resNote = (r) => ({ 1280: " · ±0,4 MB/foto", 1600: " · ±0,6 MB/foto", 
 const ACTIONS = {
   buat_acara: "membuat acara", ubah_acara: "mengubah acara", hapus_acara: "menghapus acara",
   ubah_sampul: "mengubah sampul", blokir_peserta: "memblokir peserta", pulihkan_peserta: "memulihkan peserta",
-  ubah_peran: "mengubah peran", ubah_pengaturan: "mengubah pengaturan global",
+  ubah_peran: "mengubah peran", ubah_batas_acara: "mengubah batas acara",
+  ubah_pengaturan: "mengubah pengaturan global",
   blokir_akun: "memblokir akun", pulihkan_akun: "memulihkan akun",
 };
 async function log(body) {

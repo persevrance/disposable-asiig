@@ -96,6 +96,24 @@ alter table client_errors enable row level security;
 
 alter table profiles add column if not exists banned boolean not null default false;
 
+-- Batas jumlah acara per pembuat acara (diatur superadmin). NULL = tanpa batas.
+-- events_created menghitung acara yang pernah dibuat; tidak berkurang saat
+-- acara dihapus. Superadmin bisa mengatur ulang hitungannya.
+do $$ begin
+  if not exists (select 1 from information_schema.columns
+                  where table_schema = 'public' and table_name = 'user_roles'
+                    and column_name = 'events_created') then
+    alter table user_roles add column events_created int not null default 0
+      check (events_created >= 0);
+    -- Isi awal dari acara yang masih ada
+    update user_roles r set events_created = (
+      select count(*) from events e join auth.users u on u.id = e.owner_id
+       where lower(u.email) = r.email);
+  end if;
+end $$;
+alter table user_roles add column if not exists event_limit int
+  check (event_limit is null or event_limit between 0 and 10000);
+
 alter table events drop constraint if exists events_max_shots_check;
 alter table events add constraint events_max_shots_check check (max_shots between 1 and 500);
 
@@ -480,10 +498,16 @@ create or replace function create_event(p_name text, p_max_shots int default 30,
                              p_film text default null)
 returns uuid
 language plpgsql security definer set search_path = public as $$
-declare v_id uuid; v_try int := 0; s app_settings%rowtype;
+declare v_id uuid; v_try int := 0; s app_settings%rowtype; r user_roles%rowtype;
 begin
   perform assert_not_banned();
   if not can_create_event() then raise exception 'TIDAK_BOLEH_MEMBUAT'; end if;
+  -- Kunci baris peran supaya dua permintaan bersamaan tidak melewati batas
+  select * into r from user_roles where email = my_verified_email() for update;
+  if r.role <> 'superadmin' and r.event_limit is not null
+     and r.events_created >= r.event_limit then
+    raise exception 'BATAS_ACARA_HABIS';
+  end if;
   select * into s from app_settings;
   if p_max_shots is null or p_max_shots < 1 or p_max_shots > s.max_shots_limit then
     raise exception 'JATAH_MELEBIHI_BATAS';
@@ -505,9 +529,19 @@ begin
     end;
   end loop;
   insert into event_members (event_id, user_id) values (v_id, auth.uid());
+  update user_roles set events_created = events_created + 1 where email = r.email;
   perform log_audit('buat_acara', v_id::text, jsonb_build_object('name', trim(p_name)));
   return v_id;
 end $$;
+
+-- Sisa batas acara pemanggil (beranda). limit NULL = tanpa batas.
+create or replace function my_event_quota() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+           'limit', case when r.role = 'superadmin' then null else r.event_limit end,
+           'used',  r.events_created)
+    from user_roles r where r.email = my_verified_email();
+$$;
 
 -- Ubah acara dengan patch JSON: hanya kunci yang dikirim yang diubah.
 -- mirror_preview, mirror_photo, photo_max_side hanya untuk superadmin.
@@ -685,8 +719,10 @@ begin
     'overdue_events', (select count(*) from events where purge_at <= now()));
 end $$;
 
-create or replace function admin_roles()
-returns table (email text, role text, added_at timestamptz, added_by text, user_name text)
+drop function if exists admin_roles();
+create function admin_roles()
+returns table (email text, role text, added_at timestamptz, added_by text, user_name text,
+               event_limit int, events_created int)
 language plpgsql stable security definer set search_path = public as $$
 #variable_conflict use_column
 begin
@@ -694,7 +730,8 @@ begin
   return query
     select r.email, r.role, r.added_at, ab.name,
            (select pr.name from auth.users u join profiles pr on pr.id = u.id
-             where lower(u.email) = r.email limit 1)
+             where lower(u.email) = r.email limit 1),
+           r.event_limit, r.events_created
       from user_roles r
       left join profiles ab on ab.id = r.added_by
      order by r.role desc, r.email;
@@ -717,6 +754,26 @@ begin
                                       added_at = now();
   end if;
   perform log_audit('ubah_peran', v_email, jsonb_build_object('role', p_role));
+end $$;
+
+-- Atur batas acara satu pembuat acara. p_limit NULL = tanpa batas.
+-- p_used (opsional) mengatur ulang hitungan acara yang sudah dibuat.
+create or replace function admin_set_event_limit(p_email text, p_limit int, p_used int default null)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare v_email text := lower(trim(p_email));
+begin
+  perform assert_superadmin();
+  if p_limit is not null and (p_limit < 0 or p_limit > 10000) then
+    raise exception 'BATAS_ACARA_TIDAK_VALID';
+  end if;
+  if p_used is not null and p_used < 0 then raise exception 'BATAS_ACARA_TIDAK_VALID'; end if;
+  update user_roles set event_limit = p_limit,
+                        events_created = coalesce(p_used, events_created)
+   where email = v_email;
+  if not found then raise exception 'PERAN_TIDAK_ADA'; end if;
+  perform log_audit('ubah_batas_acara', v_email,
+                    jsonb_build_object('limit', p_limit, 'used', p_used));
 end $$;
 
 create or replace function admin_set_settings(p_patch jsonb) returns void
@@ -882,6 +939,7 @@ grant execute on function
   get_roll(uuid, uuid), rotate_code(uuid), get_invites(uuid), set_invites(uuid, text[]),
   hide_photo(uuid, boolean), block_member(uuid, uuid, boolean),
   release_pending(uuid, uuid), list_members(uuid), owner_paths(uuid), delete_event(uuid),
+  my_event_quota(), admin_set_event_limit(text, int, int),
   admin_overview(), admin_roles(), admin_set_role(text, text), admin_set_settings(jsonb),
   admin_events(text), admin_users(text), admin_ban(uuid, boolean), admin_audit(int),
   admin_overdue_events(), admin_client_errors(int), log_client_error(uuid, text, text, text)

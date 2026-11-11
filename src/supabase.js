@@ -38,6 +38,9 @@ const MESSAGES = {
   TERLALU_BANYAK: "Pilih paling banyak 100 foto sekaligus.",
   SAMPUL_SALAH: "Lokasi file sampul tidak valid.",
   EMAIL_TIDAK_VALID: "Alamat email tidak valid.",
+  BATAS_ACARA_HABIS: "Batas jumlah acara Anda sudah habis. Hubungi superadmin untuk menambahnya.",
+  BATAS_ACARA_TIDAK_VALID: "Batas acara harus angka 0 sampai 10000.",
+  PERAN_TIDAK_ADA: "Email ini belum punya peran.",
 };
 
 export function errorCode(e) {

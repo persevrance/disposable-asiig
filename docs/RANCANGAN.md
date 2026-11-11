@@ -15,6 +15,7 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
 1. Tamu tetap wajib login Google. Ada peringatan untuk browser bawaan aplikasi (Google menolak login di sana).
    Beranda hanya menampilkan acara milik sendiri dan acara yang kodenya dimasukkan di perangkat ini (`localStorage`, per akun); daftar itu dihapus saat keluar.
 2. Hanya email dengan peran `creator`/`superadmin` yang bisa membuat acara.
+   Superadmin bisa membatasi jumlah acara tiap pembuat acara (`user_roles.event_limit`, NULL = tanpa batas) dari tab Peran. Hitungan `user_roles.events_created` tidak berkurang saat acara dihapus; superadmin bisa mengubahnya untuk memberi jatah baru. Superadmin sendiri tidak dibatasi.
 3. Jatah jepretan diatur pembuat acara, 1 sampai `app_settings.max_shots_limit`. Pembuat acara hanya bisa menaikkan; superadmin bisa menurunkan selama tidak di bawah pemakaian.
 4. Efek film: pembuat acara memilih efek bawaan; tamu boleh menggantinya sendiri dari jendela bidik (pratinjau dari gambar kamera, diingat per acara di HP). Pembuat acara bisa mematikan pilihan tamu (`events.allow_film_choice`). Efek dibakar ke foto di HP (`src/film.js`). Nama preset buatan sendiri, bukan merek.
 5. Tidak ada unggah dari galeri. Cadangan `<input capture>` menolak file yang `lastModified`-nya lebih dari 3 menit.

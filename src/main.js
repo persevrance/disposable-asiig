@@ -155,8 +155,9 @@ async function renderHome() {
   };
 
   try {
-    const [events, canCreate, role, settings] = await Promise.all([
+    const [events, canCreate, role, settings, quota] = await Promise.all([
       rpc("my_events"), rpc("can_create_event"), rpc("my_role"), rpc("get_settings"),
+      rpc("my_event_quota").catch(() => null), // null jika v2.sql terbaru belum dijalankan
     ]);
     // Dashboard hanya untuk superadmin dan pembuat acara
     view.querySelector("[data-admin]").hidden = !(role === "superadmin" || role === "creator");
@@ -177,10 +178,19 @@ async function renderHome() {
         })
       : [el(`<p class="hint">Belum ada acara. Masukkan kode dari pemilik acara, atau buka link undangan.</p>`)]));
 
-    if (canCreate) {
+    const limited = quota && quota.limit !== null && quota.limit !== undefined;
+    const left = limited ? Math.max(0, quota.limit - quota.used) : null;
+    if (canCreate && left === 0) {
+      view.querySelector(".create-slot").append(el(`
+        <div class="card create">
+          <h3>Buat acara baru</h3>
+          <p class="hint">Batas acara Anda sudah habis (${quota.used} dari ${quota.limit} acara). Hubungi superadmin untuk menambahnya.</p>
+        </div>`));
+    } else if (canCreate) {
       const form = el(`
         <form class="card create">
           <h3>Buat acara baru</h3>
+          ${limited ? `<p class="hint">Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
           <label>Nama acara <input name="name" required maxlength="80" /></label>
           <div class="row">
             <label>Jatah foto (maks. ${settings.max_shots_limit}) <input name="max_shots" type="number" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" /></label>
