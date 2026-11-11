@@ -75,28 +75,65 @@ export async function renderCamera(root, status, go) {
     view.querySelector("button").onclick = () => go("album");
   }
 
+  // Apakah video benar-benar menampilkan gambar (bukan hanya "berhasil dibuka")?
+  const isLive = () => video.readyState >= 2 && video.videoWidth > 0 && !video.paused;
+
+  async function waitLive(ms) {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms) {
+      if (isLive()) return true;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return isLive();
+  }
+
+  // Ringkasan keadaan kamera untuk dilaporkan jika jendela bidik tetap hitam
+  function diag() {
+    const t = stream?.getVideoTracks()[0];
+    const s = t?.getSettings?.() || {};
+    return `[${video.videoWidth}x${video.videoHeight} rs=${video.readyState} ` +
+      `paused=${video.paused} track=${t?.readyState || "-"}${t?.muted ? "/muted" : ""} ` +
+      `set=${s.width || "?"}x${s.height || "?"} ${s.facingMode || ""}]`;
+  }
+
+  // Dipanggil dari ketukan pengguna: iOS mengizinkan play() di sini
+  async function kick() {
+    const msg = placeholder.querySelector("p");
+    try {
+      video.srcObject = null;
+      video.srcObject = stream;
+      await video.play();
+    } catch { /* dicek di bawah */ }
+    if (await waitLive(2500)) {
+      placeholder.hidden = true;
+    } else {
+      msg.textContent = "Jendela bidik tetap hitam. Matikan Mode Daya Rendah (Pengaturan -> Baterai) lalu coba lagi, " +
+        "atau gunakan tombol aplikasi kamera di bawah. " + diag();
+      fileLabel.hidden = false;
+    }
+    refresh();
+  }
+
   async function start() {
     const msg = placeholder.querySelector("p");
     const openBtn = placeholder.querySelector('[data-act="open"]');
+    openBtn.onclick = start;
     try {
       stopCamera(stream); stream = null;
+      placeholder.hidden = false;
       openBtn.disabled = true;
       msg.textContent = "Membuka kamera…";
       stream = await openCamera(video, facing);
       video.classList.toggle("mirror", facing === "user");
       flip.disabled = false;
-      if (stream.needsTap) {
-        // iOS menolak memutar otomatis: minta satu ketukan lagi
-        msg.textContent = "Ketuk untuk menyalakan jendela bidik.";
+      if (!stream.needsTap && (await waitLive(2000))) {
+        placeholder.hidden = true;
+      } else {
+        // iOS menahan pemutaran otomatis: minta satu ketukan lagi
+        msg.textContent = "Kamera siap. Ketuk Mulai untuk menyalakan jendela bidik.";
         openBtn.textContent = "Mulai";
         openBtn.disabled = false;
-        openBtn.onclick = async () => {
-          try { await video.play(); placeholder.hidden = true; } catch { /* tetap tampil */ }
-          openBtn.onclick = start;
-          refresh();
-        };
-      } else {
-        placeholder.hidden = true;
+        openBtn.onclick = kick;
       }
     } catch (e) {
       const help = CAMERA_HELP[e.code] || CAMERA_HELP.OTHER;

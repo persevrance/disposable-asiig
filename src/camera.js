@@ -24,7 +24,7 @@ export async function openCamera(video, facing = "environment") {
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1440 } },
+      video: { facingMode: { ideal: facing }, width: { ideal: 1920 } },
       audio: false,
     });
   } catch (e) {
