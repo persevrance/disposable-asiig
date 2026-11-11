@@ -25,6 +25,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--text); min-height: 100%; }
 body {
+  min-height: 100dvh;
   -webkit-tap-highlight-color: transparent;
   background:
     radial-gradient(circle at 8% 0%, #ffe3ec 0, transparent 38%),

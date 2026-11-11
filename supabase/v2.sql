@@ -708,14 +708,16 @@ begin
   perform log_audit('ubah_pengaturan', null, p_patch);
 end $$;
 
+-- Superadmin: semua acara. Pembuat acara: hanya acaranya sendiri.
 create or replace function admin_events(p_search text default null)
 returns table (event_id uuid, name text, owner_name text, owner_email text,
                is_open boolean, max_shots int, film text, hide_names boolean,
                members int, photos int, bytes bigint, created_at timestamptz)
 language plpgsql stable security definer set search_path = public as $$
 #variable_conflict use_column
+declare v_admin boolean := is_superadmin();
 begin
-  perform assert_superadmin();
+  if not v_admin and not can_create_event() then raise exception 'TIDAK_BOLEH_MEMBUAT'; end if;
   return query
     with sz as (
       select split_part(o.name, '/', 1) as ev, sum((o.metadata->>'size')::bigint) as b
@@ -728,9 +730,10 @@ begin
       join profiles pr on pr.id = e.owner_id
       left join auth.users u on u.id = e.owner_id
       left join sz on sz.ev = e.id::text
-     where p_search is null or p_search = ''
+     where (v_admin or e.owner_id = auth.uid())
+       and (p_search is null or p_search = ''
         or e.name ilike '%' || p_search || '%' or pr.name ilike '%' || p_search || '%'
-        or u.email ilike '%' || p_search || '%' or e.join_code = upper(trim(p_search))
+        or u.email ilike '%' || p_search || '%' or e.join_code = upper(trim(p_search)))
      order by e.created_at desc
      limit 200;
 end $$;

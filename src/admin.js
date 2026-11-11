@@ -1,4 +1,5 @@
-// Dashboard superadmin: #/admin/<tab>
+// Dashboard: #/admin/<tab>. Superadmin melihat semua tab;
+// pembuat acara hanya tab Acara (acaranya sendiri).
 import { rpc, friendly } from "./supabase.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles } from "./owner.js";
@@ -15,25 +16,34 @@ const TABS = [
   ["pengaturan", "Pengaturan"],
   ["log", "Log"],
 ];
+const CREATOR_TABS = ["acara"];
 
 export async function renderAdmin(app, tab, { setView, me }) {
-  if (!TABS.some(([t]) => t === tab)) tab = "ringkasan";
+  let role = null;
+  try { role = await rpc("my_role"); } catch { /* ditangani di bawah */ }
+  if (role !== "superadmin" && role !== "creator") {
+    toast("Dashboard hanya untuk superadmin dan pembuat acara.");
+    location.hash = "#/";
+    return;
+  }
+  const tabs = role === "superadmin" ? TABS : TABS.filter(([t]) => CREATOR_TABS.includes(t));
+  if (!tabs.some(([t]) => t === tab)) tab = tabs[0][0];
   const view = el(`
     <main class="page admin">
       <header class="top">
         <a class="back" href="#/" aria-label="Kembali">‹</a>
         <h1>Dashboard</h1>
-        <span class="pill small-pill">Superadmin</span>
+        <span class="pill small-pill">${role === "superadmin" ? "Superadmin" : "Pembuat acara"}</span>
       </header>
-      <nav class="tabs scroll">
-        ${TABS.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}">${n}</a>`).join("")}
-      </nav>
+      ${tabs.length > 1 ? `<nav class="tabs scroll">
+        ${tabs.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}">${n}</a>`).join("")}
+      </nav>` : ""}
       <div class="admin-body"><p class="hint">Memuat…</p></div>
     </main>`);
   setView(view);
   const body = view.querySelector(".admin-body");
   const render = { ringkasan, acara, peran, pengguna, pengaturan, log }[tab];
-  try { await render(body, me); }
+  try { await render(body, me, role); }
   catch (e) { body.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); }
 }
 
@@ -66,11 +76,13 @@ const stat = (label, value, sub) => `
   <div class="stat"><b>${Number(value).toLocaleString("id-ID")}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
 
 // ---------- Acara ----------
-async function acara(body) {
+async function acara(body, me, role) {
+  const mine = role !== "superadmin";
   const view = el(`
     <div>
+      ${mine ? `<h3>Acara saya</h3>` : ""}
       <form class="card search"><div class="row">
-        <input name="q" placeholder="Cari nama acara, pemilik, email, atau kode" />
+        <input name="q" placeholder="${mine ? "Cari nama acara atau kode" : "Cari nama acara, pemilik, email, atau kode"}" />
         <button class="btn">Cari</button>
       </div></form>
       <div class="list"><p class="hint">Memuat…</p></div>
@@ -80,14 +92,14 @@ async function acara(body) {
 
   async function load(q = "") {
     const rows = await rpc("admin_events", { p_search: q || null });
-    if (!rows.length) return list.replaceChildren(el(`<p class="hint">Tidak ada acara.</p>`));
+    if (!rows.length) return list.replaceChildren(el(`<p class="hint">${mine && !q ? "Belum ada acara. Buat acara dari beranda." : "Tidak ada acara."}</p>`));
     list.replaceChildren(...rows.map((e) => {
       const n = el(`
         <div class="card event-admin">
           <div class="ea-head">
             <div>
               <b>${esc(e.name)}</b>
-              <small>${esc(e.owner_name)} · ${esc(e.owner_email || "")}</small>
+              ${mine ? "" : `<small>${esc(e.owner_name)} · ${esc(e.owner_email || "")}</small>`}
             </div>
             <span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
           </div>

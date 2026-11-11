@@ -87,6 +87,7 @@ Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin d
 
 - [ ] Login Google di Android (Chrome) dan iPhone (Safari).
 - [ ] Link `?kode=` memasukkan peserta setelah layar persetujuan.
+- [ ] Tamu yang login di perangkat/jendela baru tidak melihat acara apa pun di beranda sampai memasukkan kode; setelah Keluar, acara hilang lagi dari beranda.
 - [ ] Jendela bidik muncul; kamera depan/belakang bisa ditukar.
 - [ ] Satu jepretan: penghitung 30 -> 29, foto belum tampil di album.
 - [ ] Mode pesawat saat memotret: foto terkirim sendiri setelah online, jatah hanya berkurang satu.

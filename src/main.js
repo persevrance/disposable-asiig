@@ -23,6 +23,25 @@ if (params.get("kode")) {
   history.replaceState(null, "", location.pathname + (q ? "?" + q : "") + location.hash);
 }
 
+// ---------- Acara yang dimasuki dengan kode DI PERANGKAT INI ----------
+// Keanggotaan tersimpan per akun di server, tetapi beranda hanya menampilkan
+// acara yang kodenya sudah dimasukkan di perangkat ini (dan acara milik sendiri).
+// Daftar ini dihapus saat keluar, jadi login berikutnya perlu kode lagi.
+const joinedKey = () => `joined:${session?.user?.id}`;
+function joinedHere() {
+  try { return JSON.parse(localStorage.getItem(joinedKey()) || "[]"); } catch { return []; }
+}
+function rememberJoined(id) {
+  try {
+    const list = joinedHere().filter((x) => x !== id);
+    list.unshift(id);
+    localStorage.setItem(joinedKey(), JSON.stringify(list.slice(0, 50)));
+  } catch { /* penyimpanan diblokir: acara tetap bisa dibuka lewat kode */ }
+}
+function forgetJoined() {
+  try { localStorage.removeItem(joinedKey()); } catch { /* abaikan */ }
+}
+
 function setView(node) {
   cleanup(); cleanup = () => {};
   app.replaceChildren(node);
@@ -87,6 +106,7 @@ async function renderJoin(code) {
     e.currentTarget.disabled = true;
     try {
       const id = await rpc("join_event", { p_code: code });
+      rememberJoined(id);
       localStorage.removeItem("pendingCode");
       location.hash = `#/e/${id}`;
     } catch (err) {
@@ -123,6 +143,7 @@ async function renderHome() {
   setView(view);
 
   view.querySelector('[data-act="logout"]').onclick = async () => {
+    forgetJoined();
     await supabase.auth.signOut();
   };
   view.querySelector("form.join").onsubmit = (e) => {
@@ -134,10 +155,13 @@ async function renderHome() {
     const [events, canCreate, role, settings] = await Promise.all([
       rpc("my_events"), rpc("can_create_event"), rpc("my_role"), rpc("get_settings"),
     ]);
-    view.querySelector("[data-admin]").hidden = role !== "superadmin";
+    // Dashboard hanya untuk superadmin dan pembuat acara
+    view.querySelector("[data-admin]").hidden = !(role === "superadmin" || role === "creator");
+    const here = joinedHere();
+    const shown = events.filter((ev) => ev.is_owner || here.includes(ev.event_id));
     const box = view.querySelector(".events");
-    box.replaceChildren(...(events.length
-      ? events.map((ev) => {
+    box.replaceChildren(...(shown.length
+      ? shown.map((ev) => {
           const n = el(`
             <a class="card event-item" href="#/e/${ev.event_id}">
               <div>

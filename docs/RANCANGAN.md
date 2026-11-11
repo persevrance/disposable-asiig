@@ -13,6 +13,7 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
 ## Keputusan
 
 1. Tamu tetap wajib login Google. Ada peringatan untuk browser bawaan aplikasi (Google menolak login di sana).
+   Beranda hanya menampilkan acara milik sendiri dan acara yang kodenya dimasukkan di perangkat ini (`localStorage`, per akun); daftar itu dihapus saat keluar.
 2. Hanya email dengan peran `creator`/`superadmin` yang bisa membuat acara.
 3. Jatah jepretan diatur pembuat acara, 1 sampai `app_settings.max_shots_limit`. Pembuat acara hanya bisa menaikkan; superadmin bisa menurunkan selama tidak di bawah pemakaian.
 4. Efek film: pembuat acara memilih efek bawaan; tamu boleh menggantinya sendiri dari jendela bidik (pratinjau dari gambar kamera, diingat per acara di HP). Pembuat acara bisa mematikan pilihan tamu (`events.allow_film_choice`). Efek dibakar ke foto di HP (`src/film.js`). Nama preset buatan sendiri, bukan merek.
@@ -22,7 +23,7 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
 8. Sembunyikan nama pengunggah (`events.hide_names`): nama hanya terlihat oleh pemilik acara dan superadmin. Nama file foto tidak lagi berisi `user_id`. Gulungan tiap tamu bisa dilihat di Panel.
 9. Unduh untuk tamu: maks `max_shots` foto orang lain per acara (`downloads`). Foto sendiri gratis. File penuh hanya bisa dibaca setelah di-claim; album memakai versi sedang.
 10. Resolusi diatur superadmin (`photo_max_side`, global + override per acara). Tiap foto: penuh, sedang (1080px), thumbnail (400px).
-11. Dashboard superadmin: ringkasan + storage, peran, pengaturan, semua acara, pengguna (blokir), log aktivitas.
+11. Dashboard (`#/admin`), tombolnya hanya tampil untuk superadmin dan pembuat acara. Superadmin: ringkasan + storage, peran, pengaturan, semua acara, pengguna (blokir), log aktivitas. Pembuat acara: hanya tab Acara berisi acaranya sendiri.
 12. Flash manual (senter untuk kamera belakang jika didukung, layar putih untuk kamera depan). Kontrol kamera 3 kolom proporsional. Mirror diatur superadmin. Sampul/kartu undangan per acara (bucket publik `covers`).
 13. Tema warna ceria (krem, koral, kuning, mint).
 14. Penyimpanan tetap Supabase.
