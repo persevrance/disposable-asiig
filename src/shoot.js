@@ -4,11 +4,11 @@ import { uploadPhoto } from "./storage.js";
 import { queue } from "./queue.js";
 
 // Kode error yang berarti jepretan ini tidak akan pernah bisa dikirim
-const FINAL = ["FILM_HABIS", "ACARA_TUTUP", "BUKAN_PESERTA"];
+const FINAL = ["FILM_HABIS", "ACARA_TUTUP", "BUKAN_PESERTA", "AKUN_DIBLOKIR"];
 
-export async function shoot(eventId, { photo, thumb }) {
+export async function shoot(eventId, { photo, medium, thumb }) {
   const id = crypto.randomUUID(); // client_shot_id
-  await queue.put({ id, eventId, photo, thumb, createdAt: Date.now() });
+  await queue.put({ id, eventId, photo, medium, thumb, createdAt: Date.now() });
   return send(id);
 }
 
@@ -26,6 +26,8 @@ export async function send(id) {
     throw e;
   }
   await uploadPhoto(r.o_thumb_path, job.thumb);
+  // Jepretan yang diantre sebelum v2 belum punya versi sedang: pakai thumbnail
+  if (r.o_medium_path) await uploadPhoto(r.o_medium_path, job.medium || job.thumb);
   await uploadPhoto(r.o_file_path, job.photo);
   await rpc("confirm_shot", { p_photo: r.o_photo_id });
   await queue.delete(id); // selesai, hapus dari HP

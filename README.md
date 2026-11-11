@@ -4,10 +4,13 @@ Kamera sekali pakai berbasis web dengan album bersama. Opsi B1, paket P1:
 Supabase (login Google, database, penyimpanan foto) + Cloudflare Pages
 (tampilan) di `disposable-asiig.my.id`.
 
-- 30 jepretan per akun (bisa diatur per acara), dijaga di server dengan kunci baris.
+- Jatah jepretan per acara (batas maksimum diatur superadmin), dijaga di server dengan kunci baris.
 - Tanpa hapus, tanpa ulang. Foto peserta tampil di album setelah jatahnya habis,
   saat acara ditutup, atau pada waktu "cuci film".
 - Foto disimpan dulu di HP (IndexedDB) lalu dikirim; sinyal putus tidak memotong jatah dua kali.
+- 7 efek film, flash (lampu kamera belakang / layar untuk kamera depan), resolusi dan mirror dari pengaturan.
+- Tamu bisa mengunduh foto ukuran penuh, maks. sejumlah jatah jepretan (foto sendiri gratis).
+- Peran: superadmin (dashboard `#/admin`), pembuat acara, tamu. Rancangan lengkap: [docs/RANCANGAN.md](docs/RANCANGAN.md).
 
 ## Susunan
 
@@ -21,10 +24,14 @@ src/
   camera-view.js   tab Kamera
   shoot.js         pesan jatah -> unggah -> konfirmasi, antrean kirim ulang
   queue.js         antrean IndexedDB
-  album.js         tab Album
-  owner.js         tab Panel (pemilik)
+  film.js          preset efek film
+  album.js         tab Album + unduh dengan kuota
+  owner.js         tab Panel (pemilik acara / superadmin), gulungan per tamu, sampul
+  admin.js         dashboard superadmin
   storage.js       SATU-SATUNYA file yang berbeda antara P1 dan P2
-supabase/schema.sql  seluruh tabel, fungsi, aturan akses, bucket
+supabase/schema.sql  skema v1: tabel, fungsi, aturan akses, bucket
+supabase/v2.sql      perubahan v2 (peran, pengaturan, unduhan, sampul, log); aman diulang
+supabase/reset.sql   menghapus semua objek v1 + v2 (data hilang)
 ```
 
 ## Pemasangan
@@ -32,11 +39,17 @@ supabase/schema.sql  seluruh tabel, fungsi, aturan akses, bucket
 ### 1. Database (sekali)
 
 1. Supabase -> SQL Editor -> New query -> tempel isi `supabase/schema.sql` -> Run.
-   Hasil: "Success. No rows returned", 6 tabel di Table Editor, bucket `photos` di Storage.
-2. Daftarkan email Anda sebagai pembuat acara:
+   (Lewati jika database v1 sudah terpasang.)
+2. New query -> tempel isi `supabase/v2.sql` -> Run. Aman untuk database yang sudah berisi data;
+   daftar `event_creators` lama otomatis pindah ke `user_roles` sebagai pembuat acara.
+   Hasil: 10 tabel di Table Editor, bucket `photos` dan `covers` di Storage.
+3. Jadikan email Anda superadmin:
    ```sql
-   insert into event_creators (email) values ('email-anda@gmail.com');
+   insert into user_roles (email, role) values ('email-anda@gmail.com', 'superadmin')
+   on conflict (email) do update set role = 'superadmin';
    ```
+4. Login, buka **Dashboard** di beranda: tambahkan pembuat acara di tab Peran, atur batas jepretan,
+   resolusi, dan mirror di tab Pengaturan.
 
 ### 2. Google
 
@@ -78,6 +91,14 @@ Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin d
 - [ ] Satu jepretan: penghitung 30 -> 29, foto belum tampil di album.
 - [ ] Mode pesawat saat memotret: foto terkirim sendiri setelah online, jatah hanya berkurang satu.
 - [ ] Buat acara dengan jatah 3: setelah jepretan ke-3 muncul "Film habis" dan foto tampil di HP lain.
+- [ ] Flash: kamera belakang Android menyalakan lampu sesaat; kamera depan memutihkan layar. Di iPhone, tombol flash kamera belakang hanya muncul jika Safari mendukung `torch`.
+- [ ] Balik kamera ke depan: jendela bidik dan hasil foto dicerminkan sesuai Pengaturan.
+- [ ] Efek film: ketuk label film di jendela bidik, pratinjau tiap efek muncul dari gambar kamera; pilihan tetap setelah muat ulang. Matikan "Tamu boleh memilih efek film sendiri" di Panel: label tidak bisa diketuk dan efek bawaan dipakai.
+- [ ] Resolusi: ubah di Dashboard, foto baru mengikuti (cek ukuran di tab Ringkasan).
+- [ ] Unduh sebagai tamu: sisa kuota berkurang hanya untuk foto orang lain; foto sendiri gratis.
+- [ ] Sembunyikan nama: tamu melihat "Tamu", pemilik acara tetap melihat nama.
+- [ ] Sampul: tampil di layar "Masuk acara" dan di atas halaman acara.
+- [ ] Link dibuka dari WhatsApp/Instagram: muncul peringatan "Buka di Chrome atau Safari dulu".
 - [ ] Panel: tutup acara -> gulungan yang belum habis tampil.
 - [ ] Panel: sembunyikan foto, blokir peserta, unduh ZIP, hapus acara.
 

@@ -1,15 +1,18 @@
-// Buka kamera, ambil bingkai, kompres. Menggambar ulang lewat canvas membuang EXIF/GPS.
+// Buka kamera, ambil bingkai, efek film, kompres. Menggambar ulang lewat canvas membuang EXIF/GPS.
+import { applyFilm, FILMS } from "./film.js";
 
 export class CameraError extends Error {
   constructor(code, detail) { super(code); this.code = code; this.detail = detail; }
 }
 
-// Browser bawaan aplikasi (Instagram, Facebook, LINE, dll.) sering memblokir kamera
+// Browser bawaan aplikasi (Instagram, Facebook, LINE, WhatsApp, dll.) sering memblokir
+// kamera, dan Google menolak login di sana.
 export function inAppBrowser() {
-  return /FBAN|FBAV|Instagram|Line\/|MicroMessenger|GSA\/|Twitter|TikTok|musical_ly|Snapchat/i.test(navigator.userAgent);
+  return /FBAN|FBAV|Instagram|Line\/|MicroMessenger|GSA\/|Twitter|TikTok|musical_ly|Snapchat|WhatsApp/i.test(navigator.userAgent);
 }
 
-export async function openCamera(video, facing = "environment") {
+// maxSide: resolusi yang diminta dari pengaturan (sisi terpanjang, piksel)
+export async function openCamera(video, facing = "environment", maxSide = 2560) {
   if (!window.isSecureContext) throw new CameraError("NOT_HTTPS");
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new CameraError(inAppBrowser() ? "IN_APP" : "UNSUPPORTED");
@@ -21,23 +24,26 @@ export async function openCamera(video, facing = "environment") {
   video.muted = true;
   video.playsInline = true;
 
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: facing }, width: { ideal: 1920 } },
-      audio: false,
-    });
-  } catch (e) {
-    if (e.name === "NotAllowedError" || e.name === "SecurityError") throw new CameraError("DENIED", e.name);
-    // Batasan resolusi/kamera tidak cocok: coba tanpa batasan
+  const tries = [
+    { facingMode: { ideal: facing }, width: { ideal: maxSide }, height: { ideal: Math.round(maxSide * 0.75) } },
+    { facingMode: { ideal: facing }, width: { ideal: 1920 } },
+    true,
+  ];
+  let stream, last;
+  for (const constraints of tries) {
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    } catch (e2) {
-      if (e2.name === "NotAllowedError") throw new CameraError("DENIED", e2.name);
-      if (e2.name === "NotFoundError") throw new CameraError("NO_CAMERA", e2.name);
-      if (e2.name === "NotReadableError") throw new CameraError("BUSY", e2.name);
-      throw new CameraError("OTHER", `${e2.name}: ${e2.message}`);
+      stream = await navigator.mediaDevices.getUserMedia({ video: constraints, audio: false });
+      break;
+    } catch (e) {
+      last = e;
+      if (e.name === "NotAllowedError" || e.name === "SecurityError") throw new CameraError("DENIED", e.name);
+      // Batasan tidak cocok: coba yang lebih longgar
     }
+  }
+  if (!stream) {
+    if (last?.name === "NotFoundError") throw new CameraError("NO_CAMERA", last.name);
+    if (last?.name === "NotReadableError") throw new CameraError("BUSY", last.name);
+    throw new CameraError("OTHER", `${last?.name}: ${last?.message}`);
   }
 
   video.srcObject = stream;
@@ -73,19 +79,43 @@ export function stopCamera(stream) {
   stream?.getTracks().forEach((t) => t.stop());
 }
 
+// Jumlah kamera (untuk menentukan tombol balik kamera)
+export async function cameraCount() {
+  try {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    return list.filter((d) => d.kind === "videoinput").length;
+  } catch { return 2; }
+}
+
+// ---------- Flash ----------
+
+// Apakah kamera ini punya lampu yang bisa dinyalakan dari browser?
+export function hasTorch(stream) {
+  const t = stream?.getVideoTracks()[0];
+  try { return Boolean(t?.getCapabilities?.().torch); } catch { return false; }
+}
+
+export async function setTorch(stream, on) {
+  const t = stream?.getVideoTracks()[0];
+  if (!t) return;
+  try { await t.applyConstraints({ advanced: [{ torch: on }] }); } catch { /* tidak didukung */ }
+}
+
+// ---------- Mengolah foto ----------
+
 const pad = (n) => String(n).padStart(2, "0");
 
 // Cap tanggal ala kamera film: '26 11 11 di pojok kanan bawah
-function stampDate(ctx, w, h) {
+function stampDate(ctx, w, h, color) {
   const d = new Date();
   const text = `'${String(d.getFullYear()).slice(2)} ${pad(d.getMonth() + 1)} ${pad(d.getDate())}`;
   const size = Math.round(Math.min(w, h) * 0.045);
   ctx.font = `bold ${size}px "Courier New", monospace`;
   ctx.textAlign = "right";
   ctx.textBaseline = "bottom";
-  ctx.shadowColor = "rgba(255,120,0,0.8)";
+  ctx.shadowColor = color;
   ctx.shadowBlur = size * 0.4;
-  ctx.fillStyle = "#ff9a2e";
+  ctx.fillStyle = color;
   ctx.fillText(text, w - size * 1.2, h - size * 1.0);
   ctx.shadowBlur = 0;
 }
@@ -95,41 +125,61 @@ function toBlob(canvas, quality) {
     canvas.toBlob((b) => (b ? res(b) : rej(new Error("Gagal membuat JPEG"))), "image/jpeg", quality));
 }
 
-function drawScaled(source, sw, sh, maxSide) {
+function drawScaled(source, sw, sh, maxSide, mirror = false) {
   const scale = Math.min(1, maxSide / Math.max(sw, sh));
   const c = document.createElement("canvas");
   c.width = Math.round(sw * scale);
   c.height = Math.round(sh * scale);
   const ctx = c.getContext("2d");
+  if (mirror) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
   ctx.drawImage(source, 0, 0, c.width, c.height);
   return c;
 }
 
-// Satu bingkai -> { photo (1600 px), thumb (400 px) }. Foto tidak dicerminkan.
-export async function captureFromVideo(video) {
+export const MEDIUM_SIDE = 1080;
+export const THUMB_SIDE = 400;
+
+// opts: { maxSide, quality (0..1), mirror, film }
+// Hasil: { photo (penuh), medium (1080 px, untuk album), thumb (400 px) }
+async function develop(source, sw, sh, opts) {
+  const full = drawScaled(source, sw, sh, opts.maxSide || 2560, opts.mirror);
+  applyFilm(full, opts.film);
+  stampDate(full.getContext("2d"), full.width, full.height, FILMS[opts.film]?.stamp || "#ff9a2e");
+  const photo = await toBlob(full, opts.quality || 0.88);
+  const medium = await toBlob(drawScaled(full, full.width, full.height, MEDIUM_SIDE), 0.78);
+  const thumb = await toBlob(drawScaled(full, full.width, full.height, THUMB_SIDE), 0.7);
+  full.width = full.height = 0; // lepaskan memori canvas besar (penting di iOS)
+  return { photo, medium, thumb };
+}
+
+// Salin satu bingkai video secepatnya (saat flash menyala); diolah sesudahnya
+export function grabFrame(video) {
   if (!video.videoWidth || video.paused) throw new Error("Jendela bidik belum menyala");
-  const full = drawScaled(video, video.videoWidth, video.videoHeight, 1600);
-  return finish(full);
+  const c = document.createElement("canvas");
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext("2d").drawImage(video, 0, 0);
+  return c;
 }
 
-// Cadangan jika getUserMedia gagal: file dari <input capture>
-export async function captureFromFile(file) {
+// Bingkai kecil untuk pratinjau efek film di pemilih
+export function grabSmall(video, maxSide = 240) {
+  if (!video.videoWidth || video.paused) return null;
+  return drawScaled(video, video.videoWidth, video.videoHeight, maxSide);
+}
+
+export async function captureFromCanvas(frame, opts) {
+  try { return await develop(frame, frame.width, frame.height, opts); }
+  finally { frame.width = frame.height = 0; }
+}
+
+// Cadangan jika getUserMedia gagal: file dari <input capture>.
+// File yang dibuat lebih dari 3 menit lalu ditolak (bukan jepretan baru dari kamera).
+export const FILE_MAX_AGE_MS = 3 * 60 * 1000;
+export async function captureFromFile(file, opts) {
+  if (!file.lastModified || Date.now() - file.lastModified > FILE_MAX_AGE_MS) {
+    throw new CameraError("FILE_LAMA");
+  }
   const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-  const full = drawScaled(bmp, bmp.width, bmp.height, 1600);
-  bmp.close?.();
-  return finish(full);
-}
-
-async function finish(full) {
-  // Efek film sederhana: sedikit hangat + cap tanggal
-  const ctx = full.getContext("2d");
-  ctx.globalCompositeOperation = "soft-light";
-  ctx.fillStyle = "rgba(255,170,90,0.18)";
-  ctx.fillRect(0, 0, full.width, full.height);
-  ctx.globalCompositeOperation = "source-over";
-  stampDate(ctx, full.width, full.height);
-
-  const photo = await toBlob(full, 0.8);
-  const thumb = await toBlob(drawScaled(full, full.width, full.height, 400), 0.7);
-  return { photo, thumb };
+  try { return await develop(bmp, bmp.width, bmp.height, { ...opts, mirror: false }); }
+  finally { bmp.close?.(); }
 }

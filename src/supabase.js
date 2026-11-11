@@ -26,7 +26,18 @@ const MESSAGES = {
   FILE_BELUM_ADA: "Unggahan belum lengkap, akan dicoba lagi.",
   BUKAN_PEMILIK: "Hanya pemilik acara yang bisa melakukan ini.",
   TIDAK_BOLEH_MEMBUAT: "Akun Anda belum terdaftar sebagai pembuat acara.",
-  TIDAK_BISA_DIRI_SENDIRI: "Tidak bisa memblokir diri sendiri.",
+  TIDAK_BISA_DIRI_SENDIRI: "Tidak bisa melakukan ini pada akun Anda sendiri.",
+  BUKAN_SUPERADMIN: "Hanya superadmin yang bisa melakukan ini.",
+  AKUN_DIBLOKIR: "Akun Anda diblokir oleh admin.",
+  JATAH_MELEBIHI_BATAS: "Jumlah jepretan melebihi batas yang diatur admin.",
+  PESERTA_MELEBIHI_BATAS: "Jumlah peserta melebihi batas yang diatur admin.",
+  JATAH_TIDAK_BOLEH_TURUN: "Jatah jepretan hanya bisa dinaikkan.",
+  JATAH_DI_BAWAH_PEMAKAIAN: "Jatah tidak boleh lebih kecil dari jepretan yang sudah dipakai peserta.",
+  FILM_TIDAK_DIKENAL: "Efek film tidak dikenal.",
+  KUOTA_UNDUH_HABIS: "Kuota unduhan Anda tidak cukup untuk foto sebanyak itu.",
+  TERLALU_BANYAK: "Pilih paling banyak 100 foto sekaligus.",
+  SAMPUL_SALAH: "Lokasi file sampul tidak valid.",
+  EMAIL_TIDAK_VALID: "Alamat email tidak valid.",
 };
 
 export function errorCode(e) {

@@ -18,6 +18,25 @@ export async function getUrls(paths) {
   return Object.fromEntries(data.filter((d) => d.signedUrl).map((d) => [d.path, d.signedUrl]));
 }
 
+// ---------- Sampul undangan (bucket publik "covers") ----------
+
+const covers = () => supabase.storage.from("covers");
+
+export async function uploadCover(path, blob) {
+  const { error } = await covers().upload(path, blob, { contentType: "image/jpeg", upsert: false });
+  if (error) throw error;
+}
+
+export function coverUrl(path) {
+  return path ? covers().getPublicUrl(path).data.publicUrl : "";
+}
+
+export async function removeCover(path) {
+  if (!path) return;
+  const { error } = await covers().remove([path]);
+  if (error) throw error;
+}
+
 // Dipakai panel pemilik saat menghapus acara atau jepretan macet
 export async function removeFiles(paths) {
   for (let i = 0; i < paths.length; i += 100) {

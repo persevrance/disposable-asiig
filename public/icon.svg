@@ -1,9 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#111"/>
-  <rect x="76" y="156" width="360" height="236" rx="36" fill="#ff9a2e"/>
-  <rect x="116" y="124" width="96" height="48" rx="14" fill="#ff9a2e"/>
-  <circle cx="300" cy="274" r="84" fill="#111"/>
-  <circle cx="300" cy="274" r="54" fill="#2a2a2a"/>
-  <circle cx="282" cy="256" r="14" fill="#f2efe9" opacity=".7"/>
-  <rect x="116" y="200" width="56" height="28" rx="8" fill="#111"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff5c8a"/>
+      <stop offset="1" stop-color="#ff9a5c"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#fff7ec"/>
+  <rect x="72" y="150" width="368" height="248" rx="48" fill="url(#g)"/>
+  <rect x="112" y="116" width="100" height="52" rx="16" fill="#ff5c8a"/>
+  <rect x="330" y="124" width="64" height="40" rx="12" fill="#ffc23c"/>
+  <circle cx="290" cy="274" r="88" fill="#fff"/>
+  <circle cx="290" cy="274" r="64" fill="#2d1b33"/>
+  <circle cx="268" cy="252" r="16" fill="#fff" opacity=".85"/>
+  <rect x="112" y="200" width="60" height="30" rx="10" fill="#fff7ec"/>
+  <circle cx="420" cy="96" r="14" fill="#2ec4a0"/>
+  <circle cx="452" cy="140" r="8" fill="#ffc23c"/>
+  <circle cx="72" cy="436" r="10" fill="#b48cff"/>
 </svg>

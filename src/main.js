@@ -4,6 +4,10 @@ import { flushQueue } from "./shoot.js";
 import { renderCamera } from "./camera-view.js";
 import { renderAlbum } from "./album.js";
 import { renderPanel } from "./owner.js";
+import { renderAdmin } from "./admin.js";
+import { coverUrl } from "./storage.js";
+import { inAppBrowser } from "./camera.js";
+import { FILMS } from "./film.js";
 import { el, esc, toast } from "./ui.js";
 
 const app = document.getElementById("app");
@@ -29,10 +33,17 @@ function renderLogin() {
   const code = localStorage.getItem("pendingCode");
   setView(el(`
     <main class="center">
-      <div class="logo">📷</div>
-      <h1>Disposable Asiig</h1>
-      <p class="lead">Kamera sekali pakai untuk acara bersama. Setiap peserta punya 30 jepretan, tanpa hapus dan tanpa ulang.</p>
+      <div class="logo">📸</div>
+      <h1 class="brand">Disposable Asiig</h1>
+      <p class="lead">Kamera sekali pakai untuk acara bersama. Jepretan terbatas, tanpa hapus dan tanpa ulang. Semua foto terbuka setelah film habis!</p>
       ${code ? `<p class="pill">Undangan acara: <b>${esc(code)}</b></p>` : ""}
+      ${inAppBrowser() ? `
+        <div class="card warn-card">
+          <b>Buka di Chrome atau Safari dulu</b>
+          <p>Link ini terbuka di dalam aplikasi (WhatsApp/Instagram/dll.). Google menolak login dari sini dan kamera bisa terblokir.
+          Ketuk menu <b>⋮</b> atau <b>⋯</b> lalu pilih <b>"Buka di browser"</b> / <b>"Buka di Safari"</b>.</p>
+          <button class="btn small" data-act="copy">Salin link</button>
+        </div>` : ""}
       <button class="btn primary big" data-act="google">Masuk dengan Google</button>
       <p class="fine"><a href="/privacy.html">Kebijakan privasi</a></p>
     </main>`));
@@ -43,14 +54,25 @@ function renderLogin() {
     });
     if (error) toast(friendly(error));
   };
+  const copy = app.querySelector('[data-act="copy"]');
+  if (copy) copy.onclick = async () => {
+    const link = code ? `${location.origin}/?kode=${code}` : location.origin;
+    try { await navigator.clipboard.writeText(link); toast("Link disalin. Tempel di Chrome/Safari."); }
+    catch { prompt("Salin link ini lalu buka di Chrome/Safari:", link); }
+  };
 }
 
 // ---------- Persetujuan sebelum masuk acara ----------
-function renderJoin(code) {
+async function renderJoin(code) {
+  let ev = null;
+  try { ev = (await rpc("event_preview", { p_code: code }))[0] || null; } catch { /* tampilkan tanpa pratinjau */ }
   setView(el(`
     <main class="center">
-      <h1>Masuk acara</h1>
-      <p class="pill">Kode: <b>${esc(code)}</b></p>
+      ${ev?.cover_path ? `<img class="join-cover" alt="Sampul acara" src="${esc(coverUrl(ev.cover_path))}" />` : `<div class="logo">🎉</div>`}
+      <h1>${ev ? esc(ev.name) : "Masuk acara"}</h1>
+      ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
+      <p class="pill">Kode: <b>${esc(code)}</b>${ev ? ` · ${ev.max_shots} jepretan` : ""}</p>
+      ${ev && !ev.is_open ? `<p class="hint">Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.</p>` : ""}
       <p class="lead">Foto yang Anda jepret akan terlihat oleh semua peserta acara ini setelah gulungan Anda habis atau acara ditutup. Foto tidak bisa dihapus atau diulang.</p>
       <button class="btn primary big" data-act="yes">Setuju dan masuk</button>
       <button class="btn ghost" data-act="no">Batal</button>
@@ -81,8 +103,11 @@ async function renderHome() {
   const view = el(`
     <main class="page">
       <header class="top">
-        <h1>Disposable Asiig</h1>
-        <button class="btn small ghost" data-act="logout">Keluar</button>
+        <h1 class="brand">Disposable Asiig</h1>
+        <div class="row tight">
+          <a class="btn small" href="#/admin" data-admin hidden>Dashboard</a>
+          <button class="btn small ghost" data-act="logout">Keluar</button>
+        </div>
       </header>
       <form class="card join">
         <h3>Punya kode acara?</h3>
@@ -106,7 +131,10 @@ async function renderHome() {
   };
 
   try {
-    const [events, canCreate] = await Promise.all([rpc("my_events"), rpc("can_create_event")]);
+    const [events, canCreate, role, settings] = await Promise.all([
+      rpc("my_events"), rpc("can_create_event"), rpc("my_role"), rpc("get_settings"),
+    ]);
+    view.querySelector("[data-admin]").hidden = role !== "superadmin";
     const box = view.querySelector(".events");
     box.replaceChildren(...(events.length
       ? events.map((ev) => {
@@ -128,9 +156,12 @@ async function renderHome() {
           <h3>Buat acara baru</h3>
           <label>Nama acara <input name="name" required maxlength="80" /></label>
           <div class="row">
-            <label>Jatah foto <input name="max_shots" type="number" min="1" max="100" value="30" /></label>
-            <label>Maks. peserta <input name="max_members" type="number" min="1" max="5000" value="60" /></label>
+            <label>Jatah foto (maks. ${settings.max_shots_limit}) <input name="max_shots" type="number" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" /></label>
+            <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
           </div>
+          <label>Efek film bawaan (tamu boleh menggantinya; bisa diubah di Panel)
+            <select name="film">${Object.entries(FILMS).map(([id, f]) => `<option value="${id}" ${id === settings.default_film ? "selected" : ""}>${esc(f.name)} — ${esc(f.desc)}</option>`).join("")}</select>
+          </label>
           <label class="check"><input type="checkbox" name="invite_only" /> Hanya email yang diundang</label>
           <button class="btn primary">Buat acara</button>
         </form>`);
@@ -143,6 +174,7 @@ async function renderHome() {
             p_max_shots: Number(f.max_shots.value),
             p_max_members: Number(f.max_members.value),
             p_invite_only: f.invite_only.checked,
+            p_film: f.film.value,
           });
           location.hash = `#/e/${id}/panel`;
         } catch (err) { toast(friendly(err)); }
@@ -168,18 +200,20 @@ async function renderEvent(eventId, tab) {
     return;
   }
   status.me = session.user.id;
-  if (tab === "panel" && !status.is_owner) tab = "kamera";
+  if (tab === "panel" && !status.can_manage) tab = "kamera";
+  if (tab === "kamera" && !status.is_member) tab = status.can_manage ? "panel" : "album"; // superadmin bukan peserta
 
   const view = el(`
     <main class="event">
+      ${status.cover_path ? `<div class="event-cover" style="background-image:url('${esc(coverUrl(status.cover_path))}')"></div>` : ""}
       <header class="top">
-        <a class="back" href="#/" aria-label="Kembali">‹</a>
+        <a class="back" href="${status.is_admin && !status.is_member ? "#/admin/acara" : "#/"}" aria-label="Kembali">‹</a>
         <h1>${esc(status.name)}</h1>
       </header>
       <nav class="tabs">
-        <a href="#/e/${eventId}" class="${tab === "kamera" ? "on" : ""}">Kamera</a>
+        ${status.is_member ? `<a href="#/e/${eventId}" class="${tab === "kamera" ? "on" : ""}">Kamera</a>` : ""}
         <a href="#/e/${eventId}/album" class="${tab === "album" ? "on" : ""}">Album</a>
-        ${status.is_owner ? `<a href="#/e/${eventId}/panel" class="${tab === "panel" ? "on" : ""}">Panel</a>` : ""}
+        ${status.can_manage ? `<a href="#/e/${eventId}/panel" class="${tab === "panel" ? "on" : ""}">Panel</a>` : ""}
       </nav>
       <div class="tab-body"></div>
     </main>`);
@@ -197,6 +231,8 @@ async function route() {
   if (!session) return renderLogin();
   const pending = localStorage.getItem("pendingCode");
   if (pending) return renderJoin(pending);
+  const a = location.hash.match(/^#\/admin(?:\/(\w+))?/);
+  if (a) return renderAdmin(app, a[1] || "ringkasan", { setView, me: session.user });
   const m = location.hash.match(/^#\/e\/([0-9a-f-]{36})(?:\/(album|panel))?/);
   if (m) return renderEvent(m[1], m[2] || "kamera");
   return renderHome();
