@@ -23,6 +23,8 @@
   font-family: "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 * { box-sizing: border-box; }
+/* Atribut hidden harus selalu menang atas display milik kelas (mis. .btn inline-flex) */
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--bg); color: var(--text); min-height: 100%; }
 body {
   min-height: 100dvh;
@@ -181,7 +183,6 @@ code { font-size: .8rem; background: var(--bg-2); padding: .05rem .35rem; border
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
 }
 .vf-btn.on { background: var(--sun); color: var(--text); box-shadow: 0 0 0 3px rgba(255, 194, 60, .35); }
-.vf-btn[hidden] { display: none; }
 .vf-diag {
   position: absolute; left: 8px; right: 8px; bottom: 8px; z-index: 3;
   font: 11px/1.35 "Courier New", monospace; color: #ffd28a; background: #000b;
@@ -194,13 +195,11 @@ code { font-size: .8rem; background: var(--bg-2); padding: .05rem .35rem; border
   border-radius: 24px; z-index: 1;
 }
 .vf-placeholder .btn.ghost { color: #fff; border-color: #6b5070; }
-.vf-placeholder[hidden] { display: none; }
 .developing {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 3;
   background: rgba(45, 27, 51, .7); color: #fff; font-size: .8rem; font-weight: 700;
   padding: .35rem .8rem; border-radius: 999px;
 }
-.developing[hidden] { display: none; }
 .flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; border-radius: 24px; z-index: 2; }
 .flash.go { animation: flash .35s ease-out; }
 @keyframes flash { from { opacity: .9; } to { opacity: 0; } }
@@ -243,7 +242,6 @@ button.ctl:active:not(:disabled) { transform: scale(.94); }
 /* Album */
 .album { padding: 0 .5rem 5rem; }
 .album-bar { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: 0 .5rem .6rem; flex-wrap: wrap; }
-.album-bar[hidden] { display: none; }
 .dl-quota { font-size: .82rem; color: var(--muted); font-weight: 600; }
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 @media (min-width: 560px) { .grid { grid-template-columns: repeat(4, 1fr); } }
@@ -262,7 +260,6 @@ button.ctl:active:not(:disabled) { transform: scale(.94); }
   border-radius: 999px; padding: .4rem .45rem .4rem 1rem; box-shadow: 0 10px 30px rgba(45, 27, 51, .18);
   width: max-content; max-width: calc(100% - 2rem);
 }
-.select-bar[hidden] { display: none; }
 .sel-info { font-size: .85rem; font-weight: 700; flex: 1; }
 .sel-info.warn { color: var(--danger); }
 .sentinel { height: 1px; }
