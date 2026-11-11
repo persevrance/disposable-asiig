@@ -1,0 +1,10 @@
+{
+  // Cloudflare Workers dengan static assets: menyajikan hasil build Vite di folder dist.
+  // "name" harus sama dengan nama proyek Worker di dasbor Cloudflare.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "disposable-asiig",
+  "compatibility_date": "2025-10-01",
+  "assets": {
+    "directory": "./dist"
+  }
+}
