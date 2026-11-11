@@ -57,14 +57,115 @@ export function download(url, name) {
   document.body.append(a); a.click(); a.remove();
 }
 
-// Dialog sederhana; mengembalikan elemen kotak dan fungsi tutup
-export function modal(inner, { wide = false } = {}) {
+// Dialog dasar; mengembalikan elemen kotak dan fungsi tutup.
+// Tutup dengan Esc atau ketuk di luar kotak; fokus kembali ke elemen sebelumnya.
+export function modal(inner, { wide = false, onClose } = {}) {
   const box = el(`<div class="modal" role="dialog" aria-modal="true"><div class="modal-card${wide ? " wide" : ""}"></div></div>`);
   box.firstElementChild.append(typeof inner === "string" ? el(inner) : inner);
-  document.body.append(box);
-  const close = () => box.remove();
+  const before = document.activeElement;
+  let closed = false;
+  const onKey = (e) => { if (e.key === "Escape") close(); };
+  function close() {
+    if (closed) return;
+    closed = true;
+    box.remove();
+    document.removeEventListener("keydown", onKey);
+    onClose?.();
+    before?.focus?.();
+  }
+  document.addEventListener("keydown", onKey);
   box.onclick = (e) => { if (e.target === box) close(); };
+  document.body.append(box);
+  queueMicrotask(() => (box.querySelector("[autofocus]") || box.querySelector("button, input"))?.focus());
   return { box, close };
+}
+
+// Pengganti confirm(): mengembalikan Promise<boolean>.
+// Untuk aksi berbahaya, fokus awal ada di Batal.
+export function confirmDialog({ title, text = "", ok = "Lanjutkan", cancel = "Batal", danger = false }) {
+  return new Promise((resolve) => {
+    let result = false;
+    const { box, close } = modal(`
+      <div class="dialog">
+        <h3>${esc(title)}</h3>
+        ${text ? `<p>${esc(text)}</p>` : ""}
+        <div class="dialog-actions">
+          <button class="btn ghost" data-act="no" ${danger ? "autofocus" : ""}>${esc(cancel)}</button>
+          <button class="btn ${danger ? "danger-fill" : "primary"}" data-act="yes" ${danger ? "" : "autofocus"}>${esc(ok)}</button>
+        </div>
+      </div>`, { onClose: () => resolve(result) });
+    box.querySelector('[data-act="no"]').onclick = close;
+    box.querySelector('[data-act="yes"]').onclick = () => { result = true; close(); };
+  });
+}
+
+// Konfirmasi dengan mengetik teks tertentu (untuk hapus permanen)
+export function typeToConfirm({ title, text, expect, ok = "Hapus" }) {
+  return new Promise((resolve) => {
+    let result = false;
+    const { box, close } = modal(`
+      <form class="dialog">
+        <h3>${esc(title)}</h3>
+        <p>${esc(text)}</p>
+        <label for="ttc-input">Ketik <b>${esc(expect)}</b> untuk melanjutkan</label>
+        <input id="ttc-input" autocomplete="off" autocapitalize="off" spellcheck="false" autofocus />
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost" data-act="no">Batal</button>
+          <button class="btn danger-fill" data-act="yes" disabled>${esc(ok)}</button>
+        </div>
+      </form>`, { onClose: () => resolve(result) });
+    const input = box.querySelector("input");
+    const yes = box.querySelector('[data-act="yes"]');
+    input.oninput = () => { yes.disabled = input.value.trim() !== String(expect).trim(); };
+    box.querySelector('[data-act="no"]').onclick = close;
+    box.querySelector("form").onsubmit = (e) => {
+      e.preventDefault();
+      if (!yes.disabled) { result = true; close(); }
+    };
+  });
+}
+
+// Tampilkan teks yang bisa disalin manual (cadangan bila clipboard ditolak)
+export function showCopy({ title, text = "", value }) {
+  const { box, close } = modal(`
+    <div class="dialog">
+      <h3>${esc(title)}</h3>
+      ${text ? `<p>${esc(text)}</p>` : ""}
+      <input readonly value="${esc(value)}" aria-label="Teks untuk disalin" />
+      <div class="dialog-actions"><button class="btn primary" data-act="ok">Selesai</button></div>
+    </div>`);
+  const input = box.querySelector("input");
+  input.onfocus = () => input.select();
+  setTimeout(() => { input.focus(); input.select(); }, 0);
+  box.querySelector('[data-act="ok"]').onclick = close;
+}
+
+export async function copyText(value, { done = "Link disalin.", title = "Salin link" } = {}) {
+  try {
+    await navigator.clipboard.writeText(value);
+    toast(done);
+    return true;
+  } catch {
+    showCopy({ title, text: "Tekan lama teks di bawah lalu pilih Salin.", value });
+    return false;
+  }
+}
+
+// Daftar aksi (menu ⋯). actions: [{ label, danger, run }]
+export function actionSheet(title, actions) {
+  const { box, close } = modal(`
+    <div class="dialog">
+      <h3>${esc(title)}</h3>
+      <div class="sheet-actions"></div>
+      <div class="dialog-actions"><button class="btn ghost" data-act="no">Batal</button></div>
+    </div>`);
+  const list = box.querySelector(".sheet-actions");
+  for (const a of actions) {
+    const b = el(`<button class="btn${a.danger ? " danger" : ""}">${esc(a.label)}</button>`);
+    b.onclick = () => { close(); a.run(); };
+    list.append(b);
+  }
+  box.querySelector('[data-act="no"]').onclick = close;
 }
 
 // Konfeti kecil saat film habis (dilewati jika pengguna memilih kurangi gerakan)

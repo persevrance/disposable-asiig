@@ -2,7 +2,7 @@
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
 import { getUrls } from "./storage.js";
-import { el, esc, toast, fmtDate, download, safeName, modal } from "./ui.js";
+import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog } from "./ui.js";
 
 const PAGE = 60;
 
@@ -153,8 +153,11 @@ export async function renderAlbum(root, status) {
     if (!ids.length) return false;
     const c = cost(ids);
     if (!unlimited() && c > quotaLeft()) { toast("Kuota unduhan tidak cukup."); return false; }
-    if (!unlimited() && c > 0 &&
-        !confirm(`Unduh ${ids.length} foto ukuran penuh? ${c} foto memakai kuota (sisa ${quotaLeft()}). Kuota tidak kembali.`)) return false;
+    if (!unlimited() && c > 0 && !(await confirmDialog({
+      title: `Unduh ${ids.length} foto ukuran penuh?`,
+      text: `${c} foto memakai kuota unduhan (sisa ${quotaLeft()}). Kuota yang terpakai tidak kembali.`,
+      ok: "Unduh",
+    }))) return false;
 
     const prog = toastProgress(`Menyiapkan ${ids.length} foto…`);
     try {

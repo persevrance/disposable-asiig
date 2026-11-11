@@ -32,6 +32,9 @@ src/
 supabase/schema.sql  skema v1: tabel, fungsi, aturan akses, bucket
 supabase/v2.sql      perubahan v2 (peran, pengaturan, unduhan, sampul, log); aman diulang
 supabase/reset.sql   menghapus semua objek v1 + v2 (data hilang)
+supabase/cron.sql    jadwal hapus otomatis harian (pg_cron -> Edge Function)
+supabase/functions/purge-events/  Edge Function penghapus acara kedaluwarsa
+public/sw.js         service worker: aplikasi tetap terbuka tanpa sinyal
 ```
 
 ## Pemasangan
@@ -49,7 +52,24 @@ supabase/reset.sql   menghapus semua objek v1 + v2 (data hilang)
    on conflict (email) do update set role = 'superadmin';
    ```
 4. Login, buka **Dashboard** di beranda: tambahkan pembuat acara di tab Peran, atur batas jepretan,
-   resolusi, dan mirror di tab Pengaturan.
+   resolusi, mirror, dan kuota storage di tab Pengaturan.
+5. Authentication -> Sign In / Providers -> **Email: matikan**. Aplikasi hanya memakai Google;
+   peran dicocokkan dengan email terverifikasi, dan mematikan login email menutup celah pendaftaran palsu.
+
+### 1b. Hapus otomatis acara (disarankan)
+
+Acara dengan "Rencana hapus foto" yang sudah lewat dihapus tiap malam beserta semua fotonya.
+
+1. Supabase -> Edge Functions -> **Deploy a new function** -> Via Editor. Nama: `purge-events`,
+   tempel isi `supabase/functions/purge-events/index.ts`, lalu Deploy.
+   (Atau dengan CLI: `supabase functions deploy purge-events`.)
+2. Edge Functions -> **Secrets** -> tambah `CRON_SECRET` berisi teks acak panjang.
+3. SQL Editor -> tempel `supabase/cron.sql`, ganti `<PROJECT-REF>`, `<ANON-KEY>`, `<CRON-SECRET>` -> Run.
+4. Cek: `select * from cron.job_run_details order by start_time desc limit 5;` setelah jadwal berjalan.
+   Hasil penghapusan tercatat di Dashboard -> Log sebagai "sistem (hapus otomatis)".
+
+Jika langkah ini belum dipasang, acara yang lewat tanggal muncul di Dashboard -> Ringkasan
+dengan tombol "Hapus sekarang".
 
 ### 2. Google
 
@@ -99,7 +119,12 @@ Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin d
 - [ ] Unduh sebagai tamu: sisa kuota berkurang hanya untuk foto orang lain; foto sendiri gratis.
 - [ ] Sembunyikan nama: tamu melihat "Tamu", pemilik acara tetap melihat nama.
 - [ ] Sampul: tampil di layar "Masuk acara" dan di atas halaman acara.
-- [ ] Link dibuka dari WhatsApp/Instagram: muncul peringatan "Buka di Chrome atau Safari dulu".
+- [ ] Link dibuka dari WhatsApp/Instagram: muncul peringatan "Buka di Chrome atau Safari dulu"; di Android tombol "Buka di Chrome" membuka Chrome langsung.
+- [ ] Tanpa sinyal: buka aplikasi sekali saat online, aktifkan mode pesawat, muat ulang -> aplikasi tetap terbuka dan foto masuk antrean.
+- [ ] Jendela bidik menampilkan bingkai foto utuh (ada pita gelap di tepi bila rasio layar berbeda).
+- [ ] Album lebih dari 100 foto: Unduh album memunculkan tombol per bagian (maks. 100 foto per ZIP).
+- [ ] Tolak izin kamera di HP uji -> muncul di Dashboard -> Ringkasan -> Kegagalan kamera terbaru.
+- [ ] Semua konfirmasi (hapus, ganti kode, blokir, unduh berkuota) tampil sebagai dialog aplikasi, bukan dialog browser.
 - [ ] Panel: tutup acara -> gulungan yang belum habis tampil.
 - [ ] Panel: sembunyikan foto, blokir peserta, unduh ZIP, hapus acara.
 

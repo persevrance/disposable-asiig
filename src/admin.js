@@ -3,10 +3,7 @@
 import { rpc, friendly } from "./supabase.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles } from "./owner.js";
-import { el, esc, toast, fmtDate, fmtBytes } from "./ui.js";
-
-// Kuota storage paket gratis Supabase; ubah jika paket di-upgrade
-const STORAGE_QUOTA = 1024 ** 3;
+import { el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet } from "./ui.js";
 
 const TABS = [
   ["ringkasan", "Ringkasan"],
@@ -48,13 +45,36 @@ export async function renderAdmin(app, tab, { setView, me }) {
 }
 
 // ---------- Ringkasan ----------
+const ERROR_KINDS = {
+  DENIED: "Izin kamera ditolak", NOT_HTTPS: "Bukan HTTPS", IN_APP: "Browser bawaan aplikasi",
+  UNSUPPORTED: "Browser tidak mendukung", NO_CAMERA: "Kamera tidak ada", BUSY: "Kamera dipakai aplikasi lain",
+  OTHER: "Lainnya", BLACK_VIEWFINDER: "Jendela bidik hitam", DARK_FRAMES: "Gambar kamera gelap",
+  SHOT_FAILED: "Jepretan gagal diproses",
+};
+// Ringkas user agent menjadi "iPhone · Safari"
+function shortUA(ua = "") {
+  const dev = (ua.match(/iPhone|iPad|Android [\d.]+|Windows|Mac OS X|Linux/) || ["?"])[0];
+  const br = (ua.match(/Instagram|FBAV|WhatsApp|Line\/|SamsungBrowser|CriOS|FxiOS|EdgA?|Firefox|Chrome|Safari/) || ["?"])[0];
+  const names = { CriOS: "Chrome", FxiOS: "Firefox", FBAV: "Facebook", "Line/": "LINE", Edg: "Edge", EdgA: "Edge" };
+  return `${dev} · ${names[br] || br}`;
+}
+
+async function deleteEventFully(eventId, coverPath) {
+  if (coverPath === undefined) coverPath = (await rpc("my_status", { p_event: eventId }))[0]?.cover_path;
+  await deleteEventFiles(eventId, coverPath);
+  await rpc("delete_event", { p_event: eventId });
+}
+
 async function ringkasan(body) {
-  const o = await rpc("admin_overview");
+  const [o, overdue, errors] = await Promise.all([
+    rpc("admin_overview"), rpc("admin_overdue_events"), rpc("admin_client_errors", { p_limit: 20 }),
+  ]);
+  const quota = Number(o.storage_quota_mb || 1024) * 1024 * 1024;
   const used = Number(o.photo_bytes) + Number(o.cover_bytes);
-  const pct = Math.min(100, (used / STORAGE_QUOTA) * 100);
+  const pct = Math.min(100, (used / quota) * 100);
   const avg = o.photos ? Number(o.photo_bytes) / o.photos : 0;
-  const left = avg ? Math.max(0, Math.floor((STORAGE_QUOTA - used) / avg)) : null;
-  body.replaceChildren(el(`
+  const left = avg ? Math.max(0, Math.floor((quota - used) / avg)) : null;
+  const view = el(`
     <div>
       <div class="stats">
         ${stat("Pengguna", o.users, o.banned ? `${o.banned} diblokir` : "")}
@@ -62,15 +82,56 @@ async function ringkasan(body) {
         ${stat("Foto", o.photos, o.pending ? `${o.pending} belum terunggah` : "")}
         ${stat("Unduhan", o.downloads, "")}
         ${stat("Pembuat acara", o.creators, `${o.superadmins} superadmin`)}
+        ${stat("Gagal kamera", o.camera_errors_24h, "24 jam terakhir")}
       </div>
+      ${overdue.length ? `
+      <div class="card attention">
+        <h3>Acara lewat tanggal hapus</h3>
+        <p class="hint">Acara ini dihapus otomatis tiap malam jika jadwal di supabase/cron.sql sudah dipasang. Jika belum, hapus dari sini.</p>
+        <ul class="plain">${overdue.map((e) => `<li><b>${esc(e.name)}</b> · ${e.photos} foto · rencana hapus ${esc(fmtDate(e.purge_at))}</li>`).join("")}</ul>
+        <button class="btn danger" data-act="purge">Hapus ${overdue.length} acara sekarang</button>
+      </div>` : ""}
       <div class="card">
         <h3>Storage</h3>
         <div class="meter"><span style="width:${pct.toFixed(1)}%" class="${pct > 85 ? "hot" : ""}"></span></div>
-        <p class="hint">${fmtBytes(used)} dari ${fmtBytes(STORAGE_QUOTA)} (${pct.toFixed(1)}%) · foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}</p>
+        <p class="hint">${fmtBytes(used)} dari ${fmtBytes(quota)} (${pct.toFixed(1)}%) · foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}</p>
         ${left !== null ? `<p class="hint">Rata-rata ${fmtBytes(avg)} per foto (3 ukuran). Sisa cukup untuk sekitar <b>${left.toLocaleString("id-ID")}</b> foto lagi.</p>` : ""}
-        <p class="hint">Hemat storage: turunkan resolusi di Pengaturan, atau hapus acara lama setelah albumnya diunduh.</p>
+        <p class="hint">Kuota diatur di tab Pengaturan. Hemat storage dengan menurunkan resolusi atau menghapus acara lama setelah albumnya diunduh.</p>
       </div>
-    </div>`));
+      <div class="card">
+        <h3>Kegagalan kamera terbaru</h3>
+        ${errors.length ? `
+        <div class="table-scroll"><table>
+          <thead><tr><th>Waktu</th><th>Masalah</th><th>Peserta · acara</th><th>Perangkat</th></tr></thead>
+          <tbody>${errors.map((r) => `
+            <tr>
+              <td><small>${esc(fmtDate(r.at))}</small></td>
+              <td><b>${esc(ERROR_KINDS[r.kind] || r.kind)}</b>${r.detail ? `<details><summary>Detail</summary><code>${esc(r.detail)}</code></details>` : ""}</td>
+              <td><small>${esc(r.user_name || "-")}<br>${esc(r.event_name || "-")}</small></td>
+              <td><small>${esc(shortUA(r.ua))}</small></td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>` : `<p class="hint">Belum ada laporan. Laporan dikirim otomatis saat kamera peserta gagal dibuka atau menampilkan gambar hitam.</p>`}
+      </div>
+    </div>`);
+  body.replaceChildren(view);
+  const purge = view.querySelector('[data-act="purge"]');
+  if (purge) purge.onclick = async () => {
+    const ok = await typeToConfirm({
+      title: `Hapus ${overdue.length} acara?`,
+      text: "Semua foto dan data acara yang sudah lewat tanggal hapus akan dihapus permanen.",
+      expect: "HAPUS", ok: "Hapus semua",
+    });
+    if (!ok) return;
+    purge.disabled = true;
+    let n = 0;
+    for (const e of overdue) {
+      try { await deleteEventFully(e.event_id, e.cover_path); n++; }
+      catch (err) { toast(friendly(err)); }
+    }
+    toast(`${n} acara dihapus.`);
+    ringkasan(body);
+  };
 }
 const stat = (label, value, sub) => `
   <div class="stat"><b>${Number(value).toLocaleString("id-ID")}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
@@ -107,26 +168,32 @@ async function acara(body, me, role) {
           <div class="row">
             <a class="btn small primary" href="#/e/${e.event_id}/panel">Kelola</a>
             <a class="btn small" href="#/e/${e.event_id}/album">Album</a>
-            <button class="btn small ghost" data-act="toggle">${e.is_open ? "Tutup" : "Buka"}</button>
-            <button class="btn small danger" data-act="delete">Hapus</button>
+            <button class="btn small ghost" data-act="more" aria-label="Aksi lain untuk ${esc(e.name)}">⋯ Lainnya</button>
           </div>
         </div>`);
-      n.querySelector('[data-act="toggle"]').onclick = async () => {
-        try { await rpc("set_event", { p_event: e.event_id, p_patch: { is_open: !e.is_open } }); load(view.querySelector("input").value); }
-        catch (err) { toast(friendly(err)); }
-      };
-      n.querySelector('[data-act="delete"]').onclick = async () => {
-        const typed = prompt(`Hapus acara beserta ${e.photos} foto? Ketik nama acara:\n${e.name}`);
-        if (typed === null) return;
-        if (typed.trim() !== e.name.trim()) return toast("Nama tidak cocok.");
-        try {
-          const st = (await rpc("my_status", { p_event: e.event_id }))[0];
-          await deleteEventFiles(e.event_id, st?.cover_path);
-          await rpc("delete_event", { p_event: e.event_id });
-          toast("Acara dihapus.");
-          load(view.querySelector("input").value);
-        } catch (err) { toast(friendly(err)); }
-      };
+      const reload = () => load(view.querySelector("input").value);
+      n.querySelector('[data-act="more"]').onclick = () => actionSheet(e.name, [
+        { label: e.is_open ? "Tutup acara" : "Buka acara", run: async () => {
+          try {
+            await rpc("set_event", { p_event: e.event_id, p_patch: { is_open: !e.is_open } });
+            toast(e.is_open ? "Acara ditutup." : "Acara dibuka.");
+            reload();
+          } catch (err) { toast(friendly(err)); }
+        } },
+        { label: "Hapus acara…", danger: true, run: async () => {
+          const ok = await typeToConfirm({
+            title: "Hapus acara dan semua foto?",
+            text: `${e.photos} foto dan seluruh data acara dihapus permanen. Unduh album dulu bila perlu.`,
+            expect: e.name, ok: "Hapus acara",
+          });
+          if (!ok) return;
+          try {
+            await deleteEventFully(e.event_id);
+            toast("Acara dihapus.");
+            reload();
+          } catch (err) { toast(friendly(err)); }
+        } },
+      ]);
       return n;
     }));
   }
@@ -170,7 +237,8 @@ async function peran(body, me) {
       </table>`));
     list.querySelectorAll("[data-swap]").forEach((b) => (b.onclick = () => setRole(b.dataset.swap, b.dataset.role)));
     list.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
-      if (confirm(`Cabut peran ${b.dataset.del}? Acara yang sudah dibuatnya tetap ada.`)) setRole(b.dataset.del, null);
+      confirmDialog({ title: `Cabut peran ${b.dataset.del}?`, text: "Acara yang sudah dibuatnya tetap ada.", ok: "Cabut peran", danger: true })
+        .then((ok) => ok && setRole(b.dataset.del, null));
     }));
   }
   async function setRole(email, role) {
@@ -215,7 +283,11 @@ async function pengguna(body, me) {
       </table>`));
     list.querySelectorAll("[data-ban]").forEach((b) => (b.onclick = async () => {
       const ban = b.dataset.banned !== "true";
-      if (ban && !confirm("Blokir akun ini dari seluruh aplikasi? Ia tidak bisa masuk acara, memotret, atau melihat album.")) return;
+      if (ban && !(await confirmDialog({
+        title: "Blokir akun ini?",
+        text: "Akun tidak bisa masuk acara, memotret, atau melihat album di seluruh aplikasi.",
+        ok: "Blokir", danger: true,
+      }))) return;
       try { await rpc("admin_ban", { p_user: b.dataset.ban, p_banned: ban }); await load(view.querySelector("input").value); }
       catch (e) { toast(friendly(e)); }
     }));
@@ -237,6 +309,9 @@ async function pengaturan(body) {
           <input type="number" name="max_shots_limit" min="1" max="500" value="${s.max_shots_limit}" /></label>
         <label>Maks. peserta per acara
           <input type="number" name="max_members_limit" min="1" max="5000" value="${s.max_members_limit}" /></label>
+        <label>Kuota storage paket Supabase (MB)
+          <input type="number" name="storage_quota_mb" min="100" max="1000000" value="${s.storage_quota_mb}" /></label>
+        <p class="hint">Dipakai meter storage di Ringkasan. Paket gratis 1024 MB (1 GB), paket Pro 102400 MB (100 GB).</p>
       </fieldset>
 
       <fieldset><legend>Foto</legend>
@@ -268,6 +343,7 @@ async function pengaturan(body) {
       await rpc("admin_set_settings", { p_patch: {
         max_shots_limit: Number(f.max_shots_limit.value),
         max_members_limit: Number(f.max_members_limit.value),
+        storage_quota_mb: Number(f.storage_quota_mb.value),
         photo_max_side: Number(f.photo_max_side.value),
         jpeg_quality: Number(f.jpeg_quality.value),
         default_film: f.default_film.value,

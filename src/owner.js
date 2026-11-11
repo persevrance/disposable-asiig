@@ -4,9 +4,14 @@ import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
 import { getUrls, removeFiles, uploadCover, coverUrl, removeCover } from "./storage.js";
 import { FILMS } from "./film.js";
-import { el, esc, toast, fmtDate, toLocalInput, fromLocalInput, download, safeName, modal } from "./ui.js";
+import {
+  el, esc, toast, fmtDate, toLocalInput, fromLocalInput, download, safeName, modal,
+  confirmDialog, typeToConfirm, copyText,
+} from "./ui.js";
 
 export const RESOLUTIONS = [1280, 1600, 2048, 2560, 3264, 4096];
+// Jumlah foto per file ZIP: 100 foto ukuran penuh (~100–350 MB) masih aman di memori HP
+const ZIP_PART = 100;
 
 const filmOptions = (current, withDefault = false) =>
   (withDefault ? `<option value="">Ikut bawaan</option>` : "") +
@@ -96,9 +101,10 @@ export async function renderPanel(root, status, { reload, home }) {
 
       <div class="card">
         <h3>Album</h3>
-        <p class="hint">Unduh semua foto ukuran penuh sebagai satu file ZIP.</p>
+        <p class="hint">Unduh semua foto ukuran penuh sebagai ZIP. Album besar dibagi menjadi beberapa file berisi paling banyak ${ZIP_PART} foto supaya memori perangkat tidak habis.</p>
         <button class="btn" data-act="zip">Unduh album (ZIP)</button>
         <p class="zip-progress hint" hidden></p>
+        <div class="zip-parts" hidden></div>
       </div>
 
       <div class="card danger">
@@ -112,16 +118,17 @@ export async function renderPanel(root, status, { reload, home }) {
 
   // --- undangan ---
   QRCode.toCanvas(view.querySelector(".qr"), link, { width: 180, margin: 1 });
-  view.querySelector('[data-act="copy"]').onclick = async () => {
-    try { await navigator.clipboard.writeText(link); toast("Link disalin."); }
-    catch { prompt("Salin link ini:", link); }
-  };
+  view.querySelector('[data-act="copy"]').onclick = () => copyText(link);
   view.querySelector('[data-act="qr"]').onclick = async () => {
     const url = await QRCode.toDataURL(link, { width: 1024, margin: 2 });
     download(url, `undangan-${status.join_code}.png`);
   };
   view.querySelector('[data-act="rotate"]').onclick = async () => {
-    if (!confirm("Ganti kode? Link dan QR lama tidak bisa dipakai lagi. Peserta yang sudah masuk tetap aman.")) return;
+    if (!(await confirmDialog({
+      title: "Ganti kode undangan?",
+      text: "Link dan QR lama tidak bisa dipakai lagi. Peserta yang sudah masuk tetap aman.",
+      ok: "Ganti kode",
+    }))) return;
     try { await rpc("rotate_code", { p_event: status.event_id }); toast("Kode diganti."); reload(); }
     catch (e) { toast(friendly(e)); }
   };
@@ -144,7 +151,7 @@ export async function renderPanel(root, status, { reload, home }) {
   };
   const uncover = view.querySelector('[data-act="uncover"]');
   if (uncover) uncover.onclick = async () => {
-    if (!confirm("Hapus sampul acara?")) return;
+    if (!(await confirmDialog({ title: "Hapus sampul acara?", ok: "Hapus sampul", danger: true }))) return;
     try {
       const old = await rpc("set_cover", { p_event: status.event_id, p_path: null });
       await removeCover(old).catch(() => {});
@@ -225,7 +232,11 @@ export async function renderPanel(root, status, { reload, home }) {
         } catch (e) { toast(friendly(e)); }
       }));
       box.querySelectorAll("[data-release]").forEach((b) => (b.onclick = async () => {
-        if (!confirm("Hapus jepretan yang belum terunggah dan kembalikan jatahnya? Jika HP peserta masih menyimpan fotonya, foto itu akan dikirim ulang sebagai jepretan baru.")) return;
+        if (!(await confirmDialog({
+          title: "Lepas jepretan yang macet?",
+          text: "Jepretan yang belum terunggah dihapus dan jatahnya dikembalikan. Jika HP peserta masih menyimpan fotonya, foto itu akan dikirim ulang sebagai jepretan baru.",
+          ok: "Lepas jepretan",
+        }))) return;
         try {
           const rows = await rpc("release_pending", { p_event: status.event_id, p_user: b.dataset.release });
           const paths = rows.map((r) => r.file_path ?? r.release_pending ?? r);
@@ -238,42 +249,69 @@ export async function renderPanel(root, status, { reload, home }) {
   }
   loadMembers();
 
-  // --- unduh ZIP ---
+  // --- unduh ZIP (bertahap supaya memori tidak habis) ---
   view.querySelector('[data-act="zip"]').onclick = async (ev) => {
     const btn = ev.currentTarget;
     const prog = view.querySelector(".zip-progress");
-    btn.disabled = true; prog.hidden = false;
+    const partsBox = view.querySelector(".zip-parts");
+    btn.disabled = true;
     try {
       const rows = (await rpc("owner_paths", { p_event: status.event_id })).filter((r) => r.status === "ready");
       if (!rows.length) { toast("Belum ada foto."); return; }
-      const files = {};
-      for (let i = 0; i < rows.length; i += 50) {
-        const batch = rows.slice(i, i + 50);
-        const urls = await getUrls(batch.map((r) => r.file_path));
-        await Promise.all(batch.map(async (r) => {
-          const res = await fetch(urls[r.file_path]);
-          if (!res.ok) throw new Error("Gagal mengunduh " + r.file_path);
-          files[`${safeName(r.owner_name, "peserta")}/${String(r.seq).padStart(2, "0")}.jpg`] = [new Uint8Array(await res.arrayBuffer()), { level: 0 }];
+      const parts = [];
+      for (let i = 0; i < rows.length; i += ZIP_PART) parts.push(rows.slice(i, i + ZIP_PART));
+      if (parts.length === 1) { await downloadPart(parts[0], 1, 1, prog); return; }
+      partsBox.hidden = false;
+      partsBox.replaceChildren(
+        el(`<p class="hint">${rows.length} foto dibagi menjadi ${parts.length} file. Unduh satu per satu.</p>`),
+        ...parts.map((p, i) => {
+          const b = el(`<button class="btn small">Bagian ${i + 1} dari ${parts.length} · ${p.length} foto</button>`);
+          b.onclick = async () => {
+            b.disabled = true;
+            try {
+              await downloadPart(p, i + 1, parts.length, prog);
+              b.textContent = `✓ Bagian ${i + 1} terunduh`;
+            } catch (e) { toast(friendly(e)); b.disabled = false; }
+          };
+          return b;
         }));
-        prog.textContent = `Mengunduh ${Math.min(i + 50, rows.length)} / ${rows.length} foto…`;
-      }
-      prog.textContent = "Membuat ZIP…";
-      const zip = zipSync(files);
-      const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
-      download(url, `${safeName(status.name, "album")}.zip`);
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      prog.textContent = `Selesai: ${rows.length} foto.`;
     } catch (e) {
       toast(friendly(e));
       prog.hidden = true;
     } finally { btn.disabled = false; }
   };
 
+  async function downloadPart(rows, n, total, prog) {
+    prog.hidden = false;
+    const label = total > 1 ? `Bagian ${n}/${total}: ` : "";
+    const files = {};
+    for (let i = 0; i < rows.length; i += 25) {
+      const batch = rows.slice(i, i + 25);
+      const urls = await getUrls(batch.map((r) => r.file_path));
+      await Promise.all(batch.map(async (r) => {
+        const res = await fetch(urls[r.file_path]);
+        if (!res.ok) throw new Error("Gagal mengunduh " + r.file_path);
+        files[`${safeName(r.owner_name, "peserta")}/${String(r.seq).padStart(2, "0")}.jpg`] = [new Uint8Array(await res.arrayBuffer()), { level: 0 }];
+      }));
+      prog.textContent = `${label}mengambil ${Math.min(i + 25, rows.length)} / ${rows.length} foto…`;
+    }
+    prog.textContent = `${label}membuat ZIP…`;
+    const zip = zipSync(files);
+    const url = URL.createObjectURL(new Blob([zip], { type: "application/zip" }));
+    const base = safeName(status.name, "album");
+    download(url, total > 1 ? `${base}-bagian-${String(n).padStart(2, "0")}.zip` : `${base}.zip`);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    prog.textContent = `Selesai: ${rows.length} foto${total > 1 ? ` (bagian ${n} dari ${total})` : ""}.`;
+  }
+
   // --- hapus acara ---
   view.querySelector('[data-act="delete"]').onclick = async () => {
-    const typed = prompt(`Ketik nama acara untuk menghapus:\n${status.name}`);
-    if (typed === null) return;
-    if (typed.trim() !== status.name.trim()) return toast("Nama tidak cocok, acara tidak dihapus.");
+    if (!(await typeToConfirm({
+      title: "Hapus acara dan semua foto?",
+      text: "Semua foto dihapus dari server beserta data acara. Unduh album dulu. Tidak bisa dibatalkan.",
+      expect: status.name,
+      ok: "Hapus acara",
+    }))) return;
     try {
       await deleteEventFiles(status.event_id, status.cover_path);
       await rpc("delete_event", { p_event: status.event_id });

@@ -149,6 +149,14 @@ export async function renderCamera(root, status, go) {
     film: currentFilm(),
   });
 
+  // Laporkan kegagalan ke server (dibatasi di server; diam saja jika gagal)
+  function report(kind, detail) {
+    rpc("log_client_error", {
+      p_event: status.event_id, p_kind: kind, p_detail: String(detail || "").slice(0, 2000),
+      p_ua: navigator.userAgent.slice(0, 400),
+    }).catch(() => {});
+  }
+
   async function remaining() {
     const local = (await queue.forEvent(status.event_id)).filter((j) => !j.reserved).length;
     return Math.max(0, status.max_shots - status.shots_used - local);
@@ -243,7 +251,7 @@ export async function renderCamera(root, status, go) {
   }
 
   // ---- Jendela bidik: gambar video ke canvas tiap frame ----
-  let raf = 0, frames = 0, darkSince = 0, luma = -1;
+  let raf = 0, frames = 0, darkSince = 0, luma = -1, reportedDark = false;
   const probe = document.createElement("canvas");
   probe.width = probe.height = 16;
   const pctx = probe.getContext("2d", { willReadFrequently: true });
@@ -256,11 +264,14 @@ export async function renderCamera(root, status, go) {
     if (!w || !h) return;
     if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
     const vw = video.videoWidth, vh = video.videoHeight;
-    const scale = Math.max(w / vw, h / vh); // seperti object-fit: cover
-    const sw = w / scale, sh = h / scale;
+    // Seperti object-fit: contain, supaya yang terlihat sama persis dengan bingkai foto
+    const scale = Math.min(w / vw, h / vh);
+    const dw = vw * scale, dh = vh * scale, dx = (w - dw) / 2, dy = (h - dh) / 2;
+    cctx.fillStyle = "#1a0f1f";
+    cctx.fillRect(0, 0, w, h);
     cctx.save();
     if (mirrorPreview()) { cctx.translate(w, 0); cctx.scale(-1, 1); }
-    cctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, w, h);
+    cctx.drawImage(video, dx, dy, dw, dh);
     cctx.restore();
     if (++frames % 30 === 0) checkDark();
   }
@@ -276,6 +287,7 @@ export async function renderCamera(root, status, go) {
     } catch { luma = -2; }
     if (luma >= 0 && luma < 3) darkSince ||= Date.now(); else darkSince = 0;
     const dark = darkSince && Date.now() - darkSince > 3000;
+    if (dark && !reportedDark) { reportedDark = true; report("DARK_FRAMES", `luma=${luma} ${diag()}`); }
     diagBox.hidden = !(dark || debug);
     if (!diagBox.hidden) {
       diagBox.textContent = (dark ? "Gambar dari kamera hitam. Tutup lensa? Coba balik kamera. " : "") +
@@ -300,6 +312,7 @@ export async function renderCamera(root, status, go) {
     if (await waitLive(2500)) {
       placeholder.hidden = true;
     } else {
+      report("BLACK_VIEWFINDER", diag());
       msg.textContent = "Jendela bidik tetap hitam. Matikan Mode Daya Rendah (Pengaturan -> Baterai) lalu coba lagi, " +
         "atau gunakan tombol aplikasi kamera di bawah. " + diag();
       fileLabel.hidden = false;
@@ -332,6 +345,7 @@ export async function renderCamera(root, status, go) {
       }
     } catch (e) {
       const help = CAMERA_HELP[e.code] || CAMERA_HELP.OTHER;
+      report(e.code || "OTHER", `${e.detail || e.message || ""} ${diag()}`);
       msg.textContent = help + (e.detail ? ` (${e.detail})` : "") + " Sementara itu, foto bisa diambil dengan tombol di bawah.";
       openBtn.textContent = "Coba lagi";
       openBtn.disabled = false;
@@ -355,7 +369,10 @@ export async function renderCamera(root, status, go) {
       await p;
     } catch (e) {
       if (e.code === "FILE_LAMA") toast("Foto itu bukan jepretan baru. Ambil foto langsung dengan kamera.", 5000);
-      else toast(errorCode(e) ? friendly(e) : "Foto tersimpan di HP, akan dikirim saat koneksi kembali.");
+      else {
+        if (!errorCode(e) && navigator.onLine) report("SHOT_FAILED", e?.message || e);
+        toast(errorCode(e) ? friendly(e) : "Foto tersimpan di HP, akan dikirim saat koneksi kembali.");
+      }
     } finally {
       developing.hidden = true;
       await syncStatus();

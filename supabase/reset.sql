@@ -15,7 +15,7 @@ drop policy if exists "sampul: baca pengelola"   on storage.objects;
 drop policy if exists "sampul: unggah"           on storage.objects;
 drop policy if exists "sampul: hapus"            on storage.objects;
 
-drop table if exists downloads, audit_log, user_roles, app_settings,
+drop table if exists client_errors, downloads, audit_log, user_roles, app_settings,
   photos, event_members, event_invites, events, event_creators, profiles cascade;
 
 drop function if exists
@@ -37,5 +37,7 @@ drop function if exists
   event_preview(text), claim_downloads(uuid, uuid[]), set_cover(uuid, text),
   get_roll(uuid, uuid), admin_overview(), admin_roles(), admin_set_role(text, text),
   admin_set_settings(jsonb), admin_events(text), admin_users(text),
-  admin_ban(uuid, boolean), admin_audit(int)
+  admin_ban(uuid, boolean), admin_audit(int),
+  my_verified_email(), admin_overdue_events(), admin_client_errors(int),
+  log_client_error(uuid, text, text, text)
 cascade;

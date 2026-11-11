@@ -48,6 +48,9 @@ create table if not exists app_settings (
   updated_by        uuid references profiles(id) on delete set null
 );
 insert into app_settings (id) values (true) on conflict (id) do nothing;
+-- Kuota storage paket Supabase (untuk meter di Ringkasan), dalam MB
+alter table app_settings add column if not exists storage_quota_mb int not null default 1024
+  check (storage_quota_mb between 100 and 1000000);
 
 create table if not exists downloads (
   event_id uuid not null references events(id) on delete cascade,
@@ -69,10 +72,24 @@ create table if not exists audit_log (
 );
 create index if not exists audit_log_at on audit_log (at desc);
 
+-- Kegagalan kamera/unggah yang dilaporkan HP peserta (disimpan 30 hari)
+create table if not exists client_errors (
+  id       bigserial primary key,
+  at       timestamptz not null default now(),
+  user_id  uuid references profiles(id) on delete cascade,
+  event_id uuid references events(id) on delete set null,
+  kind     text not null,
+  detail   text,
+  ua       text
+);
+create index if not exists client_errors_at   on client_errors (at desc);
+create index if not exists client_errors_user on client_errors (user_id, at desc);
+
 alter table user_roles   enable row level security;
 alter table app_settings enable row level security;
 alter table downloads    enable row level security;
 alter table audit_log    enable row level security;
+alter table client_errors enable row level security;
 -- Sengaja tanpa aturan baca: semua akses lewat fungsi.
 
 -- ---------- Kolom baru ----------------------------------------------
@@ -108,20 +125,29 @@ on conflict (id) do update
 
 -- ---------- Pembantu peran ------------------------------------------
 
+-- Email akun pemanggil, hanya jika sudah terverifikasi. Peran dicocokkan dengan
+-- ini (bukan klaim email di JWT), supaya akun email+password yang belum
+-- dikonfirmasi tidak bisa memakai email superadmin.
+create or replace function my_verified_email() returns text
+language sql stable security definer set search_path = public as $$
+  select lower(u.email) from auth.users u
+   where u.id = auth.uid() and u.email_confirmed_at is not null;
+$$;
+
 create or replace function is_superadmin() returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (select 1 from user_roles
-                  where email = lower(auth.jwt()->>'email') and role = 'superadmin');
+                  where email = my_verified_email() and role = 'superadmin');
 $$;
 
 create or replace function my_role() returns text
 language sql stable security definer set search_path = public as $$
-  select role from user_roles where email = lower(auth.jwt()->>'email');
+  select role from user_roles where email = my_verified_email();
 $$;
 
 create or replace function can_create_event() returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from user_roles where email = lower(auth.jwt()->>'email'))
+  select exists (select 1 from user_roles where email = my_verified_email())
      and not coalesce((select banned from profiles where id = auth.uid()), false);
 $$;
 
@@ -653,7 +679,10 @@ begin
     'photo_bytes',   (select coalesce(sum((metadata->>'size')::bigint), 0)
                         from storage.objects where bucket_id = 'photos'),
     'cover_bytes',   (select coalesce(sum((metadata->>'size')::bigint), 0)
-                        from storage.objects where bucket_id = 'covers'));
+                        from storage.objects where bucket_id = 'covers'),
+    'storage_quota_mb', (select storage_quota_mb from app_settings),
+    'camera_errors_24h', (select count(*) from client_errors where at > now() - interval '24 hours'),
+    'overdue_events', (select count(*) from events where purge_at <= now()));
 end $$;
 
 create or replace function admin_roles()
@@ -678,7 +707,7 @@ language plpgsql security definer set search_path = public as $$
 declare v_email text := lower(trim(p_email));
 begin
   perform assert_superadmin();
-  if v_email = lower(auth.jwt()->>'email') then raise exception 'TIDAK_BISA_DIRI_SENDIRI'; end if;
+  if v_email = my_verified_email() then raise exception 'TIDAK_BISA_DIRI_SENDIRI'; end if;
   if v_email not like '%_@_%' then raise exception 'EMAIL_TIDAK_VALID'; end if;
   if p_role is null then
     delete from user_roles where email = v_email;
@@ -703,6 +732,7 @@ begin
     mirror_preview    = coalesce((p_patch->>'mirror_preview')::boolean, mirror_preview),
     mirror_photo      = coalesce((p_patch->>'mirror_photo')::boolean,   mirror_photo),
     flash_enabled     = coalesce((p_patch->>'flash_enabled')::boolean,  flash_enabled),
+    storage_quota_mb  = coalesce((p_patch->>'storage_quota_mb')::int,  storage_quota_mb),
     updated_at = now(), updated_by = auth.uid()
   where id;
   perform log_audit('ubah_pengaturan', null, p_patch);
@@ -782,6 +812,55 @@ begin
       from audit_log a order by a.at desc limit least(greatest(p_limit, 1), 1000);
 end $$;
 
+-- Acara yang sudah lewat tanggal hapus (cadangan jika jadwal otomatis belum dipasang)
+create or replace function admin_overdue_events()
+returns table (event_id uuid, name text, purge_at timestamptz, cover_path text, photos int)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+begin
+  perform assert_superadmin();
+  return query
+    select e.id, e.name, e.purge_at, e.cover_path,
+           (select count(*)::int from photos p where p.event_id = e.id)
+      from events e where e.purge_at <= now()
+     order by e.purge_at;
+end $$;
+
+-- ---------- Catatan kegagalan kamera --------------------------------
+
+create or replace function log_client_error(p_event uuid, p_kind text, p_detail text, p_ua text)
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then return; end if;
+  -- Paling banyak 20 catatan per akun per jam
+  if (select count(*) from client_errors
+       where user_id = auth.uid() and at > now() - interval '1 hour') >= 20 then
+    return;
+  end if;
+  insert into client_errors (user_id, event_id, kind, detail, ua)
+  values (auth.uid(),
+          (select id from events where id = p_event),
+          left(coalesce(nullif(trim(p_kind), ''), 'lain'), 40),
+          left(p_detail, 2000), left(p_ua, 400));
+  delete from client_errors where at < now() - interval '30 days';
+end $$;
+
+create or replace function admin_client_errors(p_limit int default 50)
+returns table (at timestamptz, kind text, detail text, ua text, user_name text, event_name text)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+begin
+  perform assert_superadmin();
+  return query
+    select c.at, c.kind, c.detail, c.ua, pr.name, e.name
+      from client_errors c
+      left join profiles pr on pr.id = c.user_id
+      left join events e on e.id = c.event_id
+     order by c.at desc
+     limit least(greatest(p_limit, 1), 500);
+end $$;
+
 -- ---------- Hak eksekusi --------------------------------------------
 
 revoke execute on all functions in schema public from public, anon;
@@ -789,7 +868,7 @@ revoke execute on all functions in schema public from public, anon;
 -- Pembantu internal: hanya dipanggil dari dalam fungsi lain
 revoke execute on function
   log_audit(text, text, jsonb), assert_owner(uuid), assert_superadmin(), assert_not_banned(),
-  gen_code(), handle_new_user(), visible_photos(uuid)
+  gen_code(), handle_new_user(), visible_photos(uuid), my_verified_email()
 from authenticated;
 
 grant execute on function
@@ -804,7 +883,8 @@ grant execute on function
   hide_photo(uuid, boolean), block_member(uuid, uuid, boolean),
   release_pending(uuid, uuid), list_members(uuid), owner_paths(uuid), delete_event(uuid),
   admin_overview(), admin_roles(), admin_set_role(text, text), admin_set_settings(jsonb),
-  admin_events(text), admin_users(text), admin_ban(uuid, boolean), admin_audit(int)
+  admin_events(text), admin_users(text), admin_ban(uuid, boolean), admin_audit(int),
+  admin_overdue_events(), admin_client_errors(int), log_client_error(uuid, text, text, text)
 to authenticated;
 
 -- =====================================================================

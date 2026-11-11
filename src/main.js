@@ -6,9 +6,9 @@ import { renderAlbum } from "./album.js";
 import { renderPanel } from "./owner.js";
 import { renderAdmin } from "./admin.js";
 import { coverUrl } from "./storage.js";
-import { inAppBrowser } from "./camera.js";
+import { inAppBrowser, isAndroid, chromeIntentUrl } from "./camera.js";
 import { FILMS } from "./film.js";
-import { el, esc, toast } from "./ui.js";
+import { el, esc, toast, copyText } from "./ui.js";
 
 const app = document.getElementById("app");
 let cleanup = () => {};
@@ -50,6 +50,7 @@ function setView(node) {
 // ---------- Layar login ----------
 function renderLogin() {
   const code = localStorage.getItem("pendingCode");
+  const shareLink = code ? `${location.origin}/?kode=${code}` : location.origin;
   setView(el(`
     <main class="center">
       <div class="logo">📸</div>
@@ -61,7 +62,10 @@ function renderLogin() {
           <b>Buka di Chrome atau Safari dulu</b>
           <p>Link ini terbuka di dalam aplikasi (WhatsApp/Instagram/dll.). Google menolak login dari sini dan kamera bisa terblokir.
           Ketuk menu <b>⋮</b> atau <b>⋯</b> lalu pilih <b>"Buka di browser"</b> / <b>"Buka di Safari"</b>.</p>
-          <button class="btn small" data-act="copy">Salin link</button>
+          <div class="row">
+            ${isAndroid() ? `<a class="btn small primary" href="${esc(chromeIntentUrl(shareLink))}">Buka di Chrome</a>` : ""}
+            <button class="btn small" data-act="copy">Salin link</button>
+          </div>
         </div>` : ""}
       <button class="btn primary big" data-act="google">Masuk dengan Google</button>
       <p class="fine"><a href="/privacy.html">Kebijakan privasi</a></p>
@@ -74,11 +78,10 @@ function renderLogin() {
     if (error) toast(friendly(error));
   };
   const copy = app.querySelector('[data-act="copy"]');
-  if (copy) copy.onclick = async () => {
-    const link = code ? `${location.origin}/?kode=${code}` : location.origin;
-    try { await navigator.clipboard.writeText(link); toast("Link disalin. Tempel di Chrome/Safari."); }
-    catch { prompt("Salin link ini lalu buka di Chrome/Safari:", link); }
-  };
+  if (copy) copy.onclick = () => copyText(shareLink, {
+    done: "Link disalin. Tempel di Chrome/Safari.",
+    title: "Salin link lalu buka di Chrome/Safari",
+  });
 }
 
 // ---------- Persetujuan sebelum masuk acara ----------
@@ -283,6 +286,11 @@ async function boot() {
   });
   await route();
   if (session) flushQueue();
+}
+
+// Kerangka aplikasi disimpan di HP supaya tetap terbuka saat sinyal hilang
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
 }
 
 boot();

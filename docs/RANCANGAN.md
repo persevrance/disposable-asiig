@@ -42,6 +42,20 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
 - [x] 10. Sampul undangan
 - [x] 11. Peringatan browser bawaan aplikasi, README
 
+## Fase 1 perbaikan (dari review UI/UX + system analyst)
+
+- [x] Palet lolos kontras AA, target sentuh 44px, fokus keyboard, animasi menghormati reduced motion
+- [x] Service worker (`public/sw.js`) untuk kerangka aplikasi
+- [x] ZIP album bertahap, maks. 100 foto per file
+- [x] Hapus otomatis lewat Edge Function `purge-events` + `supabase/cron.sql`; cadangan tombol di Ringkasan
+- [x] Peran dicocokkan dengan email terverifikasi (`my_verified_email()`)
+- [x] Dialog aplikasi menggantikan `confirm()`/`prompt()`
+- [x] Tombol "Buka di Chrome" (intent) untuk Android
+- [x] Jendela bidik menampilkan bingkai foto utuh (contain)
+- [x] Catatan kegagalan kamera (`client_errors`) dan daftarnya di Ringkasan
+- [x] Aksi Tutup/Hapus acara di Dashboard pindah ke menu ⋯
+- [x] Kuota storage menjadi pengaturan (`app_settings.storage_quota_mb`)
+
 ## Catatan storage
 
 Kuota gratis Supabase sekitar 1 GB storage. Pada 2560px satu foto (3 file) kira-kira 1,2–2 MB, jadi sekitar 500–800 foto.

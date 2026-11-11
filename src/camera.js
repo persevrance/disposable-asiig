@@ -11,6 +11,15 @@ export function inAppBrowser() {
   return /FBAN|FBAV|Instagram|Line\/|MicroMessenger|GSA\/|Twitter|TikTok|musical_ly|Snapchat|WhatsApp/i.test(navigator.userAgent);
 }
 
+export const isAndroid = () => /Android/i.test(navigator.userAgent);
+
+// Link intent yang membuka halaman ini di Chrome dari browser bawaan aplikasi (Android)
+export function chromeIntentUrl(url) {
+  const u = new URL(url);
+  return `intent://${u.host}${u.pathname}${u.search}#Intent;scheme=${u.protocol.replace(":", "")};` +
+    `package=com.android.chrome;S.browser_fallback_url=${encodeURIComponent(url)};end`;
+}
+
 // maxSide: resolusi yang diminta dari pengaturan (sisi terpanjang, piksel)
 export async function openCamera(video, facing = "environment", maxSide = 2560) {
   if (!window.isSecureContext) throw new CameraError("NOT_HTTPS");
