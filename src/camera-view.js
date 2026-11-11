@@ -13,7 +13,8 @@ export async function renderCamera(root, status, go) {
   const view = el(`
     <section class="camera">
       <div class="viewfinder">
-        <video playsinline muted autoplay></video>
+        <canvas class="vf-canvas"></canvas>
+        <div class="vf-diag" hidden></div>
         <div class="vf-placeholder">
           <p>Kamera belum dibuka.</p>
           <button class="btn primary" data-act="open">Buka kamera</button>
@@ -33,7 +34,20 @@ export async function renderCamera(root, status, go) {
     </section>`);
   root.replaceChildren(view);
 
-  const video = view.querySelector("video");
+  // Video dibuat langsung (bukan dari <template>) dan hanya dipakai sebagai sumber gambar.
+  // Yang tampil di layar adalah canvas yang digambar ulang tiap frame: cara ini tetap
+  // jalan di Safari iOS yang kadang menampilkan elemen <video> kamera sebagai hitam.
+  const video = document.createElement("video");
+  video.className = "vf-source";
+  video.setAttribute("playsinline", "");
+  video.setAttribute("muted", "");
+  video.setAttribute("autoplay", "");
+  video.muted = true;
+  view.querySelector(".viewfinder").prepend(video);
+  const canvas = view.querySelector(".vf-canvas");
+  const cctx = canvas.getContext("2d");
+  const diagBox = view.querySelector(".vf-diag");
+  const debug = /debug/.test(location.hash) || /debug/.test(location.search);
   const placeholder = view.querySelector(".vf-placeholder");
   const shutter = view.querySelector('[data-act="shoot"]');
   const flip = view.querySelector('[data-act="flip"]');
@@ -64,6 +78,7 @@ export async function renderCamera(root, status, go) {
   function showDone(title, text) {
     if (done) return;
     done = true;
+    cancelAnimationFrame(raf);
     stopCamera(stream); stream = null;
     view.replaceChildren(el(`
       <div class="done">
@@ -96,6 +111,53 @@ export async function renderCamera(root, status, go) {
       `set=${s.width || "?"}x${s.height || "?"} ${s.facingMode || ""}]`;
   }
 
+  // ---- Jendela bidik: gambar video ke canvas tiap frame ----
+  let raf = 0, frames = 0, darkSince = 0, luma = -1;
+  const probe = document.createElement("canvas");
+  probe.width = probe.height = 16;
+  const pctx = probe.getContext("2d", { willReadFrequently: true });
+
+  function drawLoop() {
+    raf = requestAnimationFrame(drawLoop);
+    if (video.readyState < 2 || !video.videoWidth) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+    if (!w || !h) return;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const scale = Math.max(w / vw, h / vh); // seperti object-fit: cover
+    const sw = w / scale, sh = h / scale;
+    cctx.save();
+    if (facing === "user") { cctx.translate(w, 0); cctx.scale(-1, 1); } // cermin hanya di layar
+    cctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, w, h);
+    cctx.restore();
+    if (++frames % 30 === 0) checkDark();
+  }
+
+  // Ukur kecerahan rata-rata: membedakan "kamera mengirim gambar hitam" dari "tampilan gagal"
+  function checkDark() {
+    try {
+      pctx.drawImage(video, 0, 0, 16, 16);
+      const d = pctx.getImageData(0, 0, 16, 16).data;
+      let sum = 0;
+      for (let i = 0; i < d.length; i += 4) sum += d[i] + d[i + 1] + d[i + 2];
+      luma = Math.round(sum / (d.length / 4) / 3);
+    } catch { luma = -2; }
+    if (luma >= 0 && luma < 3) darkSince ||= Date.now(); else darkSince = 0;
+    const dark = darkSince && Date.now() - darkSince > 3000;
+    diagBox.hidden = !(dark || debug);
+    if (!diagBox.hidden) {
+      diagBox.textContent = (dark ? "Gambar dari kamera hitam. Tutup lensa? Coba tukar kamera. " : "") +
+        `frames=${frames} luma=${luma} ` + diag();
+    }
+  }
+
+  function startPreview() {
+    cancelAnimationFrame(raf);
+    frames = 0; darkSince = 0;
+    raf = requestAnimationFrame(drawLoop);
+  }
+
   // Dipanggil dari ketukan pengguna: iOS mengizinkan play() di sini
   async function kick() {
     const msg = placeholder.querySelector("p");
@@ -124,8 +186,8 @@ export async function renderCamera(root, status, go) {
       openBtn.disabled = true;
       msg.textContent = "Membuka kamera…";
       stream = await openCamera(video, facing);
-      video.classList.toggle("mirror", facing === "user");
       flip.disabled = false;
+      startPreview();
       if (!stream.needsTap && (await waitLive(2000))) {
         placeholder.hidden = true;
       } else {
@@ -198,5 +260,9 @@ export async function renderCamera(root, status, go) {
   await refresh();
   flushQueue().then((n) => n && onOnline());
 
-  return () => { stopCamera(stream); window.removeEventListener("online", onOnline); };
+  return () => {
+    cancelAnimationFrame(raf);
+    stopCamera(stream);
+    window.removeEventListener("online", onOnline);
+  };
 }
