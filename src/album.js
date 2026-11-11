@@ -2,6 +2,7 @@
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
 import { getUrls } from "./storage.js";
+import { attachZoom } from "./zoom.js";
 import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, ICON } from "./ui.js";
 
 const PAGE = 60;
@@ -325,7 +326,7 @@ export async function renderAlbum(root, status) {
       if (nextId) mediumUrl(items.get(nextId)).then((u) => { new Image().src = u; }).catch(() => {});
       if (idx >= list.length - 3 && !endReached) loadMore();
     }
-    img.onload = () => img.classList.remove("loading");
+    img.onload = () => { img.classList.remove("loading"); zoom.measure(); };
 
     function step(dir) {
       const list = order();
@@ -333,33 +334,9 @@ export async function renderAlbum(root, status) {
       const next = list[idx + dir];
       if (next) { id = next; show(); }
     }
-    function setZoom(on, x, y) {
-      stage.classList.toggle("zoomed", on);
-      if (on && x !== undefined) {
-        // Pusatkan zoom di titik yang diketuk
-        requestAnimationFrame(() => {
-          stage.scrollLeft = x * (stage.scrollWidth / stage.clientWidth) - stage.clientWidth / 2;
-          stage.scrollTop = y * (stage.scrollHeight / stage.clientHeight) - stage.clientHeight / 2;
-        });
-      }
-    }
-
-    // Geser untuk pindah foto (saat tidak di-zoom)
-    let sx = 0, sy = 0, tracking = false, lastTap = 0;
-    stage.addEventListener("pointerdown", (e) => { sx = e.clientX; sy = e.clientY; tracking = !stage.classList.contains("zoomed"); });
-    stage.addEventListener("pointerup", (e) => {
-      const dx = e.clientX - sx, dy = e.clientY - sy;
-      if (tracking && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { step(dx < 0 ? 1 : -1); return; }
-      // Ketuk dua kali: zoom masuk/keluar
-      const now = Date.now();
-      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
-        if (now - lastTap < 300) {
-          const rect = stage.getBoundingClientRect();
-          setZoom(!stage.classList.contains("zoomed"), e.clientX - rect.left, e.clientY - rect.top);
-          lastTap = 0;
-        } else lastTap = now;
-      }
-    });
+    // Zoom foto (cubit, ketuk dua kali, roda mouse) dan geser untuk pindah foto
+    const zoom = attachZoom(stage, img, { onSwipe: step });
+    const setZoom = (on) => { if (!on) zoom.reset(); };
 
     const onKey = (e) => {
       if (e.key === "Escape") close();
@@ -369,6 +346,7 @@ export async function renderAlbum(root, status) {
     document.addEventListener("keydown", onKey);
     function close() {
       document.removeEventListener("keydown", onKey);
+      zoom.destroy();
       box.remove();
       before?.focus?.();
     }

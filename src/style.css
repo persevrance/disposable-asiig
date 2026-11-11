@@ -58,6 +58,7 @@
   }
 }
 * { box-sizing: border-box; }
+button, a, label, .tile, .chip, input, select, textarea { touch-action: manipulation; }
 /* Fokus keyboard selalu terlihat */
 :where(button, a, summary, [tabindex], .tile):focus-visible { outline: 3px solid var(--primary-text); outline-offset: 2px; }
 /* Atribut hidden harus selalu menang atas display milik kelas (mis. .btn inline-flex) */
@@ -415,10 +416,11 @@ button.ctl:active:not(:disabled) { transform: scale(.94); }
 .lb-top { display: flex; justify-content: space-between; align-items: center; padding: .5rem .75rem; gap: .5rem; }
 .lb-count { font-family: "Courier New", monospace; font-weight: 700; font-size: .9rem; }
 .lb-icon { width: 44px; height: 44px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .1); color: #fff; font-size: 1.4rem; cursor: pointer; display: grid; place-items: center; }
-.lb-stage { flex: 1; min-height: 0; overflow: hidden; display: grid; place-items: center; touch-action: pan-y pinch-zoom; position: relative; }
-.lb-stage.zoomed { overflow: auto; place-items: start; touch-action: auto; }
-.lb-img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; transition: opacity .15s; }
-.lb-stage.zoomed .lb-img { max-width: none; max-height: none; width: 220%; }
+/* touch-action: none — gestur di area foto ditangani aplikasi, bukan zoom halaman Safari */
+.lb-stage { flex: 1; min-height: 0; overflow: hidden; display: grid; place-items: center; touch-action: none; position: relative; cursor: zoom-in; }
+.lb-stage.zoomed { cursor: grab; }
+.lb-img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; transform-origin: 0 0; will-change: transform; transition: opacity .15s; }
+.lb-img.anim { transition: opacity .15s, transform .22s ease; }
 .lb-img.loading { opacity: .3; }
 .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 48px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .12); color: #fff; font-size: 1.8rem; cursor: pointer; display: grid; place-items: center; }
 .lb-nav.prev { left: max(.5rem, env(safe-area-inset-left)); }
@@ -558,6 +560,7 @@ td.pick input, th.pick input { width: 1.15rem; height: 1.15rem; accent-color: va
 #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
 @media (prefers-reduced-motion: reduce) {
+  .lb-img.anim { transition: opacity .15s; }
   .logo, .film-icon, .sheet-card, .live-dot { animation: none; }
   .btn, .shutter, .ctl, .switch .knob, .switch .knob::after { transition: none; }
 }
