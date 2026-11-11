@@ -63,8 +63,11 @@ Acara dengan "Rencana hapus foto" yang sudah lewat dihapus tiap malam beserta se
 1. Supabase -> Edge Functions -> **Deploy a new function** -> Via Editor. Nama: `purge-events`,
    tempel isi `supabase/functions/purge-events/index.ts`, lalu Deploy.
    (Atau dengan CLI: `supabase functions deploy purge-events`.)
-2. Edge Functions -> **Secrets** -> tambah `CRON_SECRET` berisi teks acak panjang.
-3. SQL Editor -> tempel `supabase/cron.sql`, ganti `<PROJECT-REF>`, `<ANON-KEY>`, `<CRON-SECRET>` -> Run.
+   Setelah terpasang, buka fungsi itu -> Details -> **matikan "Verify JWT"** (fungsi dijaga `CRON_SECRET`).
+2. Edge Functions -> **Secrets** -> tambah `CRON_SECRET` berisi teks acak panjang, misalnya hasil
+   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
+3. SQL Editor -> tempel `supabase/cron.sql`, ganti `<PROJECT-REF>` dan `<CRON-SECRET>` (tanda `< >` ikut dihapus) -> Run.
+   Ganti nilainya di SQL Editor saja; jangan simpan secret di file repo.
 4. Cek: `select * from cron.job_run_details order by start_time desc limit 5;` setelah jadwal berjalan.
    Hasil penghapusan tercatat di Dashboard -> Log sebagai "sistem (hapus otomatis)".
 
