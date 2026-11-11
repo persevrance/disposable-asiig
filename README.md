@@ -25,6 +25,8 @@ src/
   shoot.js         pesan jatah -> unggah -> konfirmasi, antrean kirim ulang
   queue.js         antrean IndexedDB
   film.js          preset efek film
+  develop.js       olah foto (resolusi, cermin, film, 3 ukuran JPEG) tanpa DOM
+  develop-worker.js  Web Worker yang menjalankan develop.js di luar thread utama
   album.js         tab Album + unduh dengan kuota
   owner.js         tab Panel (pemilik acara / superadmin), gulungan per tamu, sampul
   admin.js         dashboard superadmin
@@ -35,6 +37,7 @@ supabase/reset.sql   menghapus semua objek v1 + v2 (data hilang)
 supabase/cron.sql    jadwal hapus otomatis harian (pg_cron -> Edge Function)
 supabase/functions/purge-events/  Edge Function penghapus acara kedaluwarsa
 public/sw.js         service worker: aplikasi tetap terbuka tanpa sinyal
+tests/sql.test.mjs   tes database (PGlite): npm run test:sql
 ```
 
 ## Pemasangan
@@ -78,6 +81,15 @@ dengan tombol "Hapus sekarang".
 
 Google Auth Platform -> Audience -> tambahkan email Anda sebagai test user.
 Sebelum acara dengan tamu, tekan **Publish app** supaya siapa pun bisa login.
+
+### Tes database
+
+```bash
+npm run test:sql
+```
+Menjalankan `schema.sql` + `v2.sql` (dua kali) di Postgres sungguhan (PGlite) dengan tiruan
+skema `auth` dan `storage` Supabase, lalu menguji peran, jatah, album, unduhan, dashboard,
+dan `reset.sql`. Jalankan setiap kali mengubah file SQL.
 
 ### 3. Uji di laptop
 
@@ -128,6 +140,12 @@ Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin d
 - [ ] Album lebih dari 100 foto: Unduh album memunculkan tombol per bagian (maks. 100 foto per ZIP).
 - [ ] Tolak izin kamera di HP uji -> muncul di Dashboard -> Ringkasan -> Kegagalan kamera terbaru.
 - [ ] Semua konfirmasi (hapus, ganti kode, blokir, unduh berkuota) tampil sebagai dialog aplikasi, bukan dialog browser.
+- [ ] Pertama kali membuka Kamera di sebuah acara: muncul tiga kartu aturan main; "Mulai memotret" langsung membuka kamera. Kunjungan berikutnya kamera menyala sendiri bila izin sudah diberikan.
+- [ ] HP: tab Kamera/Album/Panel ada di bawah layar; tab Kamera berlatar gelap.
+- [ ] HP dengan tema gelap: seluruh aplikasi ikut gelap dan teks tetap terbaca.
+- [ ] Album: geser kiri/kanan di penampil foto, ketuk dua kali untuk zoom, penanda "12 / 48"; pil "foto baru" muncul saat menggulir ke bawah.
+- [ ] Panel: sakelar Terbuka/Ditutup, angka peserta/foto/film habis, sub-tab Undangan/Peserta/Pengaturan/Album.
+- [ ] Dashboard pembuat acara: tombol Buat acara dan kartu status per acara. Superadmin: Perlu perhatian, Sedang berlangsung, tabel acara dengan pilih-banyak, Pengguna & peran, Log yang terbaca.
 - [ ] Panel: tutup acara -> gulungan yang belum habis tampil.
 - [ ] Panel: sembunyikan foto, blokir peserta, unduh ZIP, hapus acara.
 

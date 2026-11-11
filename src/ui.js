@@ -186,3 +186,39 @@ export function confetti() {
   document.body.append(layer);
   setTimeout(() => layer.remove(), 3800);
 }
+
+// Ikon garis sederhana (warna mengikuti teks)
+const svg = (paths, size = 22) =>
+  `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+export const ICON = {
+  camera: svg('<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>'),
+  album: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m21 16-5-5-9 9"/>'),
+  panel: svg('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>'),
+  share: svg('<path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v13"/>', 18),
+  plus: svg('<path d="M12 5v14M5 12h14"/>', 18),
+};
+Object.assign(ICON, {
+  film: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 5v14M17 5v14M3 9h4M3 15h4M17 9h4M17 15h4"/>'),
+  lock: svg('<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>'),
+  sparkle: svg('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>'),
+  check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>', 18),
+  chevronDown: svg('<path d="m6 9 6 6 6-6"/>', 16),
+});
+
+// Ikon dalam lingkaran berwarna lembut. tone: coral | sun | mint | grape; size: "" | lg | xl
+export const badge = (name, tone = "coral", size = "") =>
+  `<span class="icon-badge ${tone} ${size}" aria-hidden="true">${ICON[name]}</span>`;
+
+// Logo aplikasi (sama dengan public/icon.svg, tanpa latar)
+export const BRAND = `<svg viewBox="40 90 432 340" width="96" height="76" aria-hidden="true">
+  <defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5c8a"/><stop offset="1" stop-color="#ff9a5c"/></linearGradient></defs>
+  <rect x="72" y="150" width="368" height="248" rx="48" fill="url(#brand-g)"/>
+  <rect x="112" y="116" width="100" height="52" rx="16" fill="#ff5c8a"/>
+  <rect x="330" y="124" width="64" height="40" rx="12" fill="#ffc23c"/>
+  <circle cx="290" cy="274" r="88" fill="#fff"/>
+  <circle cx="290" cy="274" r="64" fill="#2d1b33"/>
+  <circle cx="268" cy="252" r="16" fill="#fff" opacity=".85"/>
+  <rect x="112" y="200" width="60" height="30" rx="10" fill="#fff7ec"/>
+  <circle cx="440" cy="110" r="12" fill="#2ec4a0"/>
+  <circle cx="60" cy="410" r="9" fill="#b48cff"/>
+</svg>`;

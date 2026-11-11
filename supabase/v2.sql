@@ -716,7 +716,11 @@ begin
                         from storage.objects where bucket_id = 'covers'),
     'storage_quota_mb', (select storage_quota_mb from app_settings),
     'camera_errors_24h', (select count(*) from client_errors where at > now() - interval '24 hours'),
-    'overdue_events', (select count(*) from events where purge_at <= now()));
+    'overdue_events', (select count(*) from events where purge_at <= now()),
+    'stuck_pending', (select count(*) from photos where status = 'pending'
+                       and taken_at < now() - interval '1 hour'),
+    'creators_at_limit', (select count(*) from user_roles where role = 'creator'
+                           and event_limit is not null and events_created >= event_limit));
 end $$;
 
 drop function if exists admin_roles();
@@ -796,10 +800,18 @@ begin
 end $$;
 
 -- Superadmin: semua acara. Pembuat acara: hanya acaranya sendiri.
-create or replace function admin_events(p_search text default null)
-returns table (event_id uuid, name text, owner_name text, owner_email text,
-               is_open boolean, max_shots int, film text, hide_names boolean,
-               members int, photos int, bytes bigint, created_at timestamptz)
+-- p_status: all | open | closed | overdue. p_sort: created | activity | photos | bytes | members | name.
+-- total_count = jumlah baris sebelum dipotong halaman.
+drop function if exists admin_events(text);
+create or replace function admin_events(p_search text default null, p_status text default 'all',
+                                        p_sort text default 'created', p_limit int default 25,
+                                        p_offset int default 0)
+returns table (event_id uuid, name text, owner_name text, owner_email text, join_code text,
+               is_open boolean, max_shots int, max_members int, film text, hide_names boolean,
+               members int, shooters int, rolls_done int, downloaders int,
+               photos int, pending int, bytes bigint,
+               created_at timestamptz, purge_at timestamptz, last_photo_at timestamptz,
+               total_count bigint)
 language plpgsql stable security definer set search_path = public as $$
 #variable_conflict use_column
 declare v_admin boolean := is_superadmin();
@@ -808,44 +820,76 @@ begin
   return query
     with sz as (
       select split_part(o.name, '/', 1) as ev, sum((o.metadata->>'size')::bigint) as b
-        from storage.objects o where o.bucket_id = 'photos' group by 1)
-    select e.id, e.name, pr.name, u.email::text, e.is_open, e.max_shots, e.film, e.hide_names,
-           (select count(*)::int from event_members m where m.event_id = e.id),
-           (select count(*)::int from photos p where p.event_id = e.id and p.status = 'ready'),
-           coalesce(sz.b, 0)::bigint, e.created_at
-      from events e
-      join profiles pr on pr.id = e.owner_id
-      left join auth.users u on u.id = e.owner_id
-      left join sz on sz.ev = e.id::text
-     where (v_admin or e.owner_id = auth.uid())
-       and (p_search is null or p_search = ''
-        or e.name ilike '%' || p_search || '%' or pr.name ilike '%' || p_search || '%'
-        or u.email ilike '%' || p_search || '%' or e.join_code = upper(trim(p_search)))
-     order by e.created_at desc
-     limit 200;
+        from storage.objects o where o.bucket_id = 'photos' group by 1),
+    base as (
+      select e.id as b_id, e.name as b_name, pr.name as b_owner, u.email::text as b_email,
+             e.join_code as b_code, e.is_open as b_open, e.max_shots as b_shots,
+             e.max_members as b_max_members, e.film as b_film, e.hide_names as b_hide,
+             e.created_at as b_created, e.purge_at as b_purge,
+             coalesce(sz.b, 0)::bigint as b_bytes,
+             (select count(*)::int from event_members m where m.event_id = e.id) as b_members,
+             (select count(*)::int from event_members m where m.event_id = e.id and m.shots_used > 0) as b_shooters,
+             (select count(*)::int from event_members m where m.event_id = e.id and m.shots_used >= e.max_shots) as b_rolls,
+             (select count(distinct d.user_id)::int from downloads d where d.event_id = e.id) as b_dl,
+             (select count(*)::int from photos p where p.event_id = e.id and p.status = 'ready') as b_photos,
+             (select count(*)::int from photos p where p.event_id = e.id and p.status = 'pending') as b_pending,
+             (select max(p.taken_at) from photos p where p.event_id = e.id and p.status = 'ready') as b_last
+        from events e
+        join profiles pr on pr.id = e.owner_id
+        left join auth.users u on u.id = e.owner_id
+        left join sz on sz.ev = e.id::text
+       where (v_admin or e.owner_id = auth.uid())
+         and (coalesce(p_status, 'all') = 'all'
+              or (p_status = 'open' and e.is_open)
+              or (p_status = 'closed' and not e.is_open)
+              or (p_status = 'overdue' and e.purge_at <= now()))
+         and (p_search is null or p_search = ''
+              or e.name ilike '%' || p_search || '%' or pr.name ilike '%' || p_search || '%'
+              or u.email ilike '%' || p_search || '%' or e.join_code = upper(trim(p_search))))
+    select b.b_id, b.b_name, b.b_owner, b.b_email, b.b_code, b.b_open, b.b_shots, b.b_max_members,
+           b.b_film, b.b_hide, b.b_members, b.b_shooters, b.b_rolls, b.b_dl, b.b_photos, b.b_pending,
+           b.b_bytes, b.b_created, b.b_purge, b.b_last, count(*) over ()
+      from base b
+     order by
+       case when p_sort = 'name'     then b.b_name end asc,
+       case when p_sort = 'photos'   then b.b_photos end desc,
+       case when p_sort = 'bytes'    then b.b_bytes end desc,
+       case when p_sort = 'members'  then b.b_members end desc,
+       case when p_sort = 'activity' then b.b_last end desc nulls last,
+       b.b_created desc
+     limit least(greatest(coalesce(p_limit, 25), 1), 200) offset greatest(coalesce(p_offset, 0), 0);
 end $$;
 
-create or replace function admin_users(p_search text default null)
+-- p_filter: all | superadmin | creator | banned | none
+drop function if exists admin_users(text);
+create or replace function admin_users(p_search text default null, p_filter text default 'all',
+                                       p_limit int default 25, p_offset int default 0)
 returns table (user_id uuid, name text, email text, role text, banned boolean,
+               event_limit int, events_created int,
                events_owned int, events_joined int, photos int,
-               last_sign_in_at timestamptz, created_at timestamptz)
+               last_sign_in_at timestamptz, created_at timestamptz, total_count bigint)
 language plpgsql stable security definer set search_path = public as $$
 #variable_conflict use_column
 begin
   perform assert_superadmin();
   return query
-    select pr.id, pr.name, u.email::text, r.role, pr.banned,
+    select pr.id, pr.name, u.email::text, r.role, pr.banned, r.event_limit, r.events_created,
            (select count(*)::int from events e where e.owner_id = pr.id),
            (select count(*)::int from event_members m where m.user_id = pr.id),
            (select count(*)::int from photos p where p.user_id = pr.id and p.status = 'ready'),
-           u.last_sign_in_at, pr.created_at
+           u.last_sign_in_at, pr.created_at, count(*) over ()
       from profiles pr
       join auth.users u on u.id = pr.id
       left join user_roles r on r.email = lower(u.email)
-     where p_search is null or p_search = ''
-        or pr.name ilike '%' || p_search || '%' or u.email ilike '%' || p_search || '%'
+     where (p_search is null or p_search = ''
+            or pr.name ilike '%' || p_search || '%' or u.email ilike '%' || p_search || '%')
+       and (coalesce(p_filter, 'all') = 'all'
+            or (p_filter = 'superadmin' and r.role = 'superadmin')
+            or (p_filter = 'creator' and r.role = 'creator')
+            or (p_filter = 'banned' and pr.banned)
+            or (p_filter = 'none' and r.role is null))
      order by pr.created_at desc
-     limit 300;
+     limit least(greatest(coalesce(p_limit, 25), 1), 200) offset greatest(coalesce(p_offset, 0), 0);
 end $$;
 
 create or replace function admin_ban(p_user uuid, p_banned boolean) returns void
@@ -858,15 +902,29 @@ begin
                     p_user::text, '{}');
 end $$;
 
-create or replace function admin_audit(p_limit int default 200)
-returns table (at timestamptz, actor_email text, action text, target text, detail jsonb)
+drop function if exists admin_audit(int);
+create or replace function admin_audit(p_limit int default 50, p_offset int default 0,
+                                       p_action text default null, p_actor text default null,
+                                       p_since timestamptz default null)
+returns table (at timestamptz, actor_email text, action text, target text, detail jsonb,
+               target_label text, user_label text, total_count bigint)
 language plpgsql stable security definer set search_path = public as $$
 #variable_conflict use_column
 begin
   perform assert_superadmin();
   return query
-    select a.at, a.actor_email, a.action, a.target, a.detail
-      from audit_log a order by a.at desc limit least(greatest(p_limit, 1), 1000);
+    select a.at, a.actor_email, a.action, a.target, a.detail,
+           coalesce((select ev.name from events ev where ev.id::text = a.target),
+                    (select pr.name from profiles pr where pr.id::text = a.target),
+                    a.detail->>'name', a.target),
+           (select pr.name from profiles pr where pr.id::text = a.detail->>'user'),
+           count(*) over ()
+      from audit_log a
+     where (p_action is null or p_action = '' or a.action = p_action)
+       and (p_actor is null or p_actor = '' or a.actor_email ilike '%' || p_actor || '%')
+       and (p_since is null or a.at >= p_since)
+     order by a.at desc
+     limit least(greatest(coalesce(p_limit, 50), 1), 200) offset greatest(coalesce(p_offset, 0), 0);
 end $$;
 
 -- Acara yang sudah lewat tanggal hapus (cadangan jika jadwal otomatis belum dipasang)
@@ -918,6 +976,61 @@ begin
      limit least(greatest(p_limit, 1), 500);
 end $$;
 
+-- ---------- Fase 2: statistik acara dan dashboard -------------------
+
+-- Ringkasan satu acara untuk kartu status di Panel (pemilik/superadmin)
+create or replace function event_stats(p_event uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+begin
+  perform assert_owner(p_event);
+  return (select jsonb_build_object(
+      'members',      (select count(*) from event_members m where m.event_id = e.id),
+      'max_members',  e.max_members,
+      'shooters',     (select count(*) from event_members m where m.event_id = e.id and m.shots_used > 0),
+      'rolls_done',   (select count(*) from event_members m where m.event_id = e.id and m.shots_used >= e.max_shots),
+      'photos',       (select count(*) from photos p where p.event_id = e.id and p.status = 'ready'),
+      'pending',      (select count(*) from photos p where p.event_id = e.id and p.status = 'pending'),
+      'downloaders',  (select count(distinct d.user_id) from downloads d where d.event_id = e.id),
+      'last_photo_at', (select max(p.taken_at) from photos p where p.event_id = e.id and p.status = 'ready'))
+    from events e where e.id = p_event);
+end $$;
+
+-- Progres album untuk peserta: gulungan sendiri dan berapa tamu yang filmnya sudah habis
+create or replace function album_progress(p_event uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+      'members',    (select count(*) from event_members m where m.event_id = e.id),
+      'rolls_done', (select count(*) from event_members m where m.event_id = e.id and m.shots_used >= e.max_shots),
+      'my_used',    (select m.shots_used from event_members m where m.event_id = e.id and m.user_id = auth.uid()),
+      'max_shots',  e.max_shots)
+    from events e
+   where e.id = p_event
+     and (e.owner_id = auth.uid() or is_superadmin()
+          or exists (select 1 from event_members m where m.event_id = e.id and m.user_id = auth.uid()));
+$$;
+
+-- Acara yang sedang berlangsung: terbuka dan ada foto dalam 6 jam terakhir
+create or replace function admin_live_events()
+returns table (event_id uuid, name text, owner_name text, members int, rolls_done int,
+               photos_hour int, last_photo_at timestamptz)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+begin
+  perform assert_superadmin();
+  return query
+    select e.id, e.name, pr.name,
+           (select count(*)::int from event_members m where m.event_id = e.id),
+           (select count(*)::int from event_members m where m.event_id = e.id and m.shots_used >= e.max_shots),
+           (select count(*)::int from photos p where p.event_id = e.id and p.status = 'ready'
+              and p.taken_at > now() - interval '1 hour'),
+           (select max(p.taken_at) from photos p where p.event_id = e.id and p.status = 'ready')
+      from events e join profiles pr on pr.id = e.owner_id
+     where e.is_open
+       and exists (select 1 from photos p where p.event_id = e.id and p.taken_at > now() - interval '6 hours')
+     order by 7 desc nulls last
+     limit 10;
+end $$;
+
 -- ---------- Hak eksekusi --------------------------------------------
 
 revoke execute on all functions in schema public from public, anon;
@@ -941,7 +1054,9 @@ grant execute on function
   release_pending(uuid, uuid), list_members(uuid), owner_paths(uuid), delete_event(uuid),
   my_event_quota(), admin_set_event_limit(text, int, int),
   admin_overview(), admin_roles(), admin_set_role(text, text), admin_set_settings(jsonb),
-  admin_events(text), admin_users(text), admin_ban(uuid, boolean), admin_audit(int),
+  admin_events(text, text, text, int, int), admin_users(text, text, int, int),
+  admin_ban(uuid, boolean), admin_audit(int, int, text, text, timestamptz),
+  event_stats(uuid), album_progress(uuid), admin_live_events(),
   admin_overdue_events(), admin_client_errors(int), log_client_error(uuid, text, text, text)
 to authenticated;
 

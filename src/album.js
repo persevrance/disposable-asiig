@@ -2,7 +2,7 @@
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
 import { getUrls } from "./storage.js";
-import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog } from "./ui.js";
+import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, ICON } from "./ui.js";
 
 const PAGE = 60;
 
@@ -16,6 +16,8 @@ export async function renderAlbum(root, status) {
 
   const view = el(`
     <section class="album">
+      <div class="album-progress" hidden></div>
+      <button class="new-pill" hidden></button>
       <div class="album-bar">
         <span class="dl-quota"></span>
         <button class="btn small" data-act="select">Pilih untuk unduh</button>
@@ -36,6 +38,37 @@ export async function renderAlbum(root, status) {
   const selBar = view.querySelector(".select-bar");
   const selInfo = view.querySelector(".sel-info");
   const selectBtn = view.querySelector('[data-act="select"]');
+  const progressEl = view.querySelector(".album-progress");
+  const pill = view.querySelector(".new-pill");
+  let freshCount = 0;
+
+  // ---- progres: gulungan sendiri dan tamu yang filmnya sudah habis ----
+  let progress = null;
+  async function loadProgress() {
+    try { progress = await rpc("album_progress", { p_event: status.event_id }); } catch { return; }
+    if (!progress) return;
+    const reveal = status.reveal_at && new Date(status.reveal_at) > new Date();
+    const mine = status.is_member && progress.my_used !== null && progress.my_used !== undefined;
+    const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+    progressEl.hidden = false;
+    progressEl.innerHTML = `
+      ${mine ? `
+      <div class="ap-row"><b>Gulungan Anda</b><span>${progress.my_used} dari ${progress.max_shots} jepretan</span></div>
+      <div class="bar"><span style="width:${pct(progress.my_used, progress.max_shots)}%"></span></div>` : ""}
+      <div class="ap-row"><b>Tamu yang filmnya habis</b><span>${progress.rolls_done} dari ${progress.members}</span></div>
+      <div class="bar mint"><span style="width:${pct(progress.rolls_done, progress.members)}%"></span></div>
+      <small>${reveal ? `Semua foto terbuka ${esc(fmtDate(status.reveal_at))}.`
+        : "Foto setiap tamu muncul di sini setelah filmnya habis atau acara ditutup."}</small>`;
+  }
+
+  // ---- pil "foto baru" saat pengguna sedang menggulir ke bawah ----
+  pill.onclick = () => {
+    window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    freshCount = 0;
+    pill.hidden = true;
+  };
+  const onScroll = () => { if (window.scrollY < 120 && !pill.hidden) { freshCount = 0; pill.hidden = true; } };
+  window.addEventListener("scroll", onScroll, { passive: true });
 
   // ---- kuota unduhan ----
   const unlimited = () => status.can_manage;
@@ -96,10 +129,10 @@ export async function renderAlbum(root, status) {
           <img loading="lazy" alt="Foto ${esc(label(r))}" src="${esc(urls[r.thumb_path] || "")}" />
           ${r.hidden ? `<span class="badge">disembunyikan</span>` : ""}
           ${r.is_mine ? `<span class="badge mine">milik Anda</span>` : ""}
-          <span class="check" aria-hidden="true">✓</span>
+          <span class="check" aria-hidden="true">${ICON.check}</span>
         </button>`);
       n.onclick = () => {
-        if (!selecting) return openPhoto(r);
+        if (!selecting) return openViewer(r.photo_id);
         if (selected.has(r.photo_id)) selected.delete(r.photo_id); else selected.add(r.photo_id);
         n.classList.toggle("selected", selected.has(r.photo_id));
         updateSelBar();
@@ -142,8 +175,14 @@ export async function renderAlbum(root, status) {
         await addRows(fresh);
         if (!oldest) oldest = rows[rows.length - 1].taken_at;
         endReached = false;
+        if (window.scrollY > 300) {
+          freshCount += fresh.length;
+          pill.textContent = `↑ ${freshCount} foto baru`;
+          pill.hidden = false;
+        }
       }
       updateEmpty();
+      loadProgress();
     } catch { /* coba lagi nanti */ }
   }
 
@@ -226,29 +265,126 @@ export async function renderAlbum(root, status) {
       });
   }
 
-  async function openPhoto(r) {
+  // ---- penampil foto: geser kiri/kanan, panah keyboard, ketuk dua kali untuk zoom ----
+  const order = () => [...grid.querySelectorAll(".tile")].map((t) => t.dataset.id);
+  const urlCache = new Map();
+  async function mediumUrl(r) {
+    if (!urlCache.has(r.medium_path)) {
+      const urls = await getUrls([r.medium_path]);
+      urlCache.set(r.medium_path, urls[r.medium_path]);
+    }
+    return urlCache.get(r.medium_path);
+  }
+
+  function openViewer(startId) {
+    let id = startId;
     const box = el(`
-      <div class="lightbox" role="dialog" aria-modal="true">
-        <img alt="" />
+      <div class="lightbox" role="dialog" aria-modal="true" aria-label="Penampil foto">
+        <div class="lb-top">
+          <span class="lb-count"></span>
+          <button class="lb-icon" data-act="close" aria-label="Tutup">×</button>
+        </div>
+        <div class="lb-stage"><img class="lb-img" alt="" draggable="false" /></div>
+        <button class="lb-nav prev" data-act="prev" aria-label="Foto sebelumnya">‹</button>
+        <button class="lb-nav next" data-act="next" aria-label="Foto berikutnya">›</button>
         <div class="lb-bar">
-          <span>${esc(label(r))} · ${esc(fmtDate(r.taken_at))}</span>
+          <span class="lb-info"></span>
           <span class="lb-actions">
-            <button class="btn small" data-act="dl">${r.is_mine || r.downloaded || unlimited() ? "Unduh" : "Unduh (1 kuota)"}</button>
-            ${status.can_manage ? `<button class="btn small" data-act="hide">${r.hidden ? "Tampilkan" : "Sembunyikan"}</button>` : ""}
-            <button class="btn small" data-act="close">Tutup</button>
+            <button class="btn small" data-act="dl"></button>
+            ${status.can_manage ? `<button class="btn small" data-act="hide"></button>` : ""}
           </span>
         </div>
       </div>`);
+    const stage = box.querySelector(".lb-stage");
+    const img = box.querySelector(".lb-img");
+    const before = document.activeElement;
     document.body.append(box);
-    const close = () => box.remove();
+    box.querySelector('[data-act="close"]').focus();
+
+    async function show() {
+      const r = items.get(id);
+      if (!r) return close();
+      const list = order();
+      const idx = list.indexOf(id);
+      box.querySelector(".lb-count").textContent = `${idx + 1} / ${list.length}${endReached ? "" : "+"}`;
+      box.querySelector(".lb-info").textContent = `${label(r)} · ${fmtDate(r.taken_at)}`;
+      box.querySelector('[data-act="prev"]').disabled = idx <= 0;
+      box.querySelector('[data-act="next"]').disabled = idx >= list.length - 1 && endReached;
+      box.querySelector('[data-act="dl"]').textContent = r.is_mine || r.downloaded || unlimited() ? "Unduh" : "Unduh (1 kuota)";
+      const hideBtn = box.querySelector('[data-act="hide"]');
+      if (hideBtn) hideBtn.textContent = r.hidden ? "Tampilkan" : "Sembunyikan";
+      setZoom(false);
+      img.classList.add("loading");
+      img.alt = `Foto ${label(r)}`;
+      try {
+        const url = await mediumUrl(r);
+        if (id === r.photo_id) { img.src = url; }
+      } catch (e) { toast(friendly(e)); }
+      // Muat foto berikutnya lebih dulu, dan muat halaman album berikutnya jika hampir habis
+      const nextId = list[idx + 1];
+      if (nextId) mediumUrl(items.get(nextId)).then((u) => { new Image().src = u; }).catch(() => {});
+      if (idx >= list.length - 3 && !endReached) loadMore();
+    }
+    img.onload = () => img.classList.remove("loading");
+
+    function step(dir) {
+      const list = order();
+      const idx = list.indexOf(id);
+      const next = list[idx + dir];
+      if (next) { id = next; show(); }
+    }
+    function setZoom(on, x, y) {
+      stage.classList.toggle("zoomed", on);
+      if (on && x !== undefined) {
+        // Pusatkan zoom di titik yang diketuk
+        requestAnimationFrame(() => {
+          stage.scrollLeft = x * (stage.scrollWidth / stage.clientWidth) - stage.clientWidth / 2;
+          stage.scrollTop = y * (stage.scrollHeight / stage.clientHeight) - stage.clientHeight / 2;
+        });
+      }
+    }
+
+    // Geser untuk pindah foto (saat tidak di-zoom)
+    let sx = 0, sy = 0, tracking = false, lastTap = 0;
+    stage.addEventListener("pointerdown", (e) => { sx = e.clientX; sy = e.clientY; tracking = !stage.classList.contains("zoomed"); });
+    stage.addEventListener("pointerup", (e) => {
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+      if (tracking && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { step(dx < 0 ? 1 : -1); return; }
+      // Ketuk dua kali: zoom masuk/keluar
+      const now = Date.now();
+      if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+        if (now - lastTap < 300) {
+          const rect = stage.getBoundingClientRect();
+          setZoom(!stage.classList.contains("zoomed"), e.clientX - rect.left, e.clientY - rect.top);
+          lastTap = 0;
+        } else lastTap = now;
+      }
+    });
+
+    const onKey = (e) => {
+      if (e.key === "Escape") close();
+      else if (e.key === "ArrowRight") step(1);
+      else if (e.key === "ArrowLeft") step(-1);
+    };
+    document.addEventListener("keydown", onKey);
+    function close() {
+      document.removeEventListener("keydown", onKey);
+      box.remove();
+      before?.focus?.();
+    }
     box.querySelector('[data-act="close"]').onclick = close;
-    box.onclick = (e) => { if (e.target === box) close(); };
+    box.querySelector('[data-act="prev"]').onclick = () => step(-1);
+    box.querySelector('[data-act="next"]').onclick = () => step(1);
     box.querySelector('[data-act="dl"]').onclick = async (e) => {
-      e.currentTarget.disabled = true;
-      if (await getPhotos([r.photo_id])) close(); else e.currentTarget.disabled = false;
+      const b = e.currentTarget;
+      b.disabled = true;
+      await getPhotos([id]);
+      b.disabled = false;
+      show();
     };
     const hide = box.querySelector('[data-act="hide"]');
     if (hide) hide.onclick = async () => {
+      const r = items.get(id);
       try {
         await rpc("hide_photo", { p_photo: r.photo_id, p_hidden: !r.hidden });
         r.hidden = !r.hidden;
@@ -256,22 +392,20 @@ export async function renderAlbum(root, status) {
         tile?.classList.toggle("is-hidden", r.hidden);
         tile?.querySelector(".badge:not(.mine)")?.remove();
         if (r.hidden) tile?.append(el(`<span class="badge">disembunyikan</span>`));
-        close();
+        show();
       } catch (e) { toast(friendly(e)); }
     };
-    try {
-      const urls = await getUrls([r.medium_path]);
-      box.querySelector("img").src = urls[r.medium_path];
-    } catch (e) { toast(friendly(e)); }
+    show();
   }
 
   updateQuota();
+  loadProgress();
   const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) loadMore(); }, { rootMargin: "600px" });
   io.observe(view.querySelector(".sentinel"));
   await loadMore();
   const timer = setInterval(poll, 15000);
 
-  return () => { clearInterval(timer); io.disconnect(); };
+  return () => { clearInterval(timer); io.disconnect(); window.removeEventListener("scroll", onScroll); };
 }
 
 // Toast yang bisa diperbarui; panggil dengan null untuk menutup

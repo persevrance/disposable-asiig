@@ -57,6 +57,26 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
 - [x] Aksi Tutup/Hapus acara di Dashboard pindah ke menu ⋯
 - [x] Kuota storage menjadi pengaturan (`app_settings.storage_quota_mb`)
 
+## Fase 2 perbaikan
+
+- [x] Kartu pengenalan aturan main + petunjuk di bawah penghitung; aturan di layar masuk jadi tiga poin
+- [x] Penampil foto: geser, panah keyboard, ketuk dua kali untuk zoom, penanda urutan
+- [x] Pil "foto baru" dan progres album (`album_progress`)
+- [x] Panel: kartu status (sakelar buka/tutup, angka, funnel dari `event_stats`) + sub-tab; peserta sebagai kartu dengan bilah progres
+- [x] Navigasi bawah di HP; tab Kamera layar gelap
+- [x] Tema gelap mengikuti pengaturan HP (semua warna lewat token)
+- [x] Kamera menyala otomatis bila izin sudah ada
+- [x] Efek film dan kompres di Web Worker (`develop.js`, `develop-worker.js`), cadangan thread utama
+- [x] Dashboard dan Panel lebar di laptop
+- [x] Beranda tamu: isian kode sebagai fokus; buat acara pindah ke Dashboard
+- [x] Tes SQL di repo (`npm run test:sql`). Folder migrasi Supabase CLI sengaja ditunda: memindahkan
+      `schema.sql`/`v2.sql` akan mengubah alur "jalankan ulang v2.sql" di SQL Editor.
+- [x] Dashboard pembuat acara: tombol Buat acara, kartu status dengan funnel
+- [x] Ringkasan superadmin: Perlu perhatian + Sedang berlangsung (`admin_live_events`)
+- [x] Tabel acara dan pengguna: cari, saring, urut, halaman, aksi massal (`admin_events`, `admin_users`)
+- [x] Tab Peran digabung ke Pengguna & peran
+- [x] Log terbaca dengan saringan (`admin_audit` dengan label nama)
+
 ## Catatan storage
 
 Kuota gratis Supabase sekitar 1 GB storage. Pada 2560px satu foto (3 file) kira-kira 1,2–2 MB, jadi sekitar 500–800 foto.

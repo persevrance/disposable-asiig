@@ -1,5 +1,7 @@
 // Buka kamera, ambil bingkai, efek film, kompres. Menggambar ulang lewat canvas membuang EXIF/GPS.
-import { applyFilm, FILMS } from "./film.js";
+import { FILMS } from "./film.js";
+import { develop, domEnv, fitSize } from "./develop.js";
+import DevelopWorker from "./develop-worker.js?worker&inline";
 
 export class CameraError extends Error {
   constructor(code, detail) { super(code); this.code = code; this.detail = detail; }
@@ -114,51 +116,80 @@ export async function setTorch(stream, on) {
 
 const pad = (n) => String(n).padStart(2, "0");
 
-// Cap tanggal ala kamera film: '26 11 11 di pojok kanan bawah
-function stampDate(ctx, w, h, color) {
+// Cap tanggal ala kamera film ('26 11 11) sebagai gambar kecil, digambar di thread utama
+// (teks di OffscreenCanvas belum didukung semua browser). Posisi: pojok kanan bawah foto w×h.
+function makeStamp(w, h, color) {
   const d = new Date();
   const text = `'${String(d.getFullYear()).slice(2)} ${pad(d.getMonth() + 1)} ${pad(d.getDate())}`;
   const size = Math.round(Math.min(w, h) * 0.045);
-  ctx.font = `bold ${size}px "Courier New", monospace`;
+  const font = `bold ${size}px "Courier New", monospace`;
+  const probe = document.createElement("canvas").getContext("2d");
+  probe.font = font;
+  const tw = Math.ceil(probe.measureText(text).width);
+  const padPx = Math.ceil(size * 0.8);                 // ruang untuk pendaran
+  const c = document.createElement("canvas");
+  c.width = tw + padPx * 2;
+  c.height = Math.ceil(size * 1.3) + padPx * 2;
+  const ctx = c.getContext("2d");
+  ctx.font = font;
   ctx.textAlign = "right";
   ctx.textBaseline = "bottom";
   ctx.shadowColor = color;
   ctx.shadowBlur = size * 0.4;
   ctx.fillStyle = color;
-  ctx.fillText(text, w - size * 1.2, h - size * 1.0);
-  ctx.shadowBlur = 0;
+  ctx.fillText(text, c.width - padPx, c.height - padPx);
+  // Sama dengan menulis rata kanan di (w - 1,2×size, h - size)
+  return { image: c, x: Math.round(w - size * 1.2 - (c.width - padPx)), y: Math.round(h - size - (c.height - padPx)) };
 }
 
-function toBlob(canvas, quality) {
-  return new Promise((res, rej) =>
-    canvas.toBlob((b) => (b ? res(b) : rej(new Error("Gagal membuat JPEG"))), "image/jpeg", quality));
+// ---- Web Worker: efek film dan kompres di luar thread utama (cadangan: thread utama) ----
+let worker = null;
+let workerBroken = false;
+let jobSeq = 0;
+const waiting = new Map();
+
+function getWorker() {
+  if (workerBroken) return null;
+  if (typeof Worker === "undefined" || typeof OffscreenCanvas === "undefined" ||
+      !("convertToBlob" in OffscreenCanvas.prototype)) return null;
+  if (!worker) {
+    try {
+      worker = new DevelopWorker();
+      worker.onmessage = (e) => {
+        const done = waiting.get(e.data.id);
+        if (done) { waiting.delete(e.data.id); done(e.data); }
+      };
+      worker.onerror = () => {
+        workerBroken = true;
+        for (const done of waiting.values()) done({ ok: false, error: "worker" });
+        waiting.clear();
+      };
+    } catch { workerBroken = true; return null; }
+  }
+  return worker;
 }
 
-function drawScaled(source, sw, sh, maxSide, mirror = false) {
-  const scale = Math.min(1, maxSide / Math.max(sw, sh));
-  const c = document.createElement("canvas");
-  c.width = Math.round(sw * scale);
-  c.height = Math.round(sh * scale);
-  const ctx = c.getContext("2d");
-  if (mirror) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
-  ctx.drawImage(source, 0, 0, c.width, c.height);
-  return c;
+async function developInWorker(source, sw, sh, opts, stamp) {
+  const w = getWorker();
+  if (!w) return null;
+  const [bitmap, stampImage] = await Promise.all([createImageBitmap(source), createImageBitmap(stamp.image)]);
+  const id = ++jobSeq;
+  const res = await new Promise((resolve) => {
+    waiting.set(id, resolve);
+    w.postMessage({ id, bitmap, opts, stamp: { image: stampImage, x: stamp.x, y: stamp.y } }, [bitmap, stampImage]);
+    setTimeout(() => { if (waiting.delete(id)) resolve({ ok: false, error: "timeout" }); }, 20000);
+  });
+  if (!res.ok) { workerBroken = true; return null; } // jepretan berikutnya langsung di thread utama
+  return { photo: res.photo, medium: res.medium, thumb: res.thumb };
 }
-
-export const MEDIUM_SIDE = 1080;
-export const THUMB_SIDE = 400;
 
 // opts: { maxSide, quality (0..1), mirror, film }
 // Hasil: { photo (penuh), medium (1080 px, untuk album), thumb (400 px) }
-async function develop(source, sw, sh, opts) {
-  const full = drawScaled(source, sw, sh, opts.maxSide || 2560, opts.mirror);
-  applyFilm(full, opts.film);
-  stampDate(full.getContext("2d"), full.width, full.height, FILMS[opts.film]?.stamp || "#ff9a2e");
-  const photo = await toBlob(full, opts.quality || 0.88);
-  const medium = await toBlob(drawScaled(full, full.width, full.height, MEDIUM_SIDE), 0.78);
-  const thumb = await toBlob(drawScaled(full, full.width, full.height, THUMB_SIDE), 0.7);
-  full.width = full.height = 0; // lepaskan memori canvas besar (penting di iOS)
-  return { photo, medium, thumb };
+async function process(source, sw, sh, opts) {
+  const [w, h] = fitSize(sw, sh, opts.maxSide || 2560);
+  const stamp = makeStamp(w, h, FILMS[opts.film]?.stamp || "#ff9a2e");
+  const out = await developInWorker(source, sw, sh, opts, stamp).catch(() => null);
+  return out || develop(domEnv, source, sw, sh, opts, stamp);
 }
 
 // Salin satu bingkai video secepatnya (saat flash menyala); diolah sesudahnya
@@ -173,11 +204,15 @@ export function grabFrame(video) {
 // Bingkai kecil untuk pratinjau efek film di pemilih
 export function grabSmall(video, maxSide = 240) {
   if (!video.videoWidth || video.paused) return null;
-  return drawScaled(video, video.videoWidth, video.videoHeight, maxSide);
+  const [w, h] = fitSize(video.videoWidth, video.videoHeight, maxSide);
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  c.getContext("2d").drawImage(video, 0, 0, w, h);
+  return c;
 }
 
 export async function captureFromCanvas(frame, opts) {
-  try { return await develop(frame, frame.width, frame.height, opts); }
+  try { return await process(frame, frame.width, frame.height, opts); }
   finally { frame.width = frame.height = 0; }
 }
 
@@ -189,6 +224,6 @@ export async function captureFromFile(file, opts) {
     throw new CameraError("FILE_LAMA");
   }
   const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-  try { return await develop(bmp, bmp.width, bmp.height, { ...opts, mirror: false }); }
+  try { return await process(bmp, bmp.width, bmp.height, { ...opts, mirror: false }); }
   finally { bmp.close?.(); }
 }

@@ -1,19 +1,22 @@
 // Dashboard: #/admin/<tab>. Superadmin melihat semua tab;
-// pembuat acara hanya tab Acara (acaranya sendiri).
+// pembuat acara hanya tab Acara (acaranya sendiri), yang menjadi pusat kerjanya.
 import { rpc, friendly } from "./supabase.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles } from "./owner.js";
-import { el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal } from "./ui.js";
+import {
+  el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
+} from "./ui.js";
 
 const TABS = [
   ["ringkasan", "Ringkasan"],
   ["acara", "Acara"],
-  ["peran", "Peran"],
-  ["pengguna", "Pengguna"],
+  ["pengguna", "Pengguna & peran"],
   ["pengaturan", "Pengaturan"],
   ["log", "Log"],
 ];
 const CREATOR_TABS = ["acara"];
+const ALIASES = { peran: "pengguna" }; // tautan lama
+const PAGE = 25;
 
 export async function renderAdmin(app, tab, { setView, me }) {
   let role = null;
@@ -23,28 +26,135 @@ export async function renderAdmin(app, tab, { setView, me }) {
     location.hash = "#/";
     return;
   }
+  tab = ALIASES[tab] || tab;
   const tabs = role === "superadmin" ? TABS : TABS.filter(([t]) => CREATOR_TABS.includes(t));
   if (!tabs.some(([t]) => t === tab)) tab = tabs[0][0];
   const view = el(`
-    <main class="page admin">
+    <main class="page admin wide">
       <header class="top">
-        <a class="back" href="#/" aria-label="Kembali">‹</a>
+        <a class="back" href="#/" aria-label="Kembali ke beranda">‹</a>
         <h1>Dashboard</h1>
         <span class="pill small-pill">${role === "superadmin" ? "Superadmin" : "Pembuat acara"}</span>
       </header>
-      ${tabs.length > 1 ? `<nav class="tabs scroll">
-        ${tabs.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}">${n}</a>`).join("")}
+      ${tabs.length > 1 ? `<nav class="tabs scroll" aria-label="Bagian dashboard">
+        ${tabs.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}" ${t === tab ? 'aria-current="page"' : ""}>${n}</a>`).join("")}
       </nav>` : ""}
       <div class="admin-body"><p class="hint">Memuat…</p></div>
     </main>`);
   setView(view);
   const body = view.querySelector(".admin-body");
-  const render = { ringkasan, acara, peran, pengguna, pengaturan, log }[tab];
+  const render = { ringkasan, acara, pengguna, pengaturan, log }[tab];
   try { await render(body, me, role); }
   catch (e) { body.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); }
 }
 
-// ---------- Ringkasan ----------
+// ---------- Pembantu tampilan ----------
+const stat = (label, value, sub) => `
+  <div class="stat"><b>${Number(value).toLocaleString("id-ID")}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
+
+const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+const funnelRow = (label, n, of, cls = "") => `
+  <div class="funnel-row"><span>${label}</span><div class="bar ${cls}"><span style="width:${pct(n, of)}%"></span></div><b>${n}</b></div>`;
+function funnelHtml(e) {
+  const of = Math.max(e.members, 1);
+  return funnelRow(`Peserta / ${e.max_members}`, e.members, e.max_members) +
+    funnelRow("Memotret", e.shooters, of) +
+    funnelRow("Film habis", e.rolls_done, of, "mint") +
+    funnelRow("Mengunduh", e.downloaders, of);
+}
+
+// Tombol pilihan (saring)
+function chips(options, value, onChange, label) {
+  const n = el(`<div class="chips" role="group" aria-label="${esc(label)}">
+    ${options.map(([v, t]) => `<button type="button" class="chip" data-v="${v}" aria-pressed="${v === value}">${esc(t)}</button>`).join("")}
+  </div>`);
+  n.onclick = (e) => {
+    const b = e.target.closest(".chip");
+    if (!b) return;
+    n.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c === b)));
+    onChange(b.dataset.v);
+  };
+  return n;
+}
+
+function pagerEl(total, offset, onPage) {
+  const from = total ? offset + 1 : 0;
+  const to = Math.min(offset + PAGE, total);
+  const n = el(`
+    <div class="pager">
+      <span>${from}–${to} dari ${Number(total).toLocaleString("id-ID")}</span>
+      <div class="row tight">
+        <button class="btn small" data-p="-1" ${offset <= 0 ? "disabled" : ""}>‹ Sebelumnya</button>
+        <button class="btn small" data-p="1" ${to >= total ? "disabled" : ""}>Berikutnya ›</button>
+      </div>
+    </div>`);
+  n.querySelectorAll("[data-p]").forEach((b) => (b.onclick = () => onPage(Math.max(0, offset + Number(b.dataset.p) * PAGE))));
+  return n;
+}
+
+async function deleteEventFully(eventId, coverPath) {
+  if (coverPath === undefined) coverPath = (await rpc("my_status", { p_event: eventId }))[0]?.cover_path;
+  await deleteEventFiles(eventId, coverPath);
+  await rpc("delete_event", { p_event: eventId });
+}
+
+// ---------- Buat acara (dipakai juga dari beranda) ----------
+export async function createEventDialog() {
+  let settings, quota;
+  try {
+    [settings, quota] = await Promise.all([rpc("get_settings"), rpc("my_event_quota").catch(() => null)]);
+  } catch (e) { toast(friendly(e)); return; }
+  const limited = quota && quota.limit !== null && quota.limit !== undefined;
+  const left = limited ? Math.max(0, quota.limit - quota.used) : null;
+  if (left === 0) {
+    await confirmDialog({
+      title: "Batas acara habis",
+      text: `Anda sudah membuat ${quota.used} dari ${quota.limit} acara. Hubungi superadmin untuk menambahnya.`,
+      ok: "Mengerti", cancel: "Tutup",
+    });
+    return;
+  }
+  const { box, close } = modal(`
+    <form class="dialog">
+      <h3>Buat acara baru</h3>
+      ${limited ? `<p>Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
+      <label>Nama acara <input name="name" required maxlength="80" autofocus placeholder="Contoh: Pernikahan Rani & Bima" /></label>
+      <div class="row">
+        <label>Jatah foto (maks. ${settings.max_shots_limit}) <input name="max_shots" type="number" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" /></label>
+        <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
+      </div>
+      <label>Efek film bawaan
+        <select name="film">${Object.entries(FILMS).map(([id, f]) => `<option value="${id}" ${id === settings.default_film ? "selected" : ""}>${esc(f.name)} — ${esc(f.desc)}</option>`).join("")}</select>
+      </label>
+      <label class="check"><input type="checkbox" name="invite_only" /> Hanya email yang diundang</label>
+      <p class="hint">Sampul, undangan, dan pengaturan lain bisa diatur di Panel setelah acara dibuat.</p>
+      <div class="dialog-actions">
+        <button type="button" class="btn ghost" data-act="no">Batal</button>
+        <button class="btn primary">Buat acara</button>
+      </div>
+    </form>`);
+  const form = box.querySelector("form");
+  box.querySelector('[data-act="no"]').onclick = close;
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const f = form.elements;
+    const btn = form.querySelector(".btn.primary");
+    btn.disabled = true;
+    try {
+      const id = await rpc("create_event", {
+        p_name: f.name.value,
+        p_max_shots: Number(f.max_shots.value),
+        p_max_members: Number(f.max_members.value),
+        p_invite_only: f.invite_only.checked,
+        p_film: f.film.value,
+      });
+      close();
+      location.hash = `#/e/${id}/panel`;
+    } catch (err) { toast(friendly(err)); btn.disabled = false; }
+  };
+}
+
+// ---------- Ringkasan: perlu perhatian, berlangsung, angka ----------
 const ERROR_KINDS = {
   DENIED: "Izin kamera ditolak", NOT_HTTPS: "Bukan HTTPS", IN_APP: "Browser bawaan aplikasi",
   UNSUPPORTED: "Browser tidak mendukung", NO_CAMERA: "Kamera tidak ada", BUSY: "Kamera dipakai aplikasi lain",
@@ -59,23 +169,54 @@ function shortUA(ua = "") {
   return `${dev} · ${names[br] || br}`;
 }
 
-async function deleteEventFully(eventId, coverPath) {
-  if (coverPath === undefined) coverPath = (await rpc("my_status", { p_event: eventId }))[0]?.cover_path;
-  await deleteEventFiles(eventId, coverPath);
-  await rpc("delete_event", { p_event: eventId });
-}
-
 async function ringkasan(body) {
-  const [o, overdue, errors] = await Promise.all([
-    rpc("admin_overview"), rpc("admin_overdue_events"), rpc("admin_client_errors", { p_limit: 20 }),
+  const [o, overdue, errors, live] = await Promise.all([
+    rpc("admin_overview"), rpc("admin_overdue_events"),
+    rpc("admin_client_errors", { p_limit: 20 }), rpc("admin_live_events"),
   ]);
   const quota = Number(o.storage_quota_mb || 1024) * 1024 * 1024;
   const used = Number(o.photo_bytes) + Number(o.cover_bytes);
-  const pct = Math.min(100, (used / quota) * 100);
+  const usedPct = Math.min(100, (used / quota) * 100);
   const avg = o.photos ? Number(o.photo_bytes) / o.photos : 0;
   const left = avg ? Math.max(0, Math.floor((quota - used) / avg)) : null;
+
+  // Hal yang perlu ditindak, urut dari yang paling mendesak
+  const items = [];
+  if (usedPct > 85) items.push([`Storage terpakai ${usedPct.toFixed(0)}%`,
+    left !== null ? `Cukup untuk sekitar ${left.toLocaleString("id-ID")} foto lagi. Turunkan resolusi atau hapus acara lama.` : "Turunkan resolusi atau hapus acara lama.",
+    `<a class="btn small" href="#/admin/pengaturan">Pengaturan</a>`]);
+  if (overdue.length) items.push([`${overdue.length} acara lewat tanggal hapus`,
+    overdue.slice(0, 3).map((e) => e.name).join(", ") + (overdue.length > 3 ? ", …" : ""),
+    `<button class="btn small danger" data-act="purge">Hapus sekarang</button>`]);
+  if (o.stuck_pending > 0) items.push([`${o.stuck_pending} foto tertahan lebih dari 1 jam`,
+    "Biasanya HP peserta kehilangan sinyal. Jika peserta sudah pulang, lepas dari Panel acara → Peserta.",
+    `<a class="btn small" href="#/admin/acara">Lihat acara</a>`]);
+  if (o.camera_errors_24h >= 5) items.push([`${o.camera_errors_24h} kegagalan kamera dalam 24 jam`,
+    "Cek jenis masalah, perangkat, dan browsernya di daftar bawah.",
+    `<button class="btn small" data-act="to-errors">Lihat daftar</button>`]);
+  if (o.creators_at_limit > 0) items.push([`${o.creators_at_limit} pembuat acara mencapai batas acara`,
+    "Mereka tidak bisa membuat acara baru sampai batasnya ditambah.",
+    `<a class="btn small" href="#/admin/pengguna">Pengguna & peran</a>`]);
+
   const view = el(`
     <div>
+      ${items.length ? `
+      <div class="card attention">
+        <h3>Perlu perhatian</h3>
+        <ul class="attention-list">${items.map(([t, s, a]) => `<li><div><b>${esc(t)}</b><small>${esc(s)}</small></div>${a}</li>`).join("")}</ul>
+      </div>` : `
+      <div class="card all-good"><b>Semua aman.</b> Tidak ada yang perlu ditindak saat ini.</div>`}
+
+      ${live.length ? `
+      <div class="card">
+        <h3><span class="live-dot" aria-hidden="true"></span>Sedang berlangsung</h3>
+        <div class="live-list">${live.map((e) => `
+          <div class="live-item">
+            <div><b>${esc(e.name)}</b><small>${esc(e.owner_name)} · ${e.photos_hour} foto dalam 1 jam · film habis ${e.rolls_done}/${e.members} · terakhir ${esc(fmtDate(e.last_photo_at))}</small></div>
+            <a class="btn small" href="#/e/${e.event_id}/panel">Kelola</a>
+          </div>`).join("")}</div>
+      </div>` : ""}
+
       <div class="stats">
         ${stat("Pengguna", o.users, o.banned ? `${o.banned} diblokir` : "")}
         ${stat("Acara", o.events, `${o.events_open} terbuka`)}
@@ -84,21 +225,15 @@ async function ringkasan(body) {
         ${stat("Pembuat acara", o.creators, `${o.superadmins} superadmin`)}
         ${stat("Gagal kamera", o.camera_errors_24h, "24 jam terakhir")}
       </div>
-      ${overdue.length ? `
-      <div class="card attention">
-        <h3>Acara lewat tanggal hapus</h3>
-        <p class="hint">Acara ini dihapus otomatis tiap malam jika jadwal di supabase/cron.sql sudah dipasang. Jika belum, hapus dari sini.</p>
-        <ul class="plain">${overdue.map((e) => `<li><b>${esc(e.name)}</b> · ${e.photos} foto · rencana hapus ${esc(fmtDate(e.purge_at))}</li>`).join("")}</ul>
-        <button class="btn danger" data-act="purge">Hapus ${overdue.length} acara sekarang</button>
-      </div>` : ""}
+
       <div class="card">
         <h3>Storage</h3>
-        <div class="meter"><span style="width:${pct.toFixed(1)}%" class="${pct > 85 ? "hot" : ""}"></span></div>
-        <p class="hint">${fmtBytes(used)} dari ${fmtBytes(quota)} (${pct.toFixed(1)}%) · foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}</p>
+        <div class="meter" role="img" aria-label="Storage terpakai ${usedPct.toFixed(0)} persen"><span style="width:${usedPct.toFixed(1)}%" class="${usedPct > 85 ? "hot" : ""}"></span></div>
+        <p class="hint">${fmtBytes(used)} dari ${fmtBytes(quota)} (${usedPct.toFixed(1)}%) · foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}</p>
         ${left !== null ? `<p class="hint">Rata-rata ${fmtBytes(avg)} per foto (3 ukuran). Sisa cukup untuk sekitar <b>${left.toLocaleString("id-ID")}</b> foto lagi.</p>` : ""}
-        <p class="hint">Kuota diatur di tab Pengaturan. Hemat storage dengan menurunkan resolusi atau menghapus acara lama setelah albumnya diunduh.</p>
       </div>
-      <div class="card">
+
+      <div class="card errors-card">
         <h3>Kegagalan kamera terbaru</h3>
         ${errors.length ? `
         <div class="table-scroll"><table>
@@ -115,6 +250,8 @@ async function ringkasan(body) {
       </div>
     </div>`);
   body.replaceChildren(view);
+  view.querySelector('[data-act="to-errors"]')?.addEventListener("click", () =>
+    view.querySelector(".errors-card").scrollIntoView({ block: "start" }));
   const purge = view.querySelector('[data-act="purge"]');
   if (purge) purge.onclick = async () => {
     const ok = await typeToConfirm({
@@ -133,131 +270,322 @@ async function ringkasan(body) {
     ringkasan(body);
   };
 }
-const stat = (label, value, sub) => `
-  <div class="stat"><b>${Number(value).toLocaleString("id-ID")}</b><span>${esc(label)}</span>${sub ? `<small>${esc(sub)}</small>` : ""}</div>`;
 
 // ---------- Acara ----------
 async function acara(body, me, role) {
-  const mine = role !== "superadmin";
+  const admin = role === "superadmin";
+  const st = { q: "", status: "all", sort: admin ? "created" : "activity", offset: 0 };
+  const selected = new Set();
+  const canCreate = await rpc("can_create_event").catch(() => false);
+
   const view = el(`
     <div>
-      ${mine ? `<h3>Acara saya</h3>` : ""}
-      <form class="card search"><div class="row">
-        <input name="q" placeholder="${mine ? "Cari nama acara atau kode" : "Cari nama acara, pemilik, email, atau kode"}" />
-        <button class="btn">Cari</button>
-      </div></form>
-      <div class="list"><p class="hint">Memuat…</p></div>
+      <div class="toolbar">
+        <input type="search" placeholder="${admin ? "Cari nama acara, pemilik, email, atau kode" : "Cari nama acara atau kode"}" aria-label="Cari acara" />
+        <select aria-label="Urutkan">
+          <option value="created">Terbaru dibuat</option>
+          <option value="activity">Aktivitas terakhir</option>
+          <option value="photos">Foto terbanyak</option>
+          <option value="members">Peserta terbanyak</option>
+          ${admin ? `<option value="bytes">Ukuran terbesar</option>` : ""}
+          <option value="name">Nama (A–Z)</option>
+        </select>
+        ${canCreate ? `<button class="btn small primary" data-act="create">${ICON.plus} Buat acara</button>` : ""}
+      </div>
+      <div class="filter-slot"></div>
+      <div class="bulk-slot" style="margin-top:.75rem"></div>
+      <div class="results" style="margin-top:.75rem"><p class="hint">Memuat…</p></div>
     </div>`);
   body.replaceChildren(view);
-  const list = view.querySelector(".list");
+  const results = view.querySelector(".results");
+  const search = view.querySelector('input[type="search"]');
+  const sortSel = view.querySelector("select");
+  sortSel.value = st.sort;
+  view.querySelector('[data-act="create"]')?.addEventListener("click", () => createEventDialog());
+  view.querySelector(".filter-slot").append(chips(
+    [["all", "Semua"], ["open", "Terbuka"], ["closed", "Ditutup"], ...(admin ? [["overdue", "Lewat tanggal hapus"]] : [])],
+    st.status, (v) => { st.status = v; st.offset = 0; load(); }, "Saring status"));
+  let timer;
+  search.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { st.q = search.value.trim(); st.offset = 0; load(); }, 300); };
+  sortSel.onchange = () => { st.sort = sortSel.value; st.offset = 0; load(); };
 
-  async function load(q = "") {
-    const rows = await rpc("admin_events", { p_search: q || null });
-    if (!rows.length) return list.replaceChildren(el(`<p class="hint">${mine && !q ? "Belum ada acara. Buat acara dari beranda." : "Tidak ada acara."}</p>`));
-    list.replaceChildren(...rows.map((e) => {
-      const n = el(`
-        <div class="card event-admin">
-          <div class="ea-head">
-            <div>
-              <b>${esc(e.name)}</b>
-              ${mine ? "" : `<small>${esc(e.owner_name)} · ${esc(e.owner_email || "")}</small>`}
-            </div>
-            <span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
-          </div>
-          <p class="hint">${e.members} peserta · ${e.photos} foto · ${fmtBytes(e.bytes)} · ${e.max_shots} jepretan · ${esc(filmName(e.film))}${e.hide_names ? " · nama disembunyikan" : ""} · dibuat ${esc(fmtDate(e.created_at))}</p>
-          <div class="row">
-            <a class="btn small primary" href="#/e/${e.event_id}/panel">Kelola</a>
-            <a class="btn small" href="#/e/${e.event_id}/album">Album</a>
-            <button class="btn small ghost" data-act="more" aria-label="Aksi lain untuk ${esc(e.name)}">⋯ Lainnya</button>
-          </div>
-        </div>`);
-      const reload = () => load(view.querySelector("input").value);
-      n.querySelector('[data-act="more"]').onclick = () => actionSheet(e.name, [
-        { label: e.is_open ? "Tutup acara" : "Buka acara", run: async () => {
-          try {
-            await rpc("set_event", { p_event: e.event_id, p_patch: { is_open: !e.is_open } });
-            toast(e.is_open ? "Acara ditutup." : "Acara dibuka.");
-            reload();
-          } catch (err) { toast(friendly(err)); }
-        } },
-        { label: "Hapus acara…", danger: true, run: async () => {
-          const ok = await typeToConfirm({
-            title: "Hapus acara dan semua foto?",
-            text: `${e.photos} foto dan seluruh data acara dihapus permanen. Unduh album dulu bila perlu.`,
-            expect: e.name, ok: "Hapus acara",
-          });
-          if (!ok) return;
-          try {
-            await deleteEventFully(e.event_id);
-            toast("Acara dihapus.");
-            reload();
-          } catch (err) { toast(friendly(err)); }
-        } },
-      ]);
-      return n;
-    }));
+  let rows = [];
+  async function load() {
+    try {
+      rows = await rpc("admin_events", { p_search: st.q || null, p_status: st.status, p_sort: st.sort, p_limit: PAGE, p_offset: st.offset });
+    } catch (e) { results.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); return; }
+    const total = rows[0]?.total_count ?? 0;
+    if (!rows.length) {
+      results.replaceChildren(el(`<p class="hint">${!st.q && st.status === "all"
+        ? (canCreate ? "Belum ada acara. Ketuk Buat acara untuk memulai." : "Belum ada acara.")
+        : "Tidak ada acara yang cocok."}</p>`));
+      renderBulk();
+      return;
+    }
+    results.replaceChildren(admin ? tableView() : cardView(), pagerEl(Number(total), st.offset, (o) => { st.offset = o; load(); }));
+    renderBulk();
   }
-  view.querySelector("form").onsubmit = (ev) => { ev.preventDefault(); load(ev.target.elements.q.value.trim()).catch((e) => toast(friendly(e))); };
+
+  // Superadmin: tabel dengan pilihan untuk aksi massal
+  function tableView() {
+    const n = el(`
+      <div class="card table-scroll" style="padding:.25rem .5rem">
+        <table>
+          <thead><tr>
+            <th class="pick"><input type="checkbox" data-pick-all aria-label="Pilih semua di halaman ini" /></th>
+            <th>Acara</th><th>Status</th><th class="num">Peserta</th><th class="num">Film habis</th>
+            <th class="num">Foto</th><th class="num">Ukuran</th><th>Aktivitas</th><th></th>
+          </tr></thead>
+          <tbody>${rows.map((e) => `
+            <tr data-id="${e.event_id}" class="${selected.has(e.event_id) ? "selected" : ""}">
+              <td class="pick"><input type="checkbox" data-pick="${e.event_id}" ${selected.has(e.event_id) ? "checked" : ""} aria-label="Pilih ${esc(e.name)}" /></td>
+              <td><a href="#/e/${e.event_id}/panel"><b>${esc(e.name)}</b></a><br><small>${esc(e.owner_name)} · ${esc(e.owner_email || "")}</small></td>
+              <td><span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
+                ${e.purge_at && new Date(e.purge_at) <= new Date() ? `<br><span class="tag bad">lewat tanggal hapus</span>` : ""}</td>
+              <td class="num">${e.members}/${e.max_members}</td>
+              <td class="num">${e.rolls_done}</td>
+              <td class="num">${e.photos}${e.pending ? `<br><small>${e.pending} tertahan</small>` : ""}</td>
+              <td class="num">${fmtBytes(e.bytes)}</td>
+              <td><small>${esc(fmtDate(e.last_photo_at) || "-")}</small></td>
+              <td class="actions"><button class="btn small ghost icon-btn" data-more="${e.event_id}" aria-label="Aksi untuk ${esc(e.name)}">⋯</button></td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`);
+    const all = n.querySelector("[data-pick-all]");
+    all.checked = rows.every((e) => selected.has(e.event_id));
+    all.onchange = () => {
+      rows.forEach((e) => (all.checked ? selected.add(e.event_id) : selected.delete(e.event_id)));
+      n.querySelectorAll("[data-pick]").forEach((c) => { c.checked = all.checked; c.closest("tr").classList.toggle("selected", all.checked); });
+      renderBulk();
+    };
+    n.querySelectorAll("[data-pick]").forEach((c) => (c.onchange = () => {
+      if (c.checked) selected.add(c.dataset.pick); else selected.delete(c.dataset.pick);
+      c.closest("tr").classList.toggle("selected", c.checked);
+      all.checked = rows.every((e) => selected.has(e.event_id));
+      renderBulk();
+    }));
+    n.querySelectorAll("[data-more]").forEach((b) => (b.onclick = () => eventMenu(rows.find((e) => e.event_id === b.dataset.more))));
+    return n;
+  }
+
+  // Pembuat acara: kartu dengan status langsung
+  function cardView() {
+    const n = el(`<div class="event-cards">${rows.map((e) => `
+      <article class="card event-card" data-id="${e.event_id}">
+        <div class="ec-head">
+          <div><b>${esc(e.name)}</b><small>Kode ${esc(e.join_code)} · ${esc(filmName(e.film))} · dibuat ${esc(fmtDate(e.created_at))}</small></div>
+          <span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
+        </div>
+        <div class="funnel">${funnelHtml(e)}</div>
+        <p class="hint" style="margin:0">${e.photos} foto masuk${e.pending ? ` · <b>${e.pending} tertahan</b>` : ""} · ${fmtBytes(e.bytes)}${e.last_photo_at ? ` · terakhir ${esc(fmtDate(e.last_photo_at))}` : ""}</p>
+        <div class="row">
+          <a class="btn small primary" href="#/e/${e.event_id}/panel">Kelola</a>
+          <a class="btn small" href="#/e/${e.event_id}/album">Album</a>
+          <button class="btn small" data-share="${esc(e.join_code)}">${ICON.share} Bagikan</button>
+          <button class="btn small ghost icon-btn" data-more="${e.event_id}" aria-label="Aksi lain untuk ${esc(e.name)}">⋯</button>
+        </div>
+      </article>`).join("")}</div>`);
+    n.querySelectorAll("[data-share]").forEach((b) => (b.onclick = () =>
+      copyText(`${location.origin}/?kode=${b.dataset.share}`, { done: "Link undangan disalin." })));
+    n.querySelectorAll("[data-more]").forEach((b) => (b.onclick = () => eventMenu(rows.find((e) => e.event_id === b.dataset.more))));
+    return n;
+  }
+
+  function eventMenu(e) {
+    actionSheet(e.name, [
+      { label: e.is_open ? "Tutup acara" : "Buka acara", run: () => setOpen([e], !e.is_open) },
+      { label: "Hapus acara…", danger: true, run: async () => {
+        const ok = await typeToConfirm({
+          title: "Hapus acara dan semua foto?",
+          text: `${e.photos} foto dan seluruh data acara dihapus permanen. Unduh album dulu bila perlu.`,
+          expect: e.name, ok: "Hapus acara",
+        });
+        if (ok) removeEvents([e]);
+      } },
+    ]);
+  }
+
+  async function setOpen(list, open) {
+    let n = 0;
+    for (const e of list) {
+      try { await rpc("set_event", { p_event: e.event_id, p_patch: { is_open: open } }); n++; }
+      catch (err) { toast(friendly(err)); }
+    }
+    toast(`${n} acara ${open ? "dibuka" : "ditutup"}.`);
+    load();
+  }
+  async function removeEvents(list) {
+    let n = 0;
+    for (const e of list) {
+      try { await deleteEventFully(e.event_id); selected.delete(e.event_id); n++; }
+      catch (err) { toast(friendly(err)); }
+    }
+    toast(`${n} acara dihapus.`);
+    load();
+  }
+
+  function renderBulk() {
+    const slot = view.querySelector(".bulk-slot");
+    if (!admin || !selected.size) { slot.replaceChildren(); return; }
+    const list = () => rows.filter((e) => selected.has(e.event_id));
+    const bar = el(`
+      <div class="bulk-bar" role="region" aria-label="Aksi untuk acara terpilih">
+        <span>${selected.size} dipilih</span>
+        <button class="btn small" data-b="close">Tutup</button>
+        <button class="btn small" data-b="open">Buka</button>
+        <button class="btn small danger" data-b="delete">Hapus…</button>
+        <button class="btn small ghost" data-b="clear">Batal pilih</button>
+      </div>`);
+    bar.querySelector('[data-b="close"]').onclick = () => setOpen(list(), false);
+    bar.querySelector('[data-b="open"]').onclick = () => setOpen(list(), true);
+    bar.querySelector('[data-b="clear"]').onclick = () => { selected.clear(); load(); };
+    bar.querySelector('[data-b="delete"]').onclick = async () => {
+      const l = list();
+      const photos = l.reduce((a, e) => a + e.photos, 0);
+      const ok = await typeToConfirm({
+        title: `Hapus ${l.length} acara?`,
+        text: `${photos} foto dan seluruh data ${l.length} acara dihapus permanen.`,
+        expect: "HAPUS", ok: "Hapus semua",
+      });
+      if (ok) removeEvents(l);
+    };
+    slot.replaceChildren(bar);
+  }
+
   await load();
 }
 
-// ---------- Peran ----------
-async function peran(body, me) {
+// ---------- Pengguna & peran (tab Peran digabung ke sini) ----------
+const roleName = (r) => (r === "superadmin" ? "Superadmin" : r === "creator" ? "Pembuat acara" : "");
+const roleTag = (r) => (r ? `<span class="tag ${r === "superadmin" ? "hot" : ""}">${roleName(r)}</span>` : "");
+const limitText = (r) => r.event_limit === null || r.event_limit === undefined
+  ? `${r.events_created ?? 0} acara dibuat · tanpa batas`
+  : `${r.events_created ?? 0} dari ${r.event_limit} acara${r.events_created >= r.event_limit ? " · habis" : ""}`;
+
+async function pengguna(body, me) {
+  const st = { q: "", filter: "all", offset: 0 };
   const view = el(`
     <div>
       <form class="card add-role">
-        <h3>Tambah peran</h3>
+        <h3>Beri peran lewat email</h3>
         <p class="hint">Pembuat acara bisa membuat dan mengelola acaranya sendiri. Superadmin bisa mengelola semuanya. Email tidak harus sudah pernah login.</p>
         <div class="row">
-          <input name="email" type="email" placeholder="email@gmail.com" required />
-          <select name="role"><option value="creator">Pembuat acara</option><option value="superadmin">Superadmin</option></select>
+          <input name="email" type="email" placeholder="email@gmail.com" aria-label="Email" required />
+          <select name="role" aria-label="Peran"><option value="creator">Pembuat acara</option><option value="superadmin">Superadmin</option></select>
           <button class="btn primary">Simpan</button>
         </div>
-        <label class="limit-field">Batas jumlah acara (khusus pembuat acara, kosongkan = tanpa batas)
+        <label class="limit-field" style="margin-top:.75rem">Batas jumlah acara (kosongkan = tanpa batas)
           <input name="limit" type="number" min="0" max="10000" placeholder="Tanpa batas" /></label>
       </form>
-      <div class="card"><h3>Daftar peran</h3><div class="list"><p class="hint">Memuat…</p></div></div>
+      <div class="pending-roles"></div>
+      <div class="toolbar"><input type="search" placeholder="Cari nama atau email" aria-label="Cari pengguna" /></div>
+      <div class="filter-slot"></div>
+      <div class="results" style="margin-top:.75rem"><p class="hint">Memuat…</p></div>
     </div>`);
   body.replaceChildren(view);
-  const list = view.querySelector(".list");
+  const results = view.querySelector(".results");
 
-  async function load() {
-    const rows = await rpc("admin_roles");
-    list.replaceChildren(el(`
-      <table>
-        <thead><tr><th>Email</th><th>Peran</th><th></th></tr></thead>
-        <tbody>${rows.map((r) => `
-          <tr>
-            <td><b>${esc(r.email)}</b><br><small>${r.user_name ? esc(r.user_name) : "belum pernah login"} · ditambahkan ${esc(fmtDate(r.added_at))}${r.added_by ? ` oleh ${esc(r.added_by)}` : ""}</small></td>
-            <td><span class="tag ${r.role === "superadmin" ? "hot" : ""}">${r.role === "superadmin" ? "Superadmin" : "Pembuat acara"}</span>
-              ${r.role === "creator" ? `<br><small>${limitText(r)}</small>` : ""}</td>
-            <td class="actions">${r.email === me.email.toLowerCase() ? `<small>Anda</small>` : `
-              ${r.role === "creator" ? `<button class="btn small ghost" data-limit="${esc(r.email)}">Atur batas</button>` : ""}
-              <button class="btn small ghost" data-swap="${esc(r.email)}" data-role="${r.role === "superadmin" ? "creator" : "superadmin"}">${r.role === "superadmin" ? "Jadikan pembuat" : "Jadikan superadmin"}</button>
-              <button class="btn small danger" data-del="${esc(r.email)}">Cabut</button>`}
-            </td>
-          </tr>`).join("")}
-        </tbody>
-      </table>`));
-    list.querySelectorAll("[data-swap]").forEach((b) => (b.onclick = () => setRole(b.dataset.swap, b.dataset.role)));
-    list.querySelectorAll("[data-limit]").forEach((b) => (b.onclick = async () => {
-      const r = rows.find((x) => x.email === b.dataset.limit);
-      if (r && (await limitDialog(r))) await load();
-    }));
-    list.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => {
-      confirmDialog({ title: `Cabut peran ${b.dataset.del}?`, text: "Acara yang sudah dibuatnya tetap ada.", ok: "Cabut peran", danger: true })
-        .then((ok) => ok && setRole(b.dataset.del, null));
-    }));
-  }
+  // Ubah peran / batas / blokir
   async function setRole(email, role, limit) {
     try {
       await rpc("admin_set_role", { p_email: email, p_role: role });
       if (limit !== undefined) await rpc("admin_set_event_limit", { p_email: email, p_limit: limit });
       toast("Tersimpan.");
-      await load();
+      refresh();
       return true;
     } catch (e) { toast(friendly(e)); return false; }
   }
+  function roleMenu(title, r, extra = []) {
+    actionSheet(title, [
+      ...(r.role !== "creator" ? [{ label: "Jadikan pembuat acara", run: () => setRole(r.email, "creator") }] : []),
+      ...(r.role !== "superadmin" ? [{ label: "Jadikan superadmin", run: async () => {
+        if (await confirmDialog({ title: `Jadikan ${r.email} superadmin?`, text: "Superadmin bisa mengelola semua acara, pengguna, dan pengaturan.", ok: "Jadikan superadmin" }))
+          setRole(r.email, "superadmin");
+      } }] : []),
+      ...(r.role === "creator" ? [{ label: "Atur batas acara…", run: async () => { if (await limitDialog(r)) refresh(); } }] : []),
+      ...(r.role ? [{ label: "Cabut peran", danger: true, run: async () => {
+        if (await confirmDialog({ title: `Cabut peran ${r.email}?`, text: "Acara yang sudah dibuatnya tetap ada.", ok: "Cabut peran", danger: true }))
+          setRole(r.email, null);
+      } }] : []),
+      ...extra,
+    ]);
+  }
+
+  // Peran untuk email yang belum pernah login (tidak muncul di daftar pengguna)
+  async function loadPending() {
+    const box = view.querySelector(".pending-roles");
+    try {
+      const roles = (await rpc("admin_roles")).filter((r) => !r.user_name);
+      if (!roles.length) { box.replaceChildren(); return; }
+      const card = el(`
+        <div class="card">
+          <h3>Menunggu login pertama</h3>
+          <p class="hint">Peran sudah diberikan, tetapi pemilik email belum pernah masuk.</p>
+          <div class="table-scroll"><table><tbody>${roles.map((r) => `
+            <tr>
+              <td><b>${esc(r.email)}</b> ${roleTag(r.role)}${r.role === "creator" ? `<br><small>${limitText(r)}</small>` : ""}</td>
+              <td><small>ditambahkan ${esc(fmtDate(r.added_at))}${r.added_by ? ` oleh ${esc(r.added_by)}` : ""}</small></td>
+              <td class="actions"><button class="btn small ghost icon-btn" data-email="${esc(r.email)}" aria-label="Aksi untuk ${esc(r.email)}">⋯</button></td>
+            </tr>`).join("")}</tbody></table></div>
+        </div>`);
+      card.querySelectorAll("[data-email]").forEach((b) => (b.onclick = () => {
+        const r = roles.find((x) => x.email === b.dataset.email);
+        roleMenu(r.email, r);
+      }));
+      box.replaceChildren(card);
+    } catch { box.replaceChildren(); }
+  }
+
+  async function load() {
+    let rows;
+    try {
+      rows = await rpc("admin_users", { p_search: st.q || null, p_filter: st.filter, p_limit: PAGE, p_offset: st.offset });
+    } catch (e) { results.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); return; }
+    if (!rows.length) { results.replaceChildren(el(`<p class="hint">Tidak ada pengguna yang cocok.</p>`)); return; }
+    const table = el(`
+      <div class="card table-scroll" style="padding:.25rem .5rem">
+        <table>
+          <thead><tr><th>Pengguna</th><th>Aktivitas</th><th>Login terakhir</th><th></th></tr></thead>
+          <tbody>${rows.map((u) => `
+            <tr class="${u.banned ? "blocked" : ""}">
+              <td><b>${esc(u.name)}</b> ${roleTag(u.role)} ${u.banned ? `<span class="tag bad">diblokir</span>` : ""}
+                <br><small>${esc(u.email)}</small>${u.role === "creator" ? `<br><small>${limitText(u)}</small>` : ""}</td>
+              <td><small>${u.events_owned} acara dibuat · ${u.events_joined} diikuti · ${u.photos} foto</small></td>
+              <td><small>${esc(fmtDate(u.last_sign_in_at) || "-")}</small></td>
+              <td class="actions">${u.user_id === me.id ? `<small>Anda</small>` :
+                `<button class="btn small ghost icon-btn" data-user="${u.user_id}" aria-label="Aksi untuk ${esc(u.name)}">⋯</button>`}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table>
+      </div>`);
+    table.querySelectorAll("[data-user]").forEach((b) => (b.onclick = () => {
+      const u = rows.find((x) => x.user_id === b.dataset.user);
+      roleMenu(u.name, u, [{
+        label: u.banned ? "Pulihkan akun" : "Blokir akun…", danger: !u.banned,
+        run: async () => {
+          if (!u.banned && !(await confirmDialog({
+            title: `Blokir ${u.name}?`,
+            text: "Akun tidak bisa masuk acara, memotret, atau melihat album di seluruh aplikasi.",
+            ok: "Blokir", danger: true,
+          }))) return;
+          try { await rpc("admin_ban", { p_user: u.user_id, p_banned: !u.banned }); load(); }
+          catch (e) { toast(friendly(e)); }
+        },
+      }]);
+    }));
+    results.replaceChildren(table, pagerEl(Number(rows[0].total_count), st.offset, (o) => { st.offset = o; load(); }));
+  }
+  const refresh = () => { loadPending(); load(); };
+
+  view.querySelector(".filter-slot").append(chips(
+    [["all", "Semua"], ["superadmin", "Superadmin"], ["creator", "Pembuat acara"], ["none", "Tanpa peran"], ["banned", "Diblokir"]],
+    st.filter, (v) => { st.filter = v; st.offset = 0; load(); }, "Saring pengguna"));
+  let timer;
+  view.querySelector('input[type="search"]').oninput = (e) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { st.q = e.target.value.trim(); st.offset = 0; load(); }, 300);
+  };
   const form = view.querySelector("form");
   const syncLimit = () => { form.querySelector(".limit-field").hidden = form.elements.role.value !== "creator"; };
   form.elements.role.onchange = syncLimit;
@@ -267,17 +595,10 @@ async function peran(body, me) {
     const f = form.elements;
     const raw = f.limit.value.trim();
     const limit = f.role.value === "creator" && raw !== "" ? Number(raw) : undefined;
-    if (await setRole(f.email.value.trim(), f.role.value, limit)) {
-      f.email.value = "";
-      f.limit.value = "";
-    }
+    if (await setRole(f.email.value.trim(), f.role.value, limit)) { f.email.value = ""; f.limit.value = ""; }
   };
-  await load();
+  refresh();
 }
-
-const limitText = (r) => r.event_limit === null || r.event_limit === undefined
-  ? `${r.events_created ?? 0} acara dibuat · tanpa batas`
-  : `${r.events_created ?? 0} dari ${r.event_limit} acara${r.events_created >= r.event_limit ? " · habis" : ""}`;
 
 // Dialog atur batas acara satu pembuat acara. Resolve true jika tersimpan.
 function limitDialog(r) {
@@ -315,48 +636,6 @@ function limitDialog(r) {
       } catch (err) { toast(friendly(err)); }
     };
   });
-}
-
-// ---------- Pengguna ----------
-async function pengguna(body, me) {
-  const view = el(`
-    <div>
-      <form class="card search"><div class="row">
-        <input name="q" placeholder="Cari nama atau email" />
-        <button class="btn">Cari</button>
-      </div></form>
-      <div class="card"><div class="list"><p class="hint">Memuat…</p></div></div>
-    </div>`);
-  body.replaceChildren(view);
-  const list = view.querySelector(".list");
-
-  async function load(q = "") {
-    const rows = await rpc("admin_users", { p_search: q || null });
-    list.replaceChildren(el(`
-      <table>
-        <thead><tr><th>Pengguna</th><th>Aktivitas</th><th></th></tr></thead>
-        <tbody>${rows.map((u) => `
-          <tr class="${u.banned ? "blocked" : ""}">
-            <td><b>${esc(u.name)}</b> ${u.role ? `<span class="tag ${u.role === "superadmin" ? "hot" : ""}">${u.role === "superadmin" ? "Superadmin" : "Pembuat"}</span>` : ""}<br><small>${esc(u.email)}</small></td>
-            <td><small>${u.events_owned} acara dibuat · ${u.events_joined} diikuti · ${u.photos} foto<br>Login terakhir ${esc(fmtDate(u.last_sign_in_at) || "-")}</small></td>
-            <td class="actions">${u.user_id === me.id ? `<small>Anda</small>` :
-              `<button class="btn small ${u.banned ? "" : "danger"}" data-ban="${u.user_id}" data-banned="${u.banned}">${u.banned ? "Pulihkan" : "Blokir"}</button>`}</td>
-          </tr>`).join("")}
-        </tbody>
-      </table>`));
-    list.querySelectorAll("[data-ban]").forEach((b) => (b.onclick = async () => {
-      const ban = b.dataset.banned !== "true";
-      if (ban && !(await confirmDialog({
-        title: "Blokir akun ini?",
-        text: "Akun tidak bisa masuk acara, memotret, atau melihat album di seluruh aplikasi.",
-        ok: "Blokir", danger: true,
-      }))) return;
-      try { await rpc("admin_ban", { p_user: b.dataset.ban, p_banned: ban }); await load(view.querySelector("input").value); }
-      catch (e) { toast(friendly(e)); }
-    }));
-  }
-  view.querySelector("form").onsubmit = (ev) => { ev.preventDefault(); load(ev.target.elements.q.value.trim()).catch((e) => toast(friendly(e))); };
-  await load();
 }
 
 // ---------- Pengaturan global ----------
@@ -422,24 +701,108 @@ async function pengaturan(body) {
 const resNote = (r) => ({ 1280: " · ±0,4 MB/foto", 1600: " · ±0,6 MB/foto", 2048: " · ±1 MB/foto",
   2560: " · ±1,5 MB/foto", 3264: " · ±2,4 MB/foto", 4096: " · ±3,5 MB/foto" })[r] || "";
 
-// ---------- Log ----------
+// ---------- Log: kalimat yang terbaca, bisa disaring ----------
 const ACTIONS = {
-  buat_acara: "membuat acara", ubah_acara: "mengubah acara", hapus_acara: "menghapus acara",
-  ubah_sampul: "mengubah sampul", blokir_peserta: "memblokir peserta", pulihkan_peserta: "memulihkan peserta",
-  ubah_peran: "mengubah peran", ubah_batas_acara: "mengubah batas acara",
-  ubah_pengaturan: "mengubah pengaturan global",
-  blokir_akun: "memblokir akun", pulihkan_akun: "memulihkan akun",
+  buat_acara: "Membuat acara", ubah_acara: "Mengubah acara", hapus_acara: "Menghapus acara",
+  ubah_sampul: "Mengubah sampul", blokir_peserta: "Memblokir peserta", pulihkan_peserta: "Memulihkan peserta",
+  ubah_peran: "Mengubah peran", ubah_batas_acara: "Mengubah batas acara",
+  ubah_pengaturan: "Mengubah pengaturan global", blokir_akun: "Memblokir akun", pulihkan_akun: "Memulihkan akun",
 };
+const FIELDS = {
+  name: "nama", max_shots: "jatah", max_members: "batas peserta",
+  max_shots_limit: "batas jepretan", max_members_limit: "batas peserta", storage_quota_mb: "kuota storage (MB)",
+  jpeg_quality: "kualitas JPEG",
+};
+function describeChange(k, v) {
+  const onOff = (on, off) => (v ? on : off);
+  switch (k) {
+    case "is_open": return onOff("membuka acara", "menutup acara");
+    case "hide_names": return onOff("menyembunyikan nama pengunggah", "menampilkan nama pengunggah");
+    case "allow_film_choice": return onOff("mengizinkan tamu memilih film", "melarang tamu memilih film");
+    case "invite_only": return onOff("hanya untuk undangan", "terbuka untuk semua yang punya kode");
+    case "flash_enabled": return onOff("menampilkan tombol flash", "menyembunyikan tombol flash");
+    case "mirror_preview": return v === null ? "cermin jendela bidik ikut global" : onOff("mencerminkan jendela bidik", "tidak mencerminkan jendela bidik");
+    case "mirror_photo": return v === null ? "cermin foto ikut global" : onOff("mencerminkan hasil foto", "tidak mencerminkan hasil foto");
+    case "film": case "default_film": return `film ${filmName(v)}`;
+    case "reveal_at": return v ? `cuci film ${fmtDate(v)}` : "tanpa cuci film";
+    case "purge_at": return v ? `rencana hapus ${fmtDate(v)}` : "tanpa rencana hapus";
+    case "photo_max_side": return v ? `resolusi ${v} px` : "resolusi ikut global";
+    case "welcome_text": return "mengubah kalimat sambutan";
+    default: return `${FIELDS[k] || k} ${v ?? "-"}`;
+  }
+}
+function describe(r) {
+  const d = r.detail || {};
+  const t = r.target_label || r.target || "";
+  const patch = () => Object.entries(d).map(([k, v]) => describeChange(k, v)).join(", ");
+  switch (r.action) {
+    case "buat_acara": return `membuat acara “${d.name || t}”`;
+    case "hapus_acara": return `menghapus acara “${d.name || t}”${d.files !== undefined ? ` (${d.files} file)` : ""}`;
+    case "ubah_sampul": return `${d.path ? "mengganti" : "menghapus"} sampul acara “${t}”`;
+    case "ubah_acara": return `mengubah acara “${t}”: ${patch()}`;
+    case "blokir_peserta": return `memblokir ${r.user_label || "peserta"} di acara “${t}”`;
+    case "pulihkan_peserta": return `memulihkan ${r.user_label || "peserta"} di acara “${t}”`;
+    case "ubah_peran": return d.role ? `menjadikan ${r.target} ${roleName(d.role).toLowerCase()}` : `mencabut peran ${r.target}`;
+    case "ubah_batas_acara": return `mengatur batas acara ${r.target}: ${d.limit === null || d.limit === undefined ? "tanpa batas" : `${d.limit} acara`}${d.used !== null && d.used !== undefined ? `, hitungan ${d.used}` : ""}`;
+    case "ubah_pengaturan": return `mengubah pengaturan global: ${patch()}`;
+    case "blokir_akun": return `memblokir akun ${t}`;
+    case "pulihkan_akun": return `memulihkan akun ${t}`;
+    default: return `${r.action} ${t}`;
+  }
+}
+
 async function log(body) {
-  const rows = await rpc("admin_audit", { p_limit: 300 });
-  body.replaceChildren(el(`
-    <div class="card">
-      <h3>Log aktivitas</h3>
-      ${rows.length ? `<ul class="audit">${rows.map((r) => `
-        <li>
-          <small>${esc(fmtDate(r.at))}</small>
-          <div><b>${esc(r.actor_email || "sistem")}</b> ${esc(ACTIONS[r.action] || r.action)}${r.target ? ` <code>${esc(r.target)}</code>` : ""}</div>
-          ${Object.keys(r.detail || {}).length ? `<code class="detail">${esc(JSON.stringify(r.detail))}</code>` : ""}
-        </li>`).join("")}</ul>` : `<p class="hint">Belum ada aktivitas.</p>`}
-    </div>`));
+  const st = { action: "", actor: "", since: "7", offset: 0 };
+  const view = el(`
+    <div>
+      <div class="toolbar">
+        <select aria-label="Jenis aktivitas" data-action>
+          <option value="">Semua aktivitas</option>
+          ${Object.entries(ACTIONS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("")}
+        </select>
+        <select aria-label="Rentang waktu" data-since>
+          <option value="1">24 jam terakhir</option>
+          <option value="7" selected>7 hari terakhir</option>
+          <option value="30">30 hari terakhir</option>
+          <option value="">Semua waktu</option>
+        </select>
+        <input type="search" placeholder="Cari email pelaku" aria-label="Cari email pelaku" />
+      </div>
+      <div class="card">
+        <ul class="audit"></ul>
+        <p class="hint empty-log" hidden>Tidak ada aktivitas yang cocok.</p>
+        <button class="btn small" data-act="more" hidden>Muat lebih banyak</button>
+      </div>
+    </div>`);
+  body.replaceChildren(view);
+  const list = view.querySelector(".audit");
+  const more = view.querySelector('[data-act="more"]');
+
+  async function load(append = false) {
+    if (!append) st.offset = 0;
+    const since = st.since ? new Date(Date.now() - Number(st.since) * 86400000).toISOString() : null;
+    let rows;
+    try {
+      rows = await rpc("admin_audit", { p_limit: 50, p_offset: st.offset, p_action: st.action || null, p_actor: st.actor || null, p_since: since });
+    } catch (e) { toast(friendly(e)); return; }
+    const html = rows.map((r) => `
+      <li>
+        <small>${esc(fmtDate(r.at))}</small>
+        <div><b>${esc(r.actor_email || "sistem")}</b> ${esc(describe(r))}</div>
+      </li>`).join("");
+    if (append) list.insertAdjacentHTML("beforeend", html); else list.innerHTML = html;
+    st.offset += rows.length;
+    const total = Number(rows[0]?.total_count ?? st.offset);
+    view.querySelector(".empty-log").hidden = list.children.length > 0;
+    more.hidden = st.offset >= total;
+  }
+  view.querySelector("[data-action]").onchange = (e) => { st.action = e.target.value; load(); };
+  view.querySelector("[data-since]").onchange = (e) => { st.since = e.target.value; load(); };
+  let timer;
+  view.querySelector('input[type="search"]').oninput = (e) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => { st.actor = e.target.value.trim(); load(); }, 300);
+  };
+  more.onclick = () => load(true);
+  await load();
 }

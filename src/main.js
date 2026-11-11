@@ -4,11 +4,10 @@ import { flushQueue } from "./shoot.js";
 import { renderCamera } from "./camera-view.js";
 import { renderAlbum } from "./album.js";
 import { renderPanel } from "./owner.js";
-import { renderAdmin } from "./admin.js";
+import { renderAdmin, createEventDialog } from "./admin.js";
 import { coverUrl } from "./storage.js";
 import { inAppBrowser, isAndroid, chromeIntentUrl } from "./camera.js";
-import { FILMS } from "./film.js";
-import { el, esc, toast, copyText } from "./ui.js";
+import { el, esc, toast, copyText, ICON, badge, BRAND } from "./ui.js";
 
 const app = document.getElementById("app");
 let cleanup = () => {};
@@ -44,6 +43,7 @@ function forgetJoined() {
 
 function setView(node) {
   cleanup(); cleanup = () => {};
+  document.body.classList.remove("cam-page", "has-bottom-nav");
   app.replaceChildren(node);
 }
 
@@ -53,9 +53,9 @@ function renderLogin() {
   const shareLink = code ? `${location.origin}/?kode=${code}` : location.origin;
   setView(el(`
     <main class="center">
-      <div class="logo">📸</div>
+      <div class="logo">${BRAND}</div>
       <h1 class="brand">Disposable Asiig</h1>
-      <p class="lead">Kamera sekali pakai untuk acara bersama. Jepretan terbatas, tanpa hapus dan tanpa ulang. Semua foto terbuka setelah film habis!</p>
+      <p class="lead">Kamera sekali pakai untuk acara bersama. Jepretan terbatas, tanpa hapus dan tanpa ulang. Semua foto terbuka bersamaan setelah film habis.</p>
       ${code ? `<p class="pill">Undangan acara: <b>${esc(code)}</b></p>` : ""}
       ${inAppBrowser() ? `
         <div class="card warn-card">
@@ -90,12 +90,16 @@ async function renderJoin(code) {
   try { ev = (await rpc("event_preview", { p_code: code }))[0] || null; } catch { /* tampilkan tanpa pratinjau */ }
   setView(el(`
     <main class="center">
-      ${ev?.cover_path ? `<img class="join-cover" alt="Sampul acara" src="${esc(coverUrl(ev.cover_path))}" />` : `<div class="logo">🎉</div>`}
+      ${ev?.cover_path ? `<img class="join-cover" alt="Sampul acara" src="${esc(coverUrl(ev.cover_path))}" />` : `<div class="logo">${badge("sparkle", "sun", "xl")}</div>`}
       <h1>${ev ? esc(ev.name) : "Masuk acara"}</h1>
       ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
       <p class="pill">Kode: <b>${esc(code)}</b>${ev ? ` · ${ev.max_shots} jepretan` : ""}</p>
       ${ev && !ev.is_open ? `<p class="hint">Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.</p>` : ""}
-      <p class="lead">Foto yang Anda jepret akan terlihat oleh semua peserta acara ini setelah gulungan Anda habis atau acara ditutup. Foto tidak bisa dihapus atau diulang.</p>
+      <ul class="rules">
+        <li>${badge("film", "coral")}<div><b>${ev ? `${ev.max_shots} jepretan` : "Jepretan terbatas"}</b><span>Seperti satu gulungan film. Pilih momen terbaik.</span></div></li>
+        <li>${badge("lock", "grape")}<div><b>Tanpa hapus, tanpa ulang</b><span>Setiap jepretan langsung tercetak dan tidak bisa dilihat dulu.</span></div></li>
+        <li>${badge("sparkle", "mint")}<div><b>Terbuka bersama</b><span>Foto Anda tampil untuk semua peserta setelah film Anda habis atau acara ditutup.</span></div></li>
+      </ul>
       <button class="btn primary big" data-act="yes">Setuju dan masuk</button>
       <button class="btn ghost" data-act="no">Batal</button>
       <p class="fine"><a href="/privacy.html">Kebijakan privasi</a></p>
@@ -121,7 +125,7 @@ async function renderJoin(code) {
   };
 }
 
-// ---------- Beranda: daftar acara ----------
+// ---------- Beranda: isian kode sebagai fokus, lalu acara di perangkat ini ----------
 async function renderHome() {
   const view = el(`
     <main class="page">
@@ -132,15 +136,19 @@ async function renderHome() {
           <button class="btn small ghost" data-act="logout">Keluar</button>
         </div>
       </header>
-      <form class="card join">
-        <h3>Punya kode acara?</h3>
-        <div class="row">
-          <input name="code" placeholder="Contoh: ABC123" maxlength="12" autocapitalize="characters" autocomplete="off" required />
+      <form class="card join-hero">
+        <h2>Masuk ke acara</h2>
+        <label class="join-label" for="join-code">Kode acara</label>
+        <div class="code-row">
+          <input id="join-code" class="code-input" name="code" placeholder="ABC123" maxlength="12"
+                 autocapitalize="characters" autocomplete="off" spellcheck="false" required />
           <button class="btn primary">Masuk</button>
         </div>
+        <p class="hint">Kode 6 huruf ada di undangan. Atau scan QR undangan dengan kamera HP; linknya langsung membuka acara.</p>
       </form>
+      <div class="creator-slot"></div>
+      <h2 class="section-title" hidden>Acara di perangkat ini</h2>
       <div class="events"><p class="hint">Memuat…</p></div>
-      <div class="create-slot"></div>
       <p class="fine">Masuk sebagai ${esc(session.user.email)} · <a href="/privacy.html">Privasi</a></p>
     </main>`);
   setView(view);
@@ -149,74 +157,44 @@ async function renderHome() {
     forgetJoined();
     await supabase.auth.signOut();
   };
-  view.querySelector("form.join").onsubmit = (e) => {
+  view.querySelector("form.join-hero").onsubmit = (e) => {
     e.preventDefault();
     renderJoin(e.target.elements.code.value.trim().toUpperCase());
   };
 
   try {
-    const [events, canCreate, role, settings, quota] = await Promise.all([
-      rpc("my_events"), rpc("can_create_event"), rpc("my_role"), rpc("get_settings"),
-      rpc("my_event_quota").catch(() => null), // null jika v2.sql terbaru belum dijalankan
+    const [events, canCreate, role] = await Promise.all([
+      rpc("my_events"), rpc("can_create_event"), rpc("my_role"),
     ]);
     // Dashboard hanya untuk superadmin dan pembuat acara
     view.querySelector("[data-admin]").hidden = !(role === "superadmin" || role === "creator");
     const here = joinedHere();
     const shown = events.filter((ev) => ev.is_owner || here.includes(ev.event_id));
     const box = view.querySelector(".events");
+    view.querySelector(".section-title").hidden = !shown.length;
     box.replaceChildren(...(shown.length
-      ? shown.map((ev) => {
-          const n = el(`
-            <a class="card event-item" href="#/e/${ev.event_id}">
-              <div>
-                <b>${esc(ev.name)}</b>
-                <small>${ev.is_owner ? "Pemilik · " : ""}${ev.is_open ? "Terbuka" : "Ditutup"}</small>
-              </div>
-              <span class="mini-counter">${Math.max(0, ev.max_shots - ev.shots_used)}<small>/${ev.max_shots}</small></span>
-            </a>`);
-          return n;
-        })
-      : [el(`<p class="hint">Belum ada acara. Masukkan kode dari pemilik acara, atau buka link undangan.</p>`)]));
+      ? shown.map((ev) => el(`
+          <a class="card event-item" href="#/e/${ev.event_id}">
+            <div>
+              <b>${esc(ev.name)}</b>
+              <small>${ev.is_owner ? "Pemilik · " : ""}${ev.is_open ? "Terbuka" : "Ditutup"}</small>
+            </div>
+            <span class="mini-counter" aria-label="Sisa ${Math.max(0, ev.max_shots - ev.shots_used)} dari ${ev.max_shots} jepretan">${Math.max(0, ev.max_shots - ev.shots_used)}<small>/${ev.max_shots}</small></span>
+          </a>`))
+      : [el(`<div class="empty-home"><div class="logo">${badge("film", "coral", "lg")}</div><p>Belum ada acara di perangkat ini.<br>Masukkan kode di atas untuk mulai memotret.</p></div>`)]));
 
-    const limited = quota && quota.limit !== null && quota.limit !== undefined;
-    const left = limited ? Math.max(0, quota.limit - quota.used) : null;
-    if (canCreate && left === 0) {
-      view.querySelector(".create-slot").append(el(`
-        <div class="card create">
-          <h3>Buat acara baru</h3>
-          <p class="hint">Batas acara Anda sudah habis (${quota.used} dari ${quota.limit} acara). Hubungi superadmin untuk menambahnya.</p>
-        </div>`));
-    } else if (canCreate) {
-      const form = el(`
-        <form class="card create">
-          <h3>Buat acara baru</h3>
-          ${limited ? `<p class="hint">Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
-          <label>Nama acara <input name="name" required maxlength="80" /></label>
-          <div class="row">
-            <label>Jatah foto (maks. ${settings.max_shots_limit}) <input name="max_shots" type="number" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" /></label>
-            <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
+    // Pembuat acara: buat dan kelola acara dari Dashboard
+    if (canCreate) {
+      const cta = el(`
+        <div class="card creator-cta">
+          <p><b>Anda pembuat acara.</b> Buat acara baru dan pantau jalannya acara dari Dashboard.</p>
+          <div class="row tight">
+            <button class="btn small primary" data-act="create">${ICON.plus} Buat acara</button>
+            <a class="btn small" href="#/admin/acara">Dashboard</a>
           </div>
-          <label>Efek film bawaan (tamu boleh menggantinya; bisa diubah di Panel)
-            <select name="film">${Object.entries(FILMS).map(([id, f]) => `<option value="${id}" ${id === settings.default_film ? "selected" : ""}>${esc(f.name)} — ${esc(f.desc)}</option>`).join("")}</select>
-          </label>
-          <label class="check"><input type="checkbox" name="invite_only" /> Hanya email yang diundang</label>
-          <button class="btn primary">Buat acara</button>
-        </form>`);
-      form.onsubmit = async (e) => {
-        e.preventDefault();
-        const f = form.elements;
-        try {
-          const id = await rpc("create_event", {
-            p_name: f.name.value,
-            p_max_shots: Number(f.max_shots.value),
-            p_max_members: Number(f.max_members.value),
-            p_invite_only: f.invite_only.checked,
-            p_film: f.film.value,
-          });
-          location.hash = `#/e/${id}/panel`;
-        } catch (err) { toast(friendly(err)); }
-      };
-      view.querySelector(".create-slot").append(form);
+        </div>`);
+      cta.querySelector('[data-act="create"]').onclick = () => createEventDialog();
+      view.querySelector(".creator-slot").append(cta);
     }
   } catch (e) {
     view.querySelector(".events").textContent = friendly(e);
@@ -241,20 +219,22 @@ async function renderEvent(eventId, tab) {
   if (tab === "kamera" && !status.is_member) tab = status.can_manage ? "panel" : "album"; // superadmin bukan peserta
 
   const view = el(`
-    <main class="event">
+    <main class="event${tab === "kamera" ? " cam-mode" : " wide"}">
       ${status.cover_path ? `<div class="event-cover" style="background-image:url('${esc(coverUrl(status.cover_path))}')"></div>` : ""}
       <header class="top">
         <a class="back" href="${status.is_admin && !status.is_member ? "#/admin/acara" : "#/"}" aria-label="Kembali">‹</a>
         <h1>${esc(status.name)}</h1>
       </header>
       <nav class="tabs">
-        ${status.is_member ? `<a href="#/e/${eventId}" class="${tab === "kamera" ? "on" : ""}">Kamera</a>` : ""}
-        <a href="#/e/${eventId}/album" class="${tab === "album" ? "on" : ""}">Album</a>
-        ${status.can_manage ? `<a href="#/e/${eventId}/panel" class="${tab === "panel" ? "on" : ""}">Panel</a>` : ""}
+        ${status.is_member ? `<a href="#/e/${eventId}" class="${tab === "kamera" ? "on" : ""}" ${tab === "kamera" ? 'aria-current="page"' : ""}>${ICON.camera}<span>Kamera</span></a>` : ""}
+        <a href="#/e/${eventId}/album" class="${tab === "album" ? "on" : ""}" ${tab === "album" ? 'aria-current="page"' : ""}>${ICON.album}<span>Album</span></a>
+        ${status.can_manage ? `<a href="#/e/${eventId}/panel" class="${tab === "panel" ? "on" : ""}" ${tab === "panel" ? 'aria-current="page"' : ""}>${ICON.panel}<span>Panel</span></a>` : ""}
       </nav>
       <div class="tab-body"></div>
     </main>`);
   setView(view);
+  document.body.classList.add("has-bottom-nav");
+  document.body.classList.toggle("cam-page", tab === "kamera");
   const body = view.querySelector(".tab-body");
   const go = (t) => { location.hash = `#/e/${eventId}${t === "kamera" ? "" : "/" + t}`; };
 

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:sql": "node tests/sql.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
@@ -15,6 +16,7 @@
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.2.17",
     "vite": "^8.3.8"
   }
 }

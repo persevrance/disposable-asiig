@@ -6,7 +6,7 @@ import { getUrls, removeFiles, uploadCover, coverUrl, removeCover } from "./stor
 import { FILMS } from "./film.js";
 import {
   el, esc, toast, fmtDate, toLocalInput, fromLocalInput, download, safeName, modal,
-  confirmDialog, typeToConfirm, copyText,
+  confirmDialog, typeToConfirm, copyText, actionSheet, ICON,
 } from "./ui.js";
 
 export const RESOLUTIONS = [1280, 1600, 2048, 2560, 3264, 4096];
@@ -27,94 +27,182 @@ const triValue = (s) => (s === "" ? null : s === "true");
 
 export async function renderPanel(root, status, { reload, home }) {
   const link = `${location.origin}/?kode=${status.join_code}`;
+  const tabKey = `panelTab:${status.event_id}`;
   const view = el(`
     <section class="panel">
       ${status.is_admin && !status.is_owner ? `<p class="pill admin-pill">Anda mengelola acara ini sebagai superadmin</p>` : ""}
-      <div class="card">
-        <h3>Undangan</h3>
-        <div class="invite">
-          <canvas class="qr" aria-label="Kode QR undangan"></canvas>
+
+      <div class="card status-card">
+        <div class="status-head">
           <div>
-            <p class="code">${esc(status.join_code)}</p>
-            <p class="link">${esc(link)}</p>
+            <span class="tag ${status.is_open ? "ok" : ""}">${status.is_open ? "Terbuka untuk memotret" : "Ditutup"}</span>
+            <h3>${esc(status.name)}</h3>
+          </div>
+          <button class="switch" role="switch" aria-checked="${status.is_open}" data-act="toggle-open">
+            <span class="knob" aria-hidden="true"></span><span>${status.is_open ? "Terbuka" : "Ditutup"}</span>
+          </button>
+        </div>
+        <div class="status-stats">
+          <div class="sstat"><b data-s="members">–</b><small>peserta dari ${status.max_members}</small></div>
+          <div class="sstat"><b data-s="photos">–</b><small>foto masuk</small></div>
+          <div class="sstat"><b data-s="rolls">–</b><small>film habis</small></div>
+          <div class="sstat"><b data-s="pending">–</b><small>belum terunggah</small></div>
+        </div>
+        <div class="funnel" aria-label="Perjalanan peserta"></div>
+        <div class="row">
+          <button class="btn small primary" data-act="share">${ICON.share} Bagikan link</button>
+          <button class="btn small" data-act="show-invite">QR undangan</button>
+        </div>
+      </div>
+
+      <nav class="subtabs" role="tablist" aria-label="Bagian panel">
+        <button role="tab" data-tab="undangan">Undangan</button>
+        <button role="tab" data-tab="peserta">Peserta</button>
+        <button role="tab" data-tab="pengaturan">Pengaturan</button>
+        <button role="tab" data-tab="album">Album</button>
+      </nav>
+
+      <div class="subpanel two-col" data-tab="undangan" role="tabpanel">
+        <div class="card">
+          <h3>Undangan</h3>
+          <div class="invite">
+            <canvas class="qr" aria-label="Kode QR undangan"></canvas>
+            <div>
+              <p class="code">${esc(status.join_code)}</p>
+              <p class="link">${esc(link)}</p>
+              <div class="row">
+                <button class="btn small" data-act="copy">Salin link</button>
+                <button class="btn small" data-act="qr">Unduh QR</button>
+                <button class="btn small ghost" data-act="rotate">Ganti kode</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Sampul / kartu undangan</h3>
+          <p class="hint">Tampil di layar masuk acara dan di atas halaman acara. JPG/PNG, diperkecil otomatis.</p>
+          <div class="cover-edit">
+            <div class="cover-preview">${status.cover_path ? `<img alt="Sampul acara" src="${esc(coverUrl(status.cover_path))}" />` : `<span>Belum ada sampul</span>`}</div>
             <div class="row">
-              <button class="btn small" data-act="copy">Salin link</button>
-              <button class="btn small" data-act="qr">Unduh QR</button>
-              <button class="btn small ghost" data-act="rotate">Ganti kode</button>
+              <label class="btn small">Pilih gambar<input type="file" accept="image/*" data-act="cover" hidden /></label>
+              ${status.cover_path ? `<button class="btn small ghost" data-act="uncover">Hapus sampul</button>` : ""}
             </div>
           </div>
         </div>
       </div>
 
-      <div class="card">
-        <h3>Sampul / kartu undangan</h3>
-        <p class="hint">Tampil di layar masuk acara dan di atas halaman acara. JPG/PNG, diperkecil otomatis.</p>
-        <div class="cover-edit">
-          <div class="cover-preview">${status.cover_path ? `<img alt="Sampul acara" src="${esc(coverUrl(status.cover_path))}" />` : `<span>Belum ada sampul</span>`}</div>
-          <div class="row">
-            <label class="btn small">Pilih gambar<input type="file" accept="image/*" data-act="cover" hidden /></label>
-            ${status.cover_path ? `<button class="btn small ghost" data-act="uncover">Hapus sampul</button>` : ""}
-          </div>
+      <div class="subpanel" data-tab="peserta" role="tabpanel" hidden>
+        <div class="member-tools">
+          <input type="search" placeholder="Cari nama atau email" aria-label="Cari peserta" data-act="member-search" />
+          <select aria-label="Urutkan peserta" data-act="member-sort">
+            <option value="joined">Urut waktu masuk</option>
+            <option value="shots">Jepretan terbanyak</option>
+            <option value="pending">Ada yang belum terunggah</option>
+          </select>
         </div>
+        <p class="hint member-count"></p>
+        <div class="member-list"><p class="hint">Memuat…</p></div>
       </div>
 
-      <form class="card settings">
-        <h3>Pengaturan acara</h3>
-        <label>Nama acara <input name="name" required maxlength="80" value="${esc(status.name)}" /></label>
-        <label>Kalimat sambutan (opsional)
-          <textarea name="welcome_text" rows="2" maxlength="300" placeholder="Contoh: Abadikan momen bahagia kami, ya!">${esc(status.welcome_text || "")}</textarea>
-        </label>
-        <label>Efek film bawaan <select name="film">${filmOptions(status.ev_film || status.film)}</select></label>
-        <label class="check"><input type="checkbox" name="allow_film_choice" ${status.allow_film_choice ? "checked" : ""}/> Tamu boleh memilih efek film sendiri</label>
-        <label>Jatah jepretan per peserta
-          <input type="number" name="max_shots" min="${status.is_admin ? 1 : status.max_shots}" max="${status.max_shots_limit}" value="${status.max_shots}" />
-        </label>
-        <p class="hint">Batas admin: ${status.max_shots_limit}. ${status.is_admin ? "" : "Jatah hanya bisa dinaikkan. "}Menaikkan jatah membuka lagi gulungan yang sudah habis, dan fotonya tersembunyi lagi sampai gulungan itu habis.</p>
-        <label class="check"><input type="checkbox" name="is_open" ${status.is_open ? "checked" : ""}/> Acara terbuka (peserta bisa memotret)</label>
-        <label class="check"><input type="checkbox" name="hide_names" ${status.hide_names ? "checked" : ""}/> Sembunyikan nama pengunggah (hanya Anda dan superadmin yang tahu)</label>
-        <label class="check"><input type="checkbox" name="reveal" ${status.reveal_at ? "checked" : ""}/> Mode cuci film: semua foto tampil bersamaan pada</label>
-        <input type="datetime-local" name="reveal_at" value="${toLocalInput(status.reveal_at)}" />
-        <label>Rencana hapus foto <input type="date" name="purge_at" value="${status.purge_at ? toLocalInput(status.purge_at).slice(0, 10) : ""}" /></label>
-        <label>Batas jumlah peserta <input type="number" name="max_members" min="1" max="${status.max_members_limit}" value="${status.max_members}" /></label>
-        <label class="check"><input type="checkbox" name="invite_only" ${status.invite_only ? "checked" : ""}/> Hanya email di daftar undangan</label>
-        <textarea name="invites" rows="4" placeholder="Satu email per baris" ${status.invite_only ? "" : "hidden"}></textarea>
-        ${status.is_admin ? `
-        <fieldset class="admin-only">
-          <legend>Khusus superadmin</legend>
-          <label>Resolusi foto
-            <select name="photo_max_side">
-              <option value="">Ikut pengaturan global</option>
-              ${RESOLUTIONS.map((r) => `<option value="${r}" ${status.ev_photo_max_side === r ? "selected" : ""}>${r} px</option>`).join("")}
-            </select>
+      <div class="subpanel" data-tab="pengaturan" role="tabpanel" hidden>
+        <form class="card settings">
+          <h3>Pengaturan acara</h3>
+          <label>Nama acara <input name="name" required maxlength="80" value="${esc(status.name)}" /></label>
+          <label>Kalimat sambutan (opsional)
+            <textarea name="welcome_text" rows="2" maxlength="300" placeholder="Contoh: Abadikan momen bahagia kami, ya!">${esc(status.welcome_text || "")}</textarea>
           </label>
-          <label>Cerminkan jendela bidik kamera depan <select name="mirror_preview">${triOptions(status.ev_mirror_preview)}</select></label>
-          <label>Cerminkan hasil foto kamera depan <select name="mirror_photo">${triOptions(status.ev_mirror_photo)}</select></label>
-        </fieldset>` : ""}
-        <button class="btn primary" type="submit">Simpan</button>
-      </form>
-
-      <div class="card">
-        <h3>Peserta</h3>
-        <p class="hint">Ketuk nama untuk melihat gulungannya.</p>
-        <div class="members"><p class="hint">Memuat…</p></div>
+          <label>Efek film bawaan <select name="film">${filmOptions(status.ev_film || status.film)}</select></label>
+          <label class="check"><input type="checkbox" name="allow_film_choice" ${status.allow_film_choice ? "checked" : ""}/> Tamu boleh memilih efek film sendiri</label>
+          <label>Jatah jepretan per peserta
+            <input type="number" name="max_shots" min="${status.is_admin ? 1 : status.max_shots}" max="${status.max_shots_limit}" value="${status.max_shots}" />
+          </label>
+          <p class="hint">Batas admin: ${status.max_shots_limit}. ${status.is_admin ? "" : "Jatah hanya bisa dinaikkan. "}Menaikkan jatah membuka lagi gulungan yang sudah habis, dan fotonya tersembunyi lagi sampai gulungan itu habis.</p>
+          <label class="check"><input type="checkbox" name="hide_names" ${status.hide_names ? "checked" : ""}/> Sembunyikan nama pengunggah (hanya Anda dan superadmin yang tahu)</label>
+          <details class="advanced">
+            <summary>Pengaturan lanjutan</summary>
+            <label class="check"><input type="checkbox" name="reveal" ${status.reveal_at ? "checked" : ""}/> Mode cuci film: semua foto tampil bersamaan pada</label>
+            <input type="datetime-local" name="reveal_at" aria-label="Waktu cuci film" value="${toLocalInput(status.reveal_at)}" />
+            <label style="margin-top:.75rem">Rencana hapus foto <input type="date" name="purge_at" value="${status.purge_at ? toLocalInput(status.purge_at).slice(0, 10) : ""}" /></label>
+            <label>Batas jumlah peserta <input type="number" name="max_members" min="1" max="${status.max_members_limit}" value="${status.max_members}" /></label>
+            <label class="check"><input type="checkbox" name="invite_only" ${status.invite_only ? "checked" : ""}/> Hanya email di daftar undangan</label>
+            <textarea name="invites" rows="4" placeholder="Satu email per baris" aria-label="Daftar email undangan" ${status.invite_only ? "" : "hidden"}></textarea>
+            ${status.is_admin ? `
+            <fieldset class="admin-only">
+              <legend>Khusus superadmin</legend>
+              <label>Resolusi foto
+                <select name="photo_max_side">
+                  <option value="">Ikut pengaturan global</option>
+                  ${RESOLUTIONS.map((r) => `<option value="${r}" ${status.ev_photo_max_side === r ? "selected" : ""}>${r} px</option>`).join("")}
+                </select>
+              </label>
+              <label>Cerminkan jendela bidik kamera depan <select name="mirror_preview">${triOptions(status.ev_mirror_preview)}</select></label>
+              <label>Cerminkan hasil foto kamera depan <select name="mirror_photo">${triOptions(status.ev_mirror_photo)}</select></label>
+            </fieldset>` : ""}
+          </details>
+          <button class="btn primary" type="submit">Simpan</button>
+        </form>
       </div>
 
-      <div class="card">
-        <h3>Album</h3>
-        <p class="hint">Unduh semua foto ukuran penuh sebagai ZIP. Album besar dibagi menjadi beberapa file berisi paling banyak ${ZIP_PART} foto supaya memori perangkat tidak habis.</p>
-        <button class="btn" data-act="zip">Unduh album (ZIP)</button>
-        <p class="zip-progress hint" hidden></p>
-        <div class="zip-parts" hidden></div>
-      </div>
-
-      <div class="card danger">
-        <h3>Hapus acara</h3>
-        <p class="hint">Menghapus semua foto dari server beserta data acara. Unduh album dulu. Tidak bisa dibatalkan.</p>
-        <button class="btn danger" data-act="delete">Hapus acara dan semua foto</button>
+      <div class="subpanel two-col" data-tab="album" role="tabpanel" hidden>
+        <div class="card">
+          <h3>Unduh album</h3>
+          <p class="hint">Semua foto ukuran penuh sebagai ZIP. Album besar dibagi menjadi beberapa file berisi paling banyak ${ZIP_PART} foto supaya memori perangkat tidak habis.</p>
+          <button class="btn" data-act="zip">Unduh album (ZIP)</button>
+          <p class="zip-progress hint" hidden></p>
+          <div class="zip-parts" hidden></div>
+        </div>
+        <div class="card danger">
+          <h3>Hapus acara</h3>
+          <p class="hint">Menghapus semua foto dari server beserta data acara. Unduh album dulu. Tidak bisa dibatalkan.</p>
+          <button class="btn danger" data-act="delete">Hapus acara dan semua foto</button>
+        </div>
       </div>
     </section>`);
   root.replaceChildren(view);
   const form = view.querySelector("form.settings");
+
+  // --- sub-tab ---
+  function selectTab(name) {
+    view.querySelectorAll(".subtabs [role=tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === name)));
+    view.querySelectorAll(".subpanel").forEach((p) => { p.hidden = p.dataset.tab !== name; });
+    try { sessionStorage.setItem(tabKey, name); } catch { /* abaikan */ }
+  }
+  view.querySelectorAll(".subtabs [role=tab]").forEach((b) => (b.onclick = () => selectTab(b.dataset.tab)));
+  let firstTab = null;
+  try { firstTab = sessionStorage.getItem(tabKey); } catch { /* abaikan */ }
+  selectTab(firstTab || "undangan");
+
+  // --- kartu status ---
+  view.querySelector('[data-act="toggle-open"]').onclick = async (e) => {
+    const b = e.currentTarget;
+    const open = !status.is_open;
+    if (!open && !(await confirmDialog({
+      title: "Tutup acara?",
+      text: "Peserta tidak bisa memotret lagi, dan foto semua peserta langsung terbuka di album.",
+      ok: "Tutup acara",
+    }))) return;
+    b.disabled = true;
+    try {
+      await rpc("set_event", { p_event: status.event_id, p_patch: { is_open: open } });
+      toast(open ? "Acara dibuka." : "Acara ditutup.");
+      reload();
+    } catch (err) { toast(friendly(err)); b.disabled = false; }
+  };
+  view.querySelector('[data-act="share"]').onclick = () => copyText(link, { done: "Link undangan disalin." });
+  view.querySelector('[data-act="show-invite"]').onclick = () => {
+    selectTab("undangan");
+    view.querySelector(".qr").scrollIntoView({ block: "center" });
+  };
+  rpc("event_stats", { p_event: status.event_id }).then((st) => {
+    if (!st) return;
+    const set = (k, v) => { view.querySelector(`[data-s="${k}"]`).textContent = Number(v).toLocaleString("id-ID"); };
+    set("members", st.members); set("photos", st.photos); set("rolls", st.rolls_done); set("pending", st.pending);
+    const top = Math.max(st.members, 1);
+    const row = (label, n) => `
+      <div class="funnel-row"><span>${label}</span><div class="bar"><span style="width:${Math.round((n / top) * 100)}%"></span></div><b>${n}</b></div>`;
+    view.querySelector(".funnel").innerHTML =
+      row("Masuk", st.members) + row("Memotret", st.shooters) + row("Film habis", st.rolls_done) + row("Mengunduh", st.downloaders);
+  }).catch(() => {});
 
   // --- undangan ---
   QRCode.toCanvas(view.querySelector(".qr"), link, { width: 180, margin: 1 });
@@ -176,7 +264,6 @@ export async function renderPanel(root, status, { reload, home }) {
       name: f.name.value,
       welcome_text: f.welcome_text.value,
       film: f.film.value,
-      is_open: f.is_open.checked,
       hide_names: f.hide_names.checked,
       allow_film_choice: f.allow_film_choice.checked,
       reveal_at: reveal,
@@ -201,51 +288,77 @@ export async function renderPanel(root, status, { reload, home }) {
     } catch (err) { toast(friendly(err)); }
   };
 
-  // --- peserta ---
+  // --- peserta: kartu dengan bilah progres ---
+  let members = [];
+  const listBox = view.querySelector(".member-list");
+  const searchBox = view.querySelector('[data-act="member-search"]');
+  const sortBox = view.querySelector('[data-act="member-sort"]');
+  function renderMembers() {
+    const q = searchBox.value.trim().toLowerCase();
+    let rows = members.filter((m) => !q || m.name.toLowerCase().includes(q) || (m.email || "").toLowerCase().includes(q));
+    if (sortBox.value === "shots") rows = [...rows].sort((a, b) => b.shots_used - a.shots_used);
+    if (sortBox.value === "pending") rows = rows.filter((m) => m.pending > 0);
+    view.querySelector(".member-count").textContent =
+      `${members.length} dari maks. ${status.max_members} peserta${rows.length !== members.length ? ` · ${rows.length} ditampilkan` : ""}. Ketuk nama untuk melihat gulungannya.`;
+    if (!rows.length) { listBox.replaceChildren(el(`<p class="hint">Tidak ada peserta yang cocok.</p>`)); return; }
+    listBox.replaceChildren(...rows.map((m) => {
+      const pct = Math.round((Math.min(m.shots_used, status.max_shots) / status.max_shots) * 100);
+      const n = el(`
+        <div class="member-card${m.blocked ? " blocked" : ""}">
+          <div class="mc-main">
+            <div><button class="linklike" data-act="roll">${esc(m.name)}</button>
+              ${m.blocked ? `<span class="tag bad">diblokir</span>` : m.shots_used >= status.max_shots ? `<span class="tag ok">film habis</span>` : ""}</div>
+            <small>${esc(m.email)}</small>
+            <div class="bar${m.shots_used >= status.max_shots ? " mint" : ""}"><span style="width:${pct}%"></span></div>
+            <small>${m.shots_used}/${status.max_shots} jepretan${m.pending ? ` · <b>${m.pending} belum terunggah</b>` : ""}</small>
+          </div>
+          <button class="btn small ghost icon-btn" data-act="menu" aria-label="Aksi untuk ${esc(m.name)}">⋯</button>
+        </div>`);
+      n.querySelector('[data-act="roll"]').onclick = () => showRoll(status, m);
+      n.querySelector('[data-act="menu"]').onclick = () => actionSheet(m.name, [
+        { label: "Lihat gulungan", run: () => showRoll(status, m) },
+        ...(m.pending ? [{ label: `Lepas ${m.pending} jepretan macet…`, run: () => releasePending(m) }] : []),
+        ...(m.user_id === status.me ? [] : [{
+          label: m.blocked ? "Pulihkan akses" : "Blokir dari acara ini", danger: !m.blocked,
+          run: () => setBlocked(m, !m.blocked),
+        }]),
+      ]);
+      return n;
+    }));
+  }
+  searchBox.oninput = renderMembers;
+  sortBox.onchange = renderMembers;
+
   async function loadMembers() {
-    const box = view.querySelector(".members");
     try {
-      const rows = await rpc("list_members", { p_event: status.event_id });
-      box.replaceChildren(el(`
-        <table>
-          <thead><tr><th>Peserta</th><th>Jatah</th><th></th></tr></thead>
-          <tbody>${rows.map((m) => `
-            <tr class="${m.blocked ? "blocked" : ""}">
-              <td><button class="linklike" data-roll="${m.user_id}">${esc(m.name)}</button><br><small>${esc(m.email)}</small></td>
-              <td>${m.shots_used}/${status.max_shots}${m.pending ? `<br><small>${m.pending} belum terunggah</small>` : ""}</td>
-              <td class="actions">
-                ${m.pending ? `<button class="btn small" data-release="${m.user_id}">Lepas macet</button>` : ""}
-                ${m.user_id === status.me ? "" : `<button class="btn small ghost" data-block="${m.user_id}" data-blocked="${m.blocked}">${m.blocked ? "Pulihkan" : "Blokir"}</button>`}
-              </td>
-            </tr>`).join("")}
-          </tbody>
-        </table>`));
-      box.insertAdjacentHTML("afterbegin", `<p class="hint">${rows.length} dari maks. ${status.max_members} peserta.</p>`);
-      box.querySelectorAll("[data-roll]").forEach((b) => (b.onclick = () => {
-        const m = rows.find((x) => x.user_id === b.dataset.roll);
-        showRoll(status, m);
-      }));
-      box.querySelectorAll("[data-block]").forEach((b) => (b.onclick = async () => {
-        try {
-          await rpc("block_member", { p_event: status.event_id, p_user: b.dataset.block, p_blocked: b.dataset.blocked !== "true" });
-          loadMembers();
-        } catch (e) { toast(friendly(e)); }
-      }));
-      box.querySelectorAll("[data-release]").forEach((b) => (b.onclick = async () => {
-        if (!(await confirmDialog({
-          title: "Lepas jepretan yang macet?",
-          text: "Jepretan yang belum terunggah dihapus dan jatahnya dikembalikan. Jika HP peserta masih menyimpan fotonya, foto itu akan dikirim ulang sebagai jepretan baru.",
-          ok: "Lepas jepretan",
-        }))) return;
-        try {
-          const rows = await rpc("release_pending", { p_event: status.event_id, p_user: b.dataset.release });
-          const paths = rows.map((r) => r.file_path ?? r.release_pending ?? r);
-          await removeFiles(paths).catch(() => {});
-          toast("Jepretan macet dilepas.");
-          loadMembers();
-        } catch (e) { toast(friendly(e)); }
-      }));
-    } catch (e) { box.textContent = friendly(e); }
+      members = await rpc("list_members", { p_event: status.event_id });
+      renderMembers();
+    } catch (e) { listBox.textContent = friendly(e); }
+  }
+  async function setBlocked(m, blocked) {
+    if (blocked && !(await confirmDialog({
+      title: `Blokir ${m.name}?`,
+      text: "Peserta ini tidak bisa memotret lagi dan tidak bisa melihat album acara ini.",
+      ok: "Blokir", danger: true,
+    }))) return;
+    try {
+      await rpc("block_member", { p_event: status.event_id, p_user: m.user_id, p_blocked: blocked });
+      loadMembers();
+    } catch (e) { toast(friendly(e)); }
+  }
+  async function releasePending(m) {
+    if (!(await confirmDialog({
+      title: "Lepas jepretan yang macet?",
+      text: "Jepretan yang belum terunggah dihapus dan jatahnya dikembalikan. Jika HP peserta masih menyimpan fotonya, foto itu akan dikirim ulang sebagai jepretan baru.",
+      ok: "Lepas jepretan",
+    }))) return;
+    try {
+      const rows = await rpc("release_pending", { p_event: status.event_id, p_user: m.user_id });
+      const paths = rows.map((r) => r.file_path ?? r.release_pending ?? r);
+      await removeFiles(paths).catch(() => {});
+      toast("Jepretan macet dilepas.");
+      loadMembers();
+    } catch (e) { toast(friendly(e)); }
   }
   loadMembers();
 
@@ -270,7 +383,7 @@ export async function renderPanel(root, status, { reload, home }) {
             b.disabled = true;
             try {
               await downloadPart(p, i + 1, parts.length, prog);
-              b.textContent = `✓ Bagian ${i + 1} terunduh`;
+              b.innerHTML = `${ICON.check} Bagian ${i + 1} terunduh`;
             } catch (e) { toast(friendly(e)); b.disabled = false; }
           };
           return b;
