@@ -5,8 +5,8 @@ import { download, safeName, fmtRange, toast } from "./ui.js";
 
 const W = 1240, H = 1748;
 const C = {
-  bg: "#fff7ec", ink: "#2d1b33", muted: "#6e5d72", coral: "#d6336c",
-  soft: "#ffe1ea", sun: "#ffc23c", sunSoft: "#fff1c9", mint: "#2ec4a0", line: "#f1dfcf",
+  bg: "#fff8f0", ink: "#2d1b33", muted: "#6e5d72", coral: "#d6336c", flash: "#ff5c8a",
+  soft: "#ffe3ec", line: "#efdccb",
 };
 const DISPLAY = '"Fredoka", "Nunito", system-ui, sans-serif';
 const BODY = '"Nunito", system-ui, sans-serif';
@@ -51,92 +51,116 @@ function wrap(ctx, text, maxW, maxLines) {
   return lines;
 }
 
+// Logo kamera Jepretin pada kotak 64×64, digambar di (x, y) dengan ukuran size
+function drawMark(ctx, x, y, size) {
+  const k = size / 64;
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(k, k);
+  ctx.fillStyle = C.ink; roundRect(ctx, 4, 14, 56, 38, 10); ctx.fill();
+  ctx.fillStyle = C.bg; roundRect(ctx, 42, 20, 12, 7, 2.5); ctx.fill();
+  ctx.beginPath(); ctx.arc(32, 35, 11.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(32, 35, 6.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+// Teks dengan jarak antarhuruf (canvas lama tidak punya letterSpacing)
+function spaced(ctx, text, cx, y, spacing) {
+  const chars = [...text];
+  const widths = chars.map((ch) => ctx.measureText(ch).width);
+  const total = widths.reduce((a, b) => a + b, 0) + spacing * (chars.length - 1);
+  let x = cx - total / 2;
+  const align = ctx.textAlign;
+  ctx.textAlign = "left";
+  chars.forEach((ch, i) => { ctx.fillText(ch, x, y); x += widths[i] + spacing; });
+  ctx.textAlign = align;
+}
+
+// Tata letak mengikuti desain "Kartu QR meja tamu" (420 × 595), diperbesar ke A6 300 dpi
 async function draw(ev, withCover) {
   const c = document.createElement("canvas");
   c.width = W; c.height = H;
   const ctx = c.getContext("2d");
+  const s = W / 420;
   await Promise.all([
-    document.fonts?.load(`600 80px ${DISPLAY}`), document.fonts?.load(`700 40px ${BODY}`),
+    document.fonts?.load(`600 80px ${DISPLAY}`), document.fonts?.load(`800 40px ${BODY}`),
   ].filter(Boolean)).catch(() => {});
 
-  // Latar krem dengan dua lingkaran lembut
   ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
-  ctx.fillStyle = C.soft; ctx.beginPath(); ctx.arc(80, 60, 360, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = C.sunSoft; ctx.beginPath(); ctx.arc(W - 40, 300, 300, 0, Math.PI * 2); ctx.fill();
 
-  let y = 90;
+  // Pita sampul di atas (atau warna lembut bila tanpa sampul)
+  const band = 120 * s;
   if (withCover && ev.coverUrl) {
     const img = await loadImage(ev.coverUrl);
-    const bw = W - 180, bh = 560, bx = 90;
-    const s = Math.max(bw / img.width, bh / img.height);
-    const sw = bw / s, sh = bh / s;
-    ctx.save();
-    ctx.translate(W / 2, y + bh / 2); ctx.rotate(-0.02); ctx.translate(-W / 2, -(y + bh / 2));
-    ctx.fillStyle = "#fff";
-    roundRect(ctx, bx - 14, y - 14, bw + 28, bh + 28, 46); ctx.fill();
-    roundRect(ctx, bx, y, bw, bh, 34); ctx.clip();
-    ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, bx, y, bw, bh);
-    ctx.restore();
-    y += bh + 70;
+    const sc = Math.max(W / img.width, band / img.height);
+    const sw = W / sc, sh = band / sc;
+    ctx.drawImage(img, (img.width - sw) / 2, (img.height - sh) / 2, sw, sh, 0, 0, W, band);
   } else {
-    y += 40;
+    ctx.fillStyle = C.soft; ctx.fillRect(0, 0, W, band);
   }
 
-  // Nama acara dan jadwal
+  // Ikon aplikasi di tepi bawah pita
+  const icon = 52 * s, ix = (W - icon) / 2, iy = band - 26 * s;
+  ctx.fillStyle = C.bg; roundRect(ctx, ix, iy, icon, icon, 16 * s); ctx.fill();
+  ctx.fillStyle = C.flash; roundRect(ctx, ix + 4 * s, iy + 4 * s, icon - 8 * s, icon - 8 * s, 12 * s); ctx.fill();
+  drawMark(ctx, ix + 9 * s, iy + 9 * s, 34 * s);
+
   ctx.textAlign = "center";
-  ctx.fillStyle = C.ink;
-  ctx.font = `600 ${withCover && ev.coverUrl ? 84 : 104}px ${DISPLAY}`;
-  const nameLines = wrap(ctx, ev.name, W - 200, 2);
-  const lh = withCover && ev.coverUrl ? 96 : 118;
-  for (const l of nameLines) { y += lh * 0.8; ctx.fillText(l, W / 2, y); y += lh * 0.2; }
+  let y = band + 38 * s;
+
+  // Ajakan + nama acara + jadwal
+  ctx.font = `800 ${13 * s}px ${BODY}`; ctx.fillStyle = C.coral;
+  y += 13 * s;
+  spaced(ctx, "IKUT MEMOTRET YUK!", W / 2, y, 0.8 * s);
+  ctx.font = `600 ${28 * s}px ${DISPLAY}`; ctx.fillStyle = C.ink;
+  const nameLines = wrap(ctx, ev.name, W - 64 * s, 2);
+  y += 6 * s;
+  for (const l of nameLines) { y += 30 * s; ctx.fillText(l, W / 2, y); }
   const when = fmtRange(ev.starts, ev.ends);
   if (when) {
-    y += 56;
-    ctx.font = `700 38px ${BODY}`; ctx.fillStyle = C.muted;
+    y += 20 * s;
+    ctx.font = `700 ${12 * s}px ${BODY}`; ctx.fillStyle = C.muted;
     ctx.fillText(when, W / 2, y);
   }
 
-  // QR dalam kartu putih
-  const qrSize = withCover && ev.coverUrl ? 520 : 640;
-  y += 60;
-  const cardW = qrSize + 120, cardX = (W - cardW) / 2, cardH = qrSize + 230;
-  ctx.fillStyle = "#fff";
-  ctx.shadowColor = "rgba(120, 60, 40, .14)"; ctx.shadowBlur = 40; ctx.shadowOffsetY = 12;
-  roundRect(ctx, cardX, y, cardW, cardH, 48); ctx.fill();
-  ctx.shadowColor = "transparent";
-  ctx.font = `800 40px ${BODY}`; ctx.fillStyle = C.coral;
-  ctx.fillText("Scan untuk ikut memotret", W / 2, y + 78);
+  // QR dalam kotak putih bergaris. Mengecil bila nama dua baris + jadwal memakan ruang,
+  // supaya kode dan tiga langkah di bawahnya tidak bertumpuk.
+  const foot = H - 40 * s;
+  const sy = foot - 62 * s;
+  y += 16 * s;
+  const pad = 14 * s;
+  const room = sy - 30 * s - y - 56 * s - pad * 2;
+  const qrSize = Math.max(110 * s, Math.min(150 * s, room)), box = qrSize + pad * 2;
+  ctx.fillStyle = "#fff"; roundRect(ctx, (W - box) / 2, y, box, box, 18 * s); ctx.fill();
+  ctx.strokeStyle = C.line; ctx.lineWidth = 1.5 * s; roundRect(ctx, (W - box) / 2, y, box, box, 18 * s); ctx.stroke();
   const qr = document.createElement("canvas");
   await QRCode.toCanvas(qr, ev.link, { width: qrSize, margin: 0, color: { dark: C.ink, light: "#ffffff" } });
-  ctx.drawImage(qr, (W - qrSize) / 2, y + 112, qrSize, qrSize);
-  // "atau masukkan kode ABC123", ditengahkan sebagai satu baris
-  const lead = "atau masukkan kode ";
-  const leadFont = `700 34px ${BODY}`, codeFont = `700 48px "Courier New", monospace`;
-  ctx.font = leadFont; const lw = ctx.measureText(lead).width;
-  ctx.font = codeFont; const cw = ctx.measureText(ev.code).width;
-  const lx = (W - lw - cw) / 2, ly = y + 112 + qrSize + 72;
-  ctx.textAlign = "left";
-  ctx.font = leadFont; ctx.fillStyle = C.muted; ctx.fillText(lead, lx, ly);
-  ctx.font = codeFont; ctx.fillStyle = C.coral; ctx.fillText(ev.code, lx + lw, ly + 2);
-  ctx.textAlign = "center";
-  y += cardH + 70;
+  ctx.drawImage(qr, (W - qrSize) / 2, y + pad, qrSize, qrSize);
+  y += box;
 
-  // Tiga langkah
-  const steps = [["1", "Scan QR"], ["2", "Masuk dengan Google"], ["3", `Jepret ${ev.maxShots} foto`]];
-  const colW = (W - 160) / 3;
+  // Kode
+  y += 26 * s;
+  ctx.font = `600 ${13 * s}px ${BODY}`; ctx.fillStyle = C.muted;
+  ctx.fillText("atau masukkan kode", W / 2, y);
+  y += 30 * s;
+  ctx.font = `600 ${26 * s}px ${DISPLAY}`; ctx.fillStyle = C.ink;
+  spaced(ctx, ev.code, W / 2, y, 0.2 * 26 * s);
+
+  // Tiga langkah, rata bawah di atas kaki kartu
+  const steps = [["1", "Scan QR"], ["2", "Login Google"], ["3", `${ev.maxShots} jepretan untukmu`]];
+  const colW = (W - 64 * s) / 3;
   steps.forEach(([n, t], i) => {
-    const cx = 80 + colW * i + colW / 2;
-    ctx.fillStyle = [C.soft, C.sunSoft, "#d6f5ec"][i];
-    ctx.beginPath(); ctx.arc(cx, y + 36, 36, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = C.ink; ctx.font = `600 40px ${DISPLAY}`;
-    ctx.fillText(n, cx, y + 50);
-    ctx.font = `700 30px ${BODY}`; ctx.fillStyle = C.ink;
-    ctx.fillText(t, cx, y + 118);
+    const cx = 32 * s + colW * i + colW / 2;
+    ctx.font = `600 ${16 * s}px ${DISPLAY}`; ctx.fillStyle = C.coral;
+    ctx.fillText(n, cx, sy);
+    ctx.font = `600 ${12 * s}px ${BODY}`; ctx.fillStyle = C.muted;
+    wrap(ctx, t, colW - 8 * s, 2).forEach((l, j) => ctx.fillText(l, cx, sy + (20 + j * 16) * s));
   });
 
-  // Kaki kartu
-  ctx.font = `600 30px ${BODY}`; ctx.fillStyle = C.muted;
-  ctx.fillText("Foto terbuka bersama setelah film habis · Disposable Asiig", W / 2, H - 70);
+  // Kaki: garis putus-putus + wordmark
+  ctx.strokeStyle = C.line; ctx.lineWidth = 1.5 * s; ctx.setLineDash([6 * s, 5 * s]);
+  ctx.beginPath(); ctx.moveTo(0, foot); ctx.lineTo(W, foot); ctx.stroke(); ctx.setLineDash([]);
+  ctx.font = `600 ${15 * s}px ${DISPLAY}`; ctx.fillStyle = C.ink;
+  ctx.fillText("jepretin", W / 2, foot + 26 * s);
   return c;
 }
 

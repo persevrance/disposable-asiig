@@ -56,7 +56,7 @@ async function draw(layout, imgs, ev) {
   ctx.fillText(name, L.w / 2, fy + (layout === "story" ? 100 : 78));
   const when = fmtRange(ev.starts_at, ev.ends_at);
   ctx.fillStyle = C.muted; ctx.font = `700 30px "Nunito", system-ui, sans-serif`;
-  ctx.fillText([when, "Disposable Asiig"].filter(Boolean).join(" · "), L.w / 2, fy + (layout === "story" ? 160 : 128));
+  ctx.fillText([when, "Jepretin"].filter(Boolean).join(" · "), L.w / 2, fy + (layout === "story" ? 160 : 128));
   return c;
 }
 

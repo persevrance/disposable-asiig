@@ -1,12 +1,12 @@
 {
-  "name": "Disposable Asiig",
-  "short_name": "Disposable",
+  "name": "Jepretin",
+  "short_name": "Jepretin",
   "description": "Kamera sekali pakai untuk acara bersama",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#fff7ec",
-  "theme_color": "#fff7ec",
+  "background_color": "#FFF8F0",
+  "theme_color": "#FFF8F0",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

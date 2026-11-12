@@ -52,8 +52,8 @@ self.addEventListener("fetch", (event) => {
 // Notifikasi "album sudah terbuka" (dikirim Edge Function notify-album)
 self.addEventListener("push", (event) => {
   let d = {};
-  try { d = event.data?.json() || {}; } catch { d = { title: "Disposable Asiig", body: event.data?.text() }; }
-  event.waitUntil(self.registration.showNotification(d.title || "Disposable Asiig", {
+  try { d = event.data?.json() || {}; } catch { d = { title: "Jepretin", body: event.data?.text() }; }
+  event.waitUntil(self.registration.showNotification(d.title || "Jepretin", {
     body: d.body || "", icon: "/icon.svg", badge: "/icon.svg", tag: d.tag, data: { url: d.url || "/" },
   }));
 });

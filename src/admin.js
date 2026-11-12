@@ -4,14 +4,14 @@ import QRCode from "qrcode";
 import { rpc, friendly } from "./supabase.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData, resizeImage } from "./owner.js";
-import { uploadCover, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
+import { uploadCover, coverUrl, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
 import { pingAlbum } from "./realtime.js";
 import { kickNotify, setVapidKey } from "./push.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
-  fmtRange, fromLocalInput, downloadCsv,
+  fmtRange, fromLocalInput, downloadCsv, brandLockup, initial,
 } from "./ui.js";
 
 const TABS = [
@@ -38,18 +38,31 @@ export async function renderAdmin(app, tab, { setView, me }) {
   tab = ALIASES[tab] || tab;
   const tabs = role === "superadmin" ? TABS : TABS.filter(([t]) => CREATOR_TABS.includes(t));
   if (!tabs.some(([t]) => t === tab)) tab = tabs[0][0];
+  const superadmin = role === "superadmin";
+  const label = (t, n) => (t === "acara" && !superadmin ? "Acara saya" : n);
+  const meta = me?.user_metadata || {};
+  const who = meta.full_name || meta.name || me?.email || "";
+  // Header: terang untuk pembuat acara, gelap untuk superadmin (desain Jepretin)
   const view = el(`
-    <main class="page admin wide">
-      <header class="top">
-        <a class="back" href="#/" aria-label="Kembali ke beranda">‹</a>
-        <h1>Dashboard</h1>
-        <span class="pill small-pill">${role === "superadmin" ? "Superadmin" : "Pembuat acara"}</span>
+    <div class="admin-shell">
+      <header class="admin-head${superadmin ? " dark" : ""}">
+        <div class="admin-head-in">
+          <a class="admin-logo" href="#/" aria-label="Jepretin, kembali ke beranda">${brandLockup(34, { dark: superadmin })}</a>
+          ${superadmin ? `<span class="admin-badge">Superadmin</span>` : ""}
+          <nav class="admin-nav" aria-label="Navigasi dashboard">
+            ${tabs.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}" ${t === tab ? 'aria-current="page"' : ""}>${label(t, n)}</a>`).join("")}
+          </nav>
+          <a class="avatar-btn" href="#/" aria-label="Beranda (${esc(who)})">${initial(who)}</a>
+        </div>
       </header>
-      ${tabs.length > 1 ? `<nav class="tabs scroll" aria-label="Bagian dashboard">
-        ${tabs.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}" ${t === tab ? 'aria-current="page"' : ""}>${n}</a>`).join("")}
-      </nav>` : ""}
-      <div class="admin-body"><p class="hint">Memuat…</p></div>
-    </main>`);
+      <main class="page admin wide">
+        <div class="admin-title">
+          <div><h1>${esc(label(tab, tabs.find(([t]) => t === tab)[1]))}</h1><span class="admin-sub"></span></div>
+          <div class="admin-title-actions"></div>
+        </div>
+        <div class="admin-body"><p class="hint">Memuat…</p></div>
+      </main>
+    </div>`);
   setView(view);
   const body = view.querySelector(".admin-body");
   const render = { ringkasan, acara, pengguna, moderasi, privasi, pengaturan, log }[tab];
@@ -64,13 +77,6 @@ const stat = (label, value, sub) => `
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const funnelRow = (label, n, of, cls = "") => `
   <div class="funnel-row"><span>${label}</span><div class="bar ${cls}"><span style="width:${pct(n, of)}%"></span></div><b>${n}</b></div>`;
-function funnelHtml(e) {
-  const of = Math.max(e.members, 1);
-  return funnelRow(`Peserta / ${e.max_members}`, e.members, e.max_members) +
-    funnelRow("Memotret", e.shooters, of) +
-    funnelRow("Film habis", e.rolls_done, of, "mint") +
-    funnelRow("Mengunduh", e.downloaders, of);
-}
 
 // Tombol pilihan (saring)
 function chips(options, value, onChange, label) {
@@ -155,9 +161,12 @@ export async function createEventDialog() {
   const { box, close } = modal(`
     <form class="dialog wizard" novalidate>
       <div class="wiz-head">
-        <h3>Buat acara baru</h3>
+        <div class="wiz-top">
+          <button type="button" class="round-btn ghost-round" data-act="cancel" aria-label="Batal">${ICON.close}</button>
+          <span class="wiz-count">Langkah 1 dari 3</span>
+        </div>
         <div class="wiz-steps" aria-hidden="true"><i class="on"></i><i></i><i></i></div>
-        <p class="wiz-count">Langkah 1 dari 3 · Nama dan jadwal</p>
+        <h3 class="wiz-title">Nama dan jadwal</h3>
       </div>
       ${limited ? `<p class="hint">Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
 
@@ -171,13 +180,26 @@ export async function createEventDialog() {
       </fieldset>
 
       <fieldset class="wiz-step" data-step="2" hidden>
-        <div class="row">
-          <label>Jatah foto (maks. ${settings.max_shots_limit}) <input name="max_shots" type="number" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" /></label>
-          <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
+        <div class="wiz-field">
+          <label for="wiz-shots" class="wiz-label">Jatah jepretan per tamu</label>
+          <div class="stepper">
+            <button type="button" data-step-by="-1" aria-label="Kurangi">−</button>
+            <input id="wiz-shots" name="max_shots" type="number" inputmode="numeric" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" />
+            <button type="button" data-step-by="1" aria-label="Tambah">+</button>
+          </div>
+          <small class="hint">Batas maksimum mengikuti pengaturan admin (${settings.max_shots_limit}).</small>
         </div>
-        <label>Efek film bawaan
-          <select name="film">${Object.entries(FILMS).map(([id, f]) => `<option value="${id}" ${id === settings.default_film ? "selected" : ""}>${esc(f.name)} — ${esc(f.desc)}</option>`).join("")}</select>
-        </label>
+        <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
+        <div class="wiz-field">
+          <span class="wiz-label">Efek film bawaan</span>
+          <input type="hidden" name="film" value="${esc(FILMS[settings.default_film] ? settings.default_film : "asli")}" />
+          <div class="film-grid" role="group" aria-label="Efek film bawaan">
+            ${Object.entries(FILMS).map(([id, fl]) => `
+              <button type="button" class="film-card" data-film="${id}" aria-pressed="${id === (FILMS[settings.default_film] ? settings.default_film : "asli")}" title="${esc(fl.desc)}">
+                <span class="film-swatch fs-${id}"></span><b>${esc(fl.name)}</b>
+              </button>`).join("")}
+          </div>
+        </div>
         <label class="check"><input type="checkbox" name="allow_film_choice" checked /> Tamu boleh memilih efek film sendiri</label>
         <label class="check"><input type="checkbox" name="hide_names" /> Sembunyikan nama pengunggah di album</label>
         <label class="check"><input type="checkbox" name="invite_only" /> Hanya email yang diundang (daftar diisi di Panel)</label>
@@ -197,8 +219,8 @@ export async function createEventDialog() {
         <p class="hint wiz-need-end" hidden>Pilihan berdasarkan waktu selesai butuh jadwal selesai di langkah 1.</p>
       </fieldset>
 
-      <div class="dialog-actions">
-        <button type="button" class="btn ghost" data-act="back">Batal</button>
+      <div class="wiz-actions">
+        <button type="button" class="btn" data-act="back">Batal</button>
         <button class="btn primary" data-act="next">Lanjut</button>
       </div>
     </form>`, { wide: true });
@@ -207,14 +229,30 @@ export async function createEventDialog() {
   const backBtn = box.querySelector('[data-act="back"]');
   const nextBtn = box.querySelector('[data-act="next"]');
   const TITLES = ["Nama dan jadwal", "Jatah dan efek film", "Sampul dan pembukaan album"];
+  const NEXT = ["Lanjut ke jatah", "Lanjut ke sampul", "Buat acara"];
   let step = 1, coverFile = null;
+
+  box.querySelector('[data-act="cancel"]').onclick = () => close();
+  // Stepper jatah jepretan
+  form.querySelectorAll("[data-step-by]").forEach((b) => (b.onclick = () => {
+    const v = Math.min(settings.max_shots_limit, Math.max(1, (Number(f.max_shots.value) || 0) + Number(b.dataset.stepBy)));
+    f.max_shots.value = v;
+  }));
+  // Kartu efek film
+  form.querySelector(".film-grid").onclick = (e) => {
+    const c = e.target.closest(".film-card");
+    if (!c) return;
+    f.film.value = c.dataset.film;
+    form.querySelectorAll(".film-card").forEach((x) => x.setAttribute("aria-pressed", String(x === c)));
+  };
 
   function show() {
     form.querySelectorAll(".wiz-step").forEach((x) => { x.hidden = Number(x.dataset.step) !== step; });
     form.querySelectorAll(".wiz-steps i").forEach((d, i) => d.classList.toggle("on", i < step));
-    box.querySelector(".wiz-count").textContent = `Langkah ${step} dari 3 · ${TITLES[step - 1]}`;
-    backBtn.textContent = step === 1 ? "Batal" : "‹ Kembali";
-    nextBtn.textContent = step === 3 ? "Buat acara" : "Lanjut";
+    box.querySelector(".wiz-count").textContent = `Langkah ${step} dari 3`;
+    box.querySelector(".wiz-title").textContent = TITLES[step - 1];
+    backBtn.textContent = step === 1 ? "Batal" : "Kembali";
+    nextBtn.textContent = NEXT[step - 1];
     const noEnd = !f.ends_at.value;
     for (const sel of [f.reveal, f.purge]) {
       [...sel.options].forEach((o) => { o.disabled = noEnd && o.value !== "" && sel === f.reveal; });
@@ -394,7 +432,11 @@ async function ringkasan(body) {
       ${items.length ? `
       <div class="card attention">
         <h3>Perlu perhatian</h3>
-        <ul class="attention-list">${items.map(([t, s, a]) => `<li><div><b>${esc(t)}</b><small>${esc(s)}</small></div>${a}</li>`).join("")}</ul>
+        <ul class="attention-list">${items.map(([t, s, a]) => {
+          // Tingkat: kritis (laporan, permintaan data), sedang (tertahan, kamera, tanggal hapus, storage), info
+          const lvl = /dilaporkan|hapus data/.test(t) ? ["crit", "Kritis"] : /batas acara/.test(t) ? ["info", "Info"] : ["mid", "Sedang"];
+          return `<li class="att-${lvl[0]}"><span class="att-tag">${lvl[1]}</span><div><b>${esc(t)}</b><small>${esc(s)}</small></div>${a}</li>`;
+        }).join("")}</ul>
       </div>` : `
       <div class="card all-good"><b>Semua aman.</b> Tidak ada yang perlu ditindak saat ini.</div>`}
 
@@ -677,7 +719,14 @@ async function acara(body, me, role) {
   const search = view.querySelector('input[type="search"]');
   const sortSel = view.querySelector("select");
   sortSel.value = st.sort;
-  view.querySelector('[data-act="create"]')?.addEventListener("click", () => createEventDialog());
+  // Tombol Buat acara pindah ke baris judul (kanan), seperti desain "Acara saya"
+  const createBtn = view.querySelector('[data-act="create"]');
+  if (createBtn) {
+    createBtn.className = "btn primary";
+    body.closest(".admin-shell")?.querySelector(".admin-title-actions")?.append(createBtn);
+    createBtn.addEventListener("click", () => createEventDialog());
+  }
+  const sub = body.closest(".admin-shell")?.querySelector(".admin-sub");
   // Ekspor semua acara sesuai saringan sekarang (maks. 2.000 baris)
   view.querySelector('[data-act="csv"]').onclick = async (ev) => {
     const b = ev.currentTarget; b.disabled = true;
@@ -711,6 +760,7 @@ async function acara(body, me, role) {
       rows = await rpc("admin_events", { p_search: st.q || null, p_status: st.status, p_sort: st.sort, p_limit: PAGE, p_offset: st.offset });
     } catch (e) { results.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); return; }
     const total = rows[0]?.total_count ?? 0;
+    if (sub) sub.textContent = `${Number(total)} acara · ${sortSel.selectedOptions[0]?.textContent.toLowerCase() || ""}`;
     if (!rows.length) {
       results.replaceChildren(el(`<p class="hint">${!st.q && st.status === "all"
         ? (canCreate ? "Belum ada acara. Ketuk Buat acara untuk memulai." : "Belum ada acara.")
@@ -770,31 +820,45 @@ async function acara(body, me, role) {
   // Pembuat acara: kartu dengan status langsung
   function cardView() {
     const n = el(`<div class="event-cards">${rows.map((e) => `
-      <article class="card event-card" data-id="${e.event_id}">
-        <div class="ec-head">
-          <div><b>${esc(e.name)}</b>
-            ${e.starts_at || e.ends_at ? `<small class="when">${ICON.calendar}<span>${esc(fmtRange(e.starts_at, e.ends_at))}</span></small>` : ""}
-            <small>Kode ${esc(e.join_code)} · ${esc(filmName(e.film))} · dibuat ${esc(fmtDate(e.created_at))}</small></div>
-          <span class="ec-tags"><span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
-            ${e.reports ? `<a class="tag warn" href="#/e/${e.event_id}/panel">${e.reports} dilaporkan</a>` : ""}</span>
+      <article class="event-card" data-id="${e.event_id}">
+        <div class="ec-cover"${e.cover_path ? ` style="background-image:url('${esc(coverUrl(e.cover_path))}')"` : ""}>
+          ${statusBadge(e)}
+          ${e.reports ? `<a class="ec-report" href="#/e/${e.event_id}/panel">${e.reports} dilaporkan</a>` : ""}
         </div>
-        <div class="funnel">${funnelHtml(e)}</div>
-        <p class="hint" style="margin:0">${e.photos} foto masuk${e.pending ? ` · <b>${e.pending} tertahan</b>` : ""} · ${fmtBytes(e.bytes)}${e.last_photo_at ? ` · terakhir ${esc(fmtDate(e.last_photo_at))}` : ""}</p>
-        <div class="row">
-          <a class="btn small primary" href="#/e/${e.event_id}/panel">Kelola</a>
-          <a class="btn small" href="#/e/${e.event_id}/album">Album</a>
-          <button class="btn small" data-share="${esc(e.join_code)}">${ICON.share} Bagikan</button>
-          <button class="btn small ghost icon-btn" data-more="${e.event_id}" aria-label="Aksi lain untuk ${esc(e.name)}">⋯</button>
+        <div class="ec-body">
+          <div class="ec-title">
+            <h2>${esc(e.name)}</h2>
+            <span>${esc(fmtRange(e.starts_at, e.ends_at) || `Dibuat ${fmtDate(e.created_at)}`)}</span>
+          </div>
+          <div class="ec-bars">
+            <div class="ec-row"><b>Peserta</b><span>${e.members} / ${e.max_members}</span></div>
+            <div class="bar thin coral"><span style="width:${pct(e.members, e.max_members)}%"></span></div>
+            <div class="ec-row"><b>Gulungan habis</b><span>${e.rolls_done} / ${e.members}</span></div>
+            <div class="bar thin mint"><span style="width:${pct(e.rolls_done, e.members)}%"></span></div>
+          </div>
+          <small class="ec-meta">Kode ${esc(e.join_code)} · ${e.photos} foto${e.pending ? ` · <b>${e.pending} tertahan</b>` : ""} · ${fmtBytes(e.bytes)}</small>
+          <div class="ec-actions">
+            <a class="btn ec-dark" href="#/e/${e.event_id}/panel">Kelola</a>
+            <a class="btn" href="#/e/${e.event_id}/album">Album</a>
+            <button class="round-btn" data-more="${e.event_id}" aria-label="Menu lainnya untuk ${esc(e.name)}: bagikan, duplikat, hapus">${ICON.more}</button>
+          </div>
         </div>
       </article>`).join("")}</div>`);
-    n.querySelectorAll("[data-share]").forEach((b) => (b.onclick = () =>
-      copyText(`${location.origin}/?kode=${b.dataset.share}`, { done: "Link undangan disalin." })));
     n.querySelectorAll("[data-more]").forEach((b) => (b.onclick = () => eventMenu(rows.find((e) => e.event_id === b.dataset.more))));
     return n;
   }
 
+  // Lencana status pada sampul: Berlangsung / Terjadwal / Selesai
+  function statusBadge(e) {
+    const now = new Date();
+    if (e.is_open && e.starts_at && new Date(e.starts_at) > now) return `<span class="ec-badge sky">Terjadwal</span>`;
+    if (e.is_open) return `<span class="ec-badge mint">Berlangsung</span>`;
+    return `<span class="ec-badge grape">Selesai · album terbuka</span>`;
+  }
+
   function eventMenu(e) {
     actionSheet(e.name, [
+      { label: "Salin link undangan", run: () => copyText(`${location.origin}/?kode=${e.join_code}`, { done: "Link undangan disalin." }) },
       { label: e.is_open ? "Tutup acara" : "Buka acara", run: () => setOpen([e], !e.is_open) },
       { label: "Kartu QR siap cetak", run: () => downloadQrCard(cardData(e)).catch((err) => toast(friendly(err))) },
       { label: "Mode layar (proyektor)", run: () => { location.hash = `#/e/${e.event_id}/layar`; } },

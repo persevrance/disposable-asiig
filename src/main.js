@@ -1,4 +1,5 @@
 import "./style.css";
+import "./brand.css";
 import { supabase, configured, rpc, friendly } from "./supabase.js";
 import { flushQueue } from "./shoot.js";
 import { renderCamera } from "./camera-view.js";
@@ -11,8 +12,8 @@ import { renderGuestbook } from "./guestbook.js";
 import { openPrivacy } from "./privacy.js";
 import { coverUrl, setStorageBackend } from "./storage.js";
 import { setVapidKey } from "./push.js";
-import { inAppBrowser, isAndroid, chromeIntentUrl } from "./camera.js";
-import { el, esc, toast, copyText, ICON, badge, BRAND, fmtRange } from "./ui.js";
+import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial } from "./ui.js";
+import { landingHtml } from "./landing.js";
 import { t, langSwitch, bindLangSwitch } from "./i18n.js";
 
 const app = document.getElementById("app");
@@ -69,39 +70,42 @@ function setView(node) {
   app.replaceChildren(node);
 }
 
-// ---------- Layar login ----------
+// ---------- Halaman depan (belum login) ----------
 function renderLogin() {
   savePendingHash();
   const code = localStorage.getItem("pendingCode");
   const shareLink = code ? `${location.origin}/?kode=${code}` : location.origin;
-  setView(el(`
-    <main class="center">
-      ${langSwitch()}
-      <div class="logo">${BRAND}</div>
-      <h1 class="brand">Disposable Asiig</h1>
-      <p class="lead">${t("Kamera sekali pakai untuk acara bersama. Jepretan terbatas, tanpa hapus dan tanpa ulang. Semua foto terbuka bersamaan setelah film habis.")}</p>
-      ${code ? `<p class="pill">${t("Undangan acara:")} <b>${esc(code)}</b></p>` : ""}
-      ${inAppBrowser() ? `
-        <div class="card warn-card">
-          <b>${t("Buka di Chrome atau Safari dulu")}</b>
-          <p>${t("Link ini terbuka di dalam aplikasi (WhatsApp/Instagram/dll.). Google menolak login dari sini dan kamera bisa terblokir.")}
-          ${t("Ketuk menu ⋮ atau ⋯ lalu pilih \"Buka di browser\" / \"Buka di Safari\".")}</p>
-          <div class="row">
-            ${isAndroid() ? `<a class="btn small primary" href="${esc(chromeIntentUrl(shareLink))}">${t("Buka di Chrome")}</a>` : ""}
-            <button class="btn small" data-act="copy">${t("Salin link")}</button>
-          </div>
-        </div>` : ""}
-      <button class="btn primary big" data-act="google">${t("Masuk dengan Google")}</button>
-      <p class="fine"><a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
-    </main>`));
+  setView(el(landingHtml({ code, shareLink })));
   bindLangSwitch(app);
-  app.querySelector('[data-act="google"]').onclick = async () => {
+
+  const login = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: location.origin },
     });
     if (error) toast(friendly(error));
   };
+  app.querySelectorAll('[data-act="google"]').forEach((b) => (b.onclick = login));
+  // Bukan link #anchor: router berbasis hash akan merender ulang halaman
+  app.querySelectorAll("[data-scroll]").forEach((b) => (b.onclick = () =>
+    document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: "smooth", block: "start" })));
+
+  // Gabung pakai kode: simpan kode, lalu login. Setelah kembali dari Google, router membuka persetujuan acara.
+  const form = app.querySelector("#lp-code");
+  const show = app.querySelector('[data-act="show-code"]');
+  if (show) show.onclick = () => {
+    form.hidden = !form.hidden;
+    show.setAttribute("aria-expanded", String(!form.hidden));
+    if (!form.hidden) form.querySelector("input").focus();
+  };
+  form.onsubmit = (e) => {
+    e.preventDefault();
+    const c = e.target.elements.code.value.trim().toUpperCase();
+    if (!c) return;
+    try { localStorage.setItem("pendingCode", c); } catch { /* abaikan */ }
+    login();
+  };
+
   const copy = app.querySelector('[data-act="copy"]');
   if (copy) copy.onclick = () => copyText(shareLink, {
     done: t("Link disalin. Tempel di Chrome/Safari."),
@@ -113,23 +117,31 @@ function renderLogin() {
 async function renderJoin(code) {
   let ev = null;
   try { ev = (await rpc("event_preview", { p_code: code }))[0] || null; } catch { /* tampilkan tanpa pratinjau */ }
+  const cover = ev?.cover_path ? ` style="background-image:url('${esc(coverUrl(ev.cover_path))}')"` : "";
   setView(el(`
-    <main class="center">
-      ${langSwitch()}
-      ${ev?.cover_path ? `<img class="join-cover" alt="${t("Sampul acara")}" src="${esc(coverUrl(ev.cover_path))}" />` : `<div class="logo">${badge("sparkle", "sun", "xl")}</div>`}
-      <h1>${ev ? esc(ev.name) : t("Masuk acara")}</h1>
-      ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
-      <p class="pill">${t("Kode:")} <b>${esc(code)}</b>${ev ? ` · ${t("{n} jepretan", { n: ev.max_shots })}` : ""}</p>
-      ${ev?.starts_at || ev?.ends_at ? `<p class="join-when">${ICON.calendar}<span>${esc(fmtRange(ev.starts_at, ev.ends_at))}</span></p>` : ""}
-      ${ev && !ev.is_open ? `<p class="hint">${t("Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.")}</p>` : ""}
-      <ul class="rules">
-        <li>${badge("film", "coral")}<div><b>${ev ? t("{n} jepretan", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Seperti satu gulungan film. Pilih momen terbaik.")}</span></div></li>
-        <li>${badge("lock", "grape")}<div><b>${t("Tanpa hapus, tanpa ulang")}</b><span>${t("Setiap jepretan langsung tercetak dan tidak bisa dilihat dulu.")}</span></div></li>
-        <li>${badge("sparkle", "mint")}<div><b>${t("Terbuka bersama")}</b><span>${t("Foto Anda tampil untuk semua peserta setelah film Anda habis atau acara ditutup.")}</span></div></li>
-      </ul>
-      <button class="btn primary big" data-act="yes">${t("Setuju dan masuk")}</button>
-      <button class="btn ghost" data-act="no">${t("Batal")}</button>
-      <p class="fine"><a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
+    <main class="join">
+      <div class="join-hero${cover ? " has-cover" : ""}"${cover} role="img" aria-label="${t("Sampul acara")}">
+        <button type="button" class="join-back" data-act="no" aria-label="${t("Kembali")}">${ICON.back}</button>
+        <div class="join-lang">${langSwitch()}</div>
+        <span class="join-code">${t("Kode")} ${esc(code)}</span>
+      </div>
+      <div class="join-body">
+        <div class="join-title">
+          <h1>${ev ? esc(ev.name) : t("Masuk acara")}</h1>
+          ${ev?.starts_at || ev?.ends_at ? `<span>${esc(fmtRange(ev.starts_at, ev.ends_at))}</span>` : ""}
+        </div>
+        ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
+        ${ev && !ev.is_open ? `<p class="hint">${t("Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.")}</p>` : ""}
+        <ul class="join-rules">
+          <li><span class="jr-ic coral jr-num">${ev ? ev.max_shots : ICON.film}</span><div><b>${ev ? t("{n} jepretan untukmu", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Nggak bisa dihapus, nggak bisa diulang.")}</span></div></li>
+          <li><span class="jr-ic sun">${ICON.clock}</span><div><b>${t("Hasil terlihat setelah film habis")}</b><span>${t("Seperti kamera film, fotonya dicuci dulu.")}</span></div></li>
+          <li><span class="jr-ic mint">${ICON.people}</span><div><b>${t("Masuk album bersama")}</b><span>${t("Semua tamu bisa melihat fotomu.")}</span></div></li>
+        </ul>
+        <div class="join-actions">
+          <button class="btn primary lp-big" data-act="yes">${t("Setuju dan mulai memotret")}</button>
+          <p class="fine">${t("Dengan masuk, kamu setuju foto dibagikan ke peserta acara.")} <a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
+        </div>
+      </div>
     </main>`));
   bindLangSwitch(app);
   app.querySelector('[data-act="no"]').onclick = () => {
@@ -155,80 +167,92 @@ async function renderJoin(code) {
 
 // ---------- Beranda: isian kode sebagai fokus, lalu acara di perangkat ini ----------
 async function renderHome() {
+  const meta = session.user.user_metadata || {};
+  const fullName = meta.full_name || meta.name || session.user.email.split("@")[0];
+  const first = fullName.split(/\s+/)[0];
   const view = el(`
-    <main class="page">
-      <header class="top">
-        <h1 class="brand">Disposable Asiig</h1>
-        <div class="row tight">
-          <a class="btn small" href="#/admin" data-admin hidden>Dashboard</a>
-          <button class="btn small ghost" data-act="logout">${t("Keluar")}</button>
-        </div>
+    <main class="home">
+      <header class="home-top">
+        <span class="home-brand">${brandLockup(34)}</span>
+        <button type="button" class="avatar-btn" data-act="account" aria-label="${t("Akun")}: ${esc(fullName)}" aria-haspopup="dialog">${initial(fullName)}</button>
       </header>
-      <form class="card join-hero">
-        <h2>${t("Masuk ke acara")}</h2>
-        <label class="join-label" for="join-code">${t("Kode acara")}</label>
-        <div class="code-row">
-          <input id="join-code" class="code-input" name="code" placeholder="ABC123" maxlength="12"
-                 autocapitalize="characters" autocomplete="off" spellcheck="false" required />
-          <button class="btn primary">${t("Masuk")}</button>
-        </div>
-        <p class="hint">${t("Kode 6 huruf ada di undangan. Atau scan QR undangan dengan kamera HP; linknya langsung membuka acara.")}</p>
+      <div class="home-hello">
+        <span>${t("Hai, {n}", { n: esc(first) })}</span>
+        <h1>${t("Mau ikut memotret di acara siapa?")}</h1>
+      </div>
+      <form class="home-join">
+        <label for="join-code">${t("Kode acara")}</label>
+        <input id="join-code" class="code-input" name="code" placeholder="ABC123" maxlength="12" aria-describedby="join-hint"
+               autocapitalize="characters" autocomplete="off" spellcheck="false" required />
+        <span id="join-hint" class="hint">${t("6 huruf atau angka dari penyelenggara")}</span>
+        <button class="btn primary lp-big">${t("Gabung")}</button>
+        <span class="home-scan">${ICON.scan}<span>${t("atau scan QR dengan kamera HP")}</span></span>
       </form>
-      <div class="creator-slot"></div>
-      <h2 class="section-title" hidden>${t("Acara di perangkat ini")}</h2>
-      <div class="events"><p class="hint">${t("Memuat…")}</p></div>
-      <p class="fine">${t("Masuk sebagai")} ${esc(session.user.email)} · <button class="linklike fine-link" data-act="privacy">${t("Data & privasi")}</button> · <a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
-      <div class="home-lang">${langSwitch()}</div>
+      <section class="home-events" hidden>
+        <h2>${t("Acaramu")}</h2>
+        <div class="events"></div>
+      </section>
+      <div class="events-empty empty-home" hidden><p>${t("Belum ada acara di perangkat ini.")}<br>${t("Masukkan kode di atas untuk mulai memotret.")}</p></div>
+      <p class="home-create" hidden>${t("Mau bikin acara sendiri?")} <button type="button" class="linklike" data-act="create">${t("Buat acara")}</button></p>
     </main>`);
   setView(view);
-  bindLangSwitch(view);
-  view.querySelector('[data-act="privacy"]').onclick = () => openPrivacy();
 
-  view.querySelector('[data-act="logout"]').onclick = async () => {
-    forgetJoined();
-    await supabase.auth.signOut();
+  // Menu akun: Dashboard, data & privasi, bahasa, keluar
+  let role = null;
+  view.querySelector('[data-act="account"]').onclick = () => {
+    const { box, close } = modal(`
+      <div class="account-menu">
+        <div class="am-head"><span class="avatar-btn">${initial(fullName)}</span><div><b>${esc(fullName)}</b><small>${esc(session.user.email)}</small></div></div>
+        <div class="sheet-actions">
+          ${role === "superadmin" || role === "creator" ? `<a class="btn" href="#/admin">${ICON.panel} Dashboard</a>` : ""}
+          <button class="btn" data-act="privacy">${ICON.shield} ${t("Data & privasi")}</button>
+          <a class="btn" href="/privacy.html">${ICON.lock} ${t("Kebijakan privasi")}</a>
+          <button class="btn danger" data-act="logout">${t("Keluar")}</button>
+        </div>
+        <div class="am-lang">${langSwitch()}</div>
+      </div>`);
+    bindLangSwitch(box);
+    box.querySelector('a[href="#/admin"]')?.addEventListener("click", close);
+    box.querySelector('[data-act="privacy"]').onclick = () => { close(); openPrivacy(); };
+    box.querySelector('[data-act="logout"]').onclick = async () => {
+      close();
+      forgetJoined();
+      await supabase.auth.signOut();
+    };
   };
-  view.querySelector("form.join-hero").onsubmit = (e) => {
+  view.querySelector("form.home-join").onsubmit = (e) => {
     e.preventDefault();
     renderJoin(e.target.elements.code.value.trim().toUpperCase());
   };
+  view.querySelector('[data-act="create"]').onclick = () => createEventDialog();
 
   try {
-    const [events, canCreate, role] = await Promise.all([
+    const [events, canCreate, myRole] = await Promise.all([
       rpc("my_events"), rpc("can_create_event"), rpc("my_role"),
     ]);
-    // Dashboard hanya untuk superadmin dan pembuat acara
-    view.querySelector("[data-admin]").hidden = !(role === "superadmin" || role === "creator");
+    role = myRole;
     const here = joinedHere();
     const shown = events.filter((ev) => ev.is_owner || here.includes(ev.event_id));
-    const box = view.querySelector(".events");
-    view.querySelector(".section-title").hidden = !shown.length;
-    box.replaceChildren(...(shown.length
-      ? shown.map((ev) => el(`
-          <a class="card event-item" href="#/e/${ev.event_id}">
-            <div>
-              <b>${esc(ev.name)}</b>
-              <small>${ev.is_owner ? `${t("Pemilik")} · ` : ""}${ev.is_open ? t("Terbuka") : t("Ditutup")}</small>
-            </div>
-            <span class="mini-counter" aria-label="${t("Sisa {n} dari {max} jepretan", { n: Math.max(0, ev.max_shots - ev.shots_used), max: ev.max_shots })}">${Math.max(0, ev.max_shots - ev.shots_used)}<small>/${ev.max_shots}</small></span>
-          </a>`))
-      : [el(`<div class="empty-home"><div class="logo">${badge("film", "coral", "lg")}</div><p>${t("Belum ada acara di perangkat ini.")}<br>${t("Masukkan kode di atas untuk mulai memotret.")}</p></div>`)]));
-
-    // Pembuat acara: buat dan kelola acara dari Dashboard
-    if (canCreate) {
-      const cta = el(`
-        <div class="card creator-cta">
-          <p><b>Anda pembuat acara.</b> Buat acara baru dan pantau jalannya acara dari Dashboard.</p>
-          <div class="row tight">
-            <button class="btn small primary" data-act="create">${ICON.plus} Buat acara</button>
-            <a class="btn small" href="#/admin/acara">Dashboard</a>
-          </div>
-        </div>`);
-      cta.querySelector('[data-act="create"]').onclick = () => createEventDialog();
-      view.querySelector(".creator-slot").append(cta);
-    }
+    view.querySelector(".home-events").hidden = !shown.length;
+    view.querySelector(".events-empty").hidden = shown.length > 0;
+    view.querySelector(".home-create").hidden = !canCreate;
+    view.querySelector(".events").replaceChildren(...shown.map((ev) => {
+      const left = Math.max(0, ev.max_shots - ev.shots_used);
+      const sub = ev.is_owner && !ev.shots_used ? t("Acara Anda")
+        : !ev.is_open ? t("Album")
+        : left > 0 ? t("{n} jepretan tersisa", { n: left }) : t("Film habis · lihat album");
+      const tag = ev.is_open ? `<span class="tag ok">${t("Berlangsung")}</span>` : `<span class="tag hot">${t("Album")}</span>`;
+      return el(`
+        <a class="home-event" href="#/e/${ev.event_id}${ev.is_open && left > 0 ? "" : "/album"}">
+          <span class="he-thumb" aria-hidden="true">${ICON.film}</span>
+          <span class="he-text"><b>${esc(ev.name)}</b><small>${sub}</small></span>
+          ${tag}
+        </a>`);
+    }));
   } catch (e) {
-    view.querySelector(".events").textContent = friendly(e);
+    const box = view.querySelector(".events-empty");
+    box.hidden = false;
+    box.textContent = friendly(e);
   }
 }
 
@@ -259,24 +283,31 @@ async function renderEvent(eventId, tab) {
   if (tab === "ucapan" && !status.is_member && !status.can_manage) tab = "album";
   if (tab === "kamera" && !status.is_member) tab = status.can_manage ? "panel" : "album"; // superadmin bukan peserta
 
+  const backHref = status.is_admin && !status.is_member ? "#/admin/acara" : "#/";
+  const tabLink = (id, href, icon, label) =>
+    `<a href="${href}" class="${tab === id ? "on" : ""}" ${tab === id ? 'aria-current="page"' : ""}>${icon}<span>${label}</span></a>`;
+  // Kamera: layar penuh tanpa tab bawah; album dibuka lewat satu tombol di samping shutter
+  const cam = tab === "kamera";
   const view = el(`
-    <main class="event${tab === "kamera" ? " cam-mode" : " wide"}">
-      ${status.cover_path ? `<div class="event-cover" style="background-image:url('${esc(coverUrl(status.cover_path))}')"></div>` : ""}
-      <header class="top">
-        <a class="back" href="${status.is_admin && !status.is_member ? "#/admin/acara" : "#/"}" aria-label="${t("Kembali")}">‹</a>
-        <h1>${esc(status.name)}</h1>
+    <main class="event${cam ? " cam-mode" : " wide"}">
+      <header class="top${cam ? " cam-top" : ""}">
+        <a class="back" href="${backHref}" aria-label="${t("Kembali")}">${ICON.back}</a>
+        ${cam
+          ? `<div class="cam-title"><small>${t("Acara")}</small><h1>${esc(status.name)}</h1></div>`
+          : `<span class="top-event">${esc(status.name)}</span>`}
       </header>
-      <nav class="tabs">
-        ${status.is_member ? `<a href="#/e/${eventId}" class="${tab === "kamera" ? "on" : ""}" ${tab === "kamera" ? 'aria-current="page"' : ""}>${ICON.camera}<span>${t("Kamera")}</span></a>` : ""}
-        <a href="#/e/${eventId}/album" class="${tab === "album" ? "on" : ""}" ${tab === "album" ? 'aria-current="page"' : ""}>${ICON.album}<span>${t("Album")}</span></a>
-        <a href="#/e/${eventId}/ucapan" class="${tab === "ucapan" ? "on" : ""}" ${tab === "ucapan" ? 'aria-current="page"' : ""}>${ICON.chat}<span>${t("Ucapan")}</span></a>
-        ${status.can_manage ? `<a href="#/e/${eventId}/panel" class="${tab === "panel" ? "on" : ""}" ${tab === "panel" ? 'aria-current="page"' : ""}>${ICON.panel}<span>Panel</span></a>` : ""}
-      </nav>
+      ${cam ? "" : `
+      <nav class="tabs" aria-label="${t("Navigasi tamu")}">
+        ${status.is_member ? tabLink("kamera", `#/e/${eventId}`, ICON.camTab, t("Kamera")) : ""}
+        ${tabLink("album", `#/e/${eventId}/album`, ICON.gridTab, t("Album"))}
+        ${tabLink("ucapan", `#/e/${eventId}/ucapan`, ICON.chatTab, t("Buku tamu"))}
+        ${status.can_manage ? tabLink("panel", `#/e/${eventId}/panel`, ICON.panelTab, "Panel") : ""}
+      </nav>`}
       <div class="tab-body"></div>
     </main>`);
   setView(view);
-  document.body.classList.add("has-bottom-nav");
-  document.body.classList.toggle("cam-page", tab === "kamera");
+  document.body.classList.toggle("has-bottom-nav", !cam);
+  document.body.classList.toggle("cam-page", cam);
   const body = view.querySelector(".tab-body");
   const go = (to) => { location.hash = `#/e/${eventId}${to === "kamera" ? "" : "/" + to}`; };
 

@@ -5,7 +5,7 @@ import QRCode from "qrcode";
 import { rpc, friendly } from "./supabase.js";
 import { getUrls } from "./storage.js";
 import { filmName } from "./film.js";
-import { el, esc, toast, ICON } from "./ui.js";
+import { el, esc, toast, ICON, brandMark } from "./ui.js";
 
 const POLL_MS = 20000;
 const URL_TTL = 50 * 60 * 1000; // URL bertanda tangan berlaku 1 jam; perbarui sebelum habis
@@ -17,8 +17,13 @@ export async function renderSlideshow(root, status, { exit }) {
   const view = el(`
     <section class="slideshow" tabindex="-1">
       <div class="show-stage">
-        <img class="show-img a" alt="" />
-        <img class="show-img b" alt="" />
+        <div class="show-polaroid" hidden>
+          <div class="show-photo">
+            <img class="show-img a" alt="" />
+            <img class="show-img b" alt="" />
+          </div>
+          <div class="show-caption" aria-live="polite"></div>
+        </div>
       </div>
       <div class="show-empty" hidden>
         <canvas class="show-qr-big" aria-label="Kode QR undangan"></canvas>
@@ -26,11 +31,10 @@ export async function renderSlideshow(root, status, { exit }) {
         <p>Scan untuk ikut memotret. Foto muncul di layar ini setelah film tamu habis.</p>
         <p class="show-code-big">${esc(status.join_code)}</p>
       </div>
-      <div class="show-title"><b>${esc(status.name)}</b><span class="show-count"></span></div>
-      <div class="show-caption" aria-live="polite"></div>
+      <div class="show-title">${brandMark(40, { dark: true })}<div><b>${esc(status.name)}</b><span class="show-count"></span></div></div>
       <div class="show-qr-card">
-        <canvas class="show-qr" aria-label="Kode QR undangan"></canvas>
-        <div><b>Ikut memotret</b><span>Scan atau kode</span><span class="show-code">${esc(status.join_code)}</span></div>
+        <canvas class="show-qr" aria-label="Kode QR untuk ikut memotret"></canvas>
+        <div><b>Ikut memotret</b><span>Scan atau masukkan kode</span><span class="show-code">${esc(status.join_code)}</span></div>
       </div>
       <div class="show-controls">
         <button class="btn small" data-act="exit">‹ Keluar</button>
@@ -74,7 +78,9 @@ export async function renderSlideshow(root, status, { exit }) {
     for (const id of known) if (!ids.has(id)) photos.delete(id);
     order = rows.map((r) => r.photo_id);
     if (!first) for (const r of rows) if (!known.has(r.photo_id)) fresh.push(r.photo_id);
-    view.querySelector(".show-count").textContent = `${rows.length.toLocaleString("id-ID")} foto`;
+    const guests = new Set(rows.map((r) => r.owner_name).filter(Boolean)).size;
+    view.querySelector(".show-count").textContent =
+      `${rows.length.toLocaleString("id-ID")} foto${guests ? ` dari ${guests.toLocaleString("id-ID")} tamu` : ""}`;
     view.querySelector(".show-empty").hidden = rows.length > 0;
     view.querySelector(".show-qr-card").hidden = rows.length === 0;
     await urlFor(rows.slice(0, 60).map((r) => r.medium_path)).catch(() => {});
@@ -99,13 +105,18 @@ export async function renderSlideshow(root, status, { exit }) {
         back.src = urls.get(r.medium_path).url;
         await back.decode();
         if (stopped) return;
+        // Bingkai polaroid mengikuti bentuk foto (tegak atau mendatar)
+        const frame = view.querySelector(".show-polaroid");
+        frame.hidden = false;
+        if (back.naturalWidth) frame.style.setProperty("--ar", `${back.naturalWidth} / ${back.naturalHeight}`);
         back.classList.add("on");
         imgs[front].classList.remove("on");
         front = 1 - front;
         const who = r.owner_name ? esc(r.owner_name) : "";
-        const film = r.film ? `Film ${esc(filmName(r.film))}` : "";
+        const time = r.taken_at ? new Date(r.taken_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : "";
+        const film = r.film ? esc(filmName(r.film)) : "";
         view.querySelector(".show-caption").innerHTML =
-          `${n.isNew ? `<span class="tag ok">baru</span>` : ""}${[who, film].filter(Boolean).join(" · ")}`;
+          `${n.isNew ? `<span class="tag ok">baru</span>` : ""}<span>${[who, time].filter(Boolean).join(" · ")}</span>${film ? `<small>${film}</small>` : ""}`;
         // Siapkan URL beberapa foto berikutnya
         const ahead = order.slice(pos, pos + 5).map((id) => photos.get(id)?.medium_path).filter(Boolean);
         urlFor(ahead).catch(() => {});

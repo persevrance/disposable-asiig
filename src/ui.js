@@ -222,7 +222,24 @@ Object.assign(ICON, {
   grid: svg('<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>', 18),
   download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', 18),
   trash: svg('<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>', 18),
+  // Ikon desain Jepretin
+  back: svg('<path d="M15 18l-6-6 6-6"/>'),
+  close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
+  scan: svg('<path d="M3 7V4h3M17 4h3v3M21 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1"/>', 20),
+  clock: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  people: svg('<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 4.5a3.5 3.5 0 0 1 0 7M21.5 20a6.5 6.5 0 0 0-4-6"/>'),
+  bolt: svg('<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>', 24),
+  flip: svg('<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/>'),
+  more: `<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>`,
+  moreV: `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`,
+  camTab: svg('<rect x="3" y="6" width="18" height="14" rx="3"/><circle cx="12" cy="13" r="3.5"/>', 24),
+  gridTab: svg('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>', 24),
+  chatTab: svg('<path d="M4 5h16v11H8l-4 4z"/>', 24),
+  panelTab: svg('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>', 24),
 });
+
+// Lingkaran inisial nama (avatar sederhana tanpa foto)
+export const initial = (name) => esc(((name || "?").trim()[0] || "?").toUpperCase());
 
 // CSV untuk Excel/Sheets: pemisah koma, UTF-8 dengan BOM. rows: array objek, cols: [[kunci, judul]]
 export function downloadCsv(name, cols, rows) {
@@ -253,15 +270,22 @@ export const badge = (name, tone = "coral", size = "") =>
   `<span class="icon-badge ${tone} ${size}" aria-hidden="true">${ICON[name]}</span>`;
 
 // Logo aplikasi (sama dengan public/icon.svg, tanpa latar)
-export const BRAND = `<svg viewBox="40 90 432 340" width="96" height="76" aria-hidden="true">
-  <defs><linearGradient id="brand-g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff5c8a"/><stop offset="1" stop-color="#ff9a5c"/></linearGradient></defs>
-  <rect x="72" y="150" width="368" height="248" rx="48" fill="url(#brand-g)"/>
-  <rect x="112" y="116" width="100" height="52" rx="16" fill="#ff5c8a"/>
-  <rect x="330" y="124" width="64" height="40" rx="12" fill="#ffc23c"/>
-  <circle cx="290" cy="274" r="88" fill="#fff"/>
-  <circle cx="290" cy="274" r="64" fill="#2d1b33"/>
-  <circle cx="268" cy="252" r="16" fill="#fff" opacity=".85"/>
-  <rect x="112" y="200" width="60" height="30" rx="10" fill="#fff7ec"/>
-  <circle cx="440" cy="110" r="12" fill="#2ec4a0"/>
-  <circle cx="60" cy="410" r="9" fill="#b48cff"/>
+// Logo Jepretin: kamera sekali pakai (jendela bidik, lampu flash koral, lensa bulat).
+// dark = versi untuk latar gelap (badan krem, detail ungu tua).
+export function brandMark(size = 42, { dark = false, label = "" } = {}) {
+  const body = dark ? "#FFF8F0" : "#2D1B33";
+  const cut = dark ? "#2D1B33" : "#FFF8F0";
+  const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
+  return `<svg class="brand-mark${dark ? " on-dark" : ""}" width="${size}" height="${size}" viewBox="0 0 64 64" ${a11y}>
+  <rect x="44" y="9" width="9" height="7" rx="2" fill="${body}"/>
+  <rect x="4" y="14" width="56" height="38" rx="10" fill="${body}"/>
+  <rect x="10" y="20" width="11" height="7" rx="2.5" fill="${cut}"/>
+  <rect x="42" y="20" width="12" height="7" rx="2.5" fill="#FF5C8A"/>
+  <circle cx="32" cy="35" r="11.5" fill="${cut}"/>
+  <circle cx="32" cy="35" r="6.5" fill="${body}"/>
+  <circle cx="29.5" cy="32.5" r="1.8" fill="${cut}"/>
 </svg>`;
+}
+// Logo + wordmark huruf kecil
+export const brandLockup = (size = 40, opts) =>
+  `<span class="brand-lockup">${brandMark(size, opts)}<span class="wordmark">jepretin</span></span>`;

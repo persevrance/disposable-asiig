@@ -32,25 +32,29 @@ export async function renderAlbum(root, status) {
 
   const view = el(`
     <section class="album">
-      <div class="keep-slot"></div>
-      <div class="notify-slot"></div>
-      <div class="album-progress" hidden></div>
-      <button class="new-pill" hidden></button>
+      <div class="page-head">
+        <div class="ph-text">
+          <h1>${t("Album")}</h1>
+          <span>${esc(status.name)}</span>
+        </div>
+        <div class="album-bar ph-actions">
+          <button class="round-btn" data-act="collage" aria-label="${t("Kolase")}" title="${t("Kolase")}">${ICON.grid}</button>
+          <button class="round-btn" data-act="select" aria-label="${t("Pilih untuk unduh")}" title="${t("Pilih untuk unduh")}">${ICON.download}</button>
+        </div>
+      </div>
       <div class="album-filter" hidden>
         <div class="chips" role="group" aria-label="${t("Saring album")}">
           <button type="button" class="chip" data-f="all" aria-pressed="true">${t("Semua")}</button>
           ${status.is_member ? `<button type="button" class="chip" data-f="mine" aria-pressed="false">${t("Foto saya")}</button>` : ""}
-          <button type="button" class="chip" data-f="fav" aria-pressed="false">${ICON.heart}<span>${t("Favorit")}</span></button>
+          <button type="button" class="chip" data-f="fav" aria-pressed="false">${t("Favorit")}</button>
+          <select class="chip owner-filter" aria-label="${t("Foto dari tamu")}" hidden></select>
         </div>
-        <select class="owner-filter" aria-label="${t("Foto dari tamu")}" hidden></select>
       </div>
-      <div class="album-bar">
-        <span class="dl-quota"></span>
-        <span class="row tight">
-          <button class="btn small" data-act="collage">${ICON.grid}<span>${t("Kolase")}</span></button>
-          <button class="btn small" data-act="select">${t("Pilih untuk unduh")}</button>
-        </span>
-      </div>
+      <div class="album-progress" hidden></div>
+      <div class="keep-slot"></div>
+      <div class="notify-slot"></div>
+      <p class="dl-quota"></p>
+      <button class="new-pill" hidden></button>
       <div class="grid"></div>
       <div class="sentinel"></div>
       <div class="empty" hidden></div>
@@ -81,16 +85,14 @@ export async function renderAlbum(root, status) {
     if (!progress) return;
     const reveal = status.reveal_at && new Date(status.reveal_at) > new Date();
     const mine = status.is_member && progress.my_used !== null && progress.my_used !== undefined;
-    const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
     progressEl.hidden = false;
+    // Strip ringkas: "Gulunganmu 30/30 · 18 dari 42 tamu sudah habis filmnya"
+    progressEl.title = reveal ? t("Semua foto terbuka {d}.", { d: fmtDate(status.reveal_at) })
+      : t("Foto setiap tamu muncul di sini setelah filmnya habis atau acara ditutup.");
     progressEl.innerHTML = `
-      ${mine ? `
-      <div class="ap-row"><b>${t("Gulungan Anda")}</b><span>${t("{a} dari {b} jepretan", { a: progress.my_used, b: progress.max_shots })}</span></div>
-      <div class="bar"><span style="width:${pct(progress.my_used, progress.max_shots)}%"></span></div>` : ""}
-      <div class="ap-row"><b>${t("Tamu yang filmnya habis")}</b><span>${t("{a} dari {b}", { a: progress.rolls_done, b: progress.members })}</span></div>
-      <div class="bar mint"><span style="width:${pct(progress.rolls_done, progress.members)}%"></span></div>
-      <small>${reveal ? esc(t("Semua foto terbuka {d}.", { d: fmtDate(status.reveal_at) }))
-        : t("Foto setiap tamu muncul di sini setelah filmnya habis atau acara ditutup.")}</small>`;
+      ${mine ? `<b>${t("Gulunganmu {a}/{b}", { a: progress.my_used, b: progress.max_shots })}</b>` : ""}
+      <span>${mine ? "· " : ""}${t("{a} dari {b} tamu sudah habis filmnya", { a: progress.rolls_done, b: progress.members })}</span>
+      ${reveal ? `<small>${esc(t("Semua foto terbuka {d}.", { d: fmtDate(status.reveal_at) }))}</small>` : ""}`;
     renderKeepCard();
     renderNotify();
   }
@@ -199,7 +201,7 @@ export async function renderAlbum(root, status) {
     try { owners = await rpc("album_owners", { p_event: status.event_id }); } catch { /* database lama: tanpa saringan tamu */ }
     ownerSel.hidden = owners.length < 2;
     if (ownerSel.hidden) return;
-    ownerSel.innerHTML = `<option value="">${t("Semua tamu")}</option>` + owners.map((o) =>
+    ownerSel.innerHTML = `<option value="">${t("Per tamu")}</option>` + owners.map((o) =>
       `<option value="${o.user_id}" ${o.user_id === filter.owner ? "selected" : ""}>${esc(o.name)} (${o.photos})</option>`).join("");
   }
   function reload() {
@@ -358,7 +360,7 @@ export async function renderAlbum(root, status) {
         endReached = false;
         if (window.scrollY > 300) {
           freshCount += fresh.length;
-          pill.textContent = `↑ ${t("{n} foto baru", { n: freshCount })}`;
+          pill.textContent = t("{n} foto baru", { n: freshCount });
           pill.hidden = false;
         }
         loadOwners();
@@ -497,20 +499,20 @@ export async function renderAlbum(root, status) {
     const box = el(`
       <div class="lightbox" role="dialog" aria-modal="true" aria-label="${t("Penampil foto")}">
         <div class="lb-top">
+          <button class="lb-icon" data-act="close" aria-label="${t("Tutup")}">${ICON.close}</button>
           <span class="lb-count"></span>
-          <button class="lb-icon" data-act="close" aria-label="${t("Tutup")}">×</button>
+          ${status.can_manage ? `<span class="lb-icon-gap"></span>` : `<button class="lb-icon" data-act="report" aria-label="${t("Laporkan foto")}" title="${t("Laporkan foto")}">${ICON.flag}</button>`}
         </div>
-        <div class="lb-stage"><img class="lb-img" alt="" draggable="false" /></div>
-        <button class="lb-nav prev" data-act="prev" aria-label="${t("Foto sebelumnya")}">‹</button>
-        <button class="lb-nav next" data-act="next" aria-label="${t("Foto berikutnya")}">›</button>
+        <div class="lb-frame"><div class="lb-stage"><img class="lb-img" alt="" draggable="false" /></div></div>
+        <button class="lb-nav prev" data-act="prev" aria-label="${t("Foto sebelumnya")}">${ICON.back}</button>
+        <button class="lb-nav next" data-act="next" aria-label="${t("Foto berikutnya")}">${ICON.back}</button>
         <div class="lb-bar">
-          <span class="lb-info"><span class="lb-who"></span><small class="lb-film"></small></span>
-          <span class="lb-actions">
-            <button class="btn small icon-btn lb-fav" data-act="fav" aria-pressed="false" aria-label="${t("Favorit")}">${ICON.heart}</button>
-            <button class="btn small" data-act="dl"></button>
-            ${status.can_manage ? `<button class="btn small" data-act="hide"></button>` : ""}
-            ${status.can_manage ? "" : `<button class="btn small icon-btn" data-act="report" aria-label="${t("Laporkan foto")}" title="${t("Laporkan foto")}">${ICON.flag}</button>`}
-          </span>
+          <div class="lb-info"><span class="lb-avatar" aria-hidden="true"></span><span><b class="lb-who"></b><small class="lb-film"></small></span></div>
+          <div class="lb-actions">
+            <button class="lb-btn lb-fav" data-act="fav" aria-pressed="false">${ICON.heart}<span>${t("Favorit")}</span></button>
+            <button class="lb-btn light" data-act="dl"></button>
+            ${status.can_manage ? `<button class="lb-btn wide" data-act="hide"></button>` : ""}
+          </div>
         </div>
       </div>`);
     const stage = box.querySelector(".lb-stage");
@@ -527,11 +529,17 @@ export async function renderAlbum(root, status) {
       const list = order();
       const idx = list.indexOf(id);
       box.querySelector(".lb-count").textContent = `${idx + 1} / ${list.length}${endReached ? "" : "+"}`;
-      box.querySelector(".lb-who").textContent = `${label(r)} · ${fmtDate(r.taken_at)}`;
-      box.querySelector(".lb-film").textContent = r.film ? t("Film {f}", { f: t(filmName(r.film)) }) : "";
+      const who = r.owner_name || t("Tamu");
+      box.querySelector(".lb-avatar").textContent = who.trim()[0]?.toUpperCase() || "?";
+      box.querySelector(".lb-who").textContent = who;
+      box.querySelector(".lb-film").textContent = [
+        r.seq ? t("Jepretan {a}/{b}", { a: r.seq, b: status.max_shots }) : "",
+        fmtDate(r.taken_at),
+        r.film ? t("Efek {f}", { f: t(filmName(r.film)) }) : "",
+      ].filter(Boolean).join(" · ");
       box.querySelector('[data-act="prev"]').disabled = idx <= 0;
       box.querySelector('[data-act="next"]').disabled = idx >= list.length - 1 && endReached;
-      box.querySelector('[data-act="dl"]').textContent = r.is_mine || r.downloaded || unlimited() ? t("Unduh") : t("Unduh (1 kuota)");
+      box.querySelector('[data-act="dl"]').innerHTML = `${ICON.download}<span>${r.is_mine || r.downloaded || unlimited() ? t("Simpan") : t("Simpan (1 kuota)")}</span>`;
       favBtn.setAttribute("aria-pressed", String(Boolean(r.is_fav)));
       favBtn.setAttribute("aria-label", r.is_fav ? t("Hapus dari favorit") : t("Tambah ke favorit"));
       favBtn.classList.toggle("on", Boolean(r.is_fav));

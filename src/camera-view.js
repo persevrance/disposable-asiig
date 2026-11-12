@@ -1,17 +1,18 @@
 // Tab Kamera: jendela bidik, flash, shutter, penghitung sisa jatah
 import {
   openCamera, stopCamera, grabFrame, captureFromCanvas, captureFromFile, CAMERA_HELP,
-  cameraCount, hasTorch, setTorch, grabSmall,
+  cameraCount, hasTorch, setTorch,
 } from "./camera.js";
-import { FILMS, filmName, applyFilm } from "./film.js";
+import { FILMS, filmName } from "./film.js";
 import { shoot, flushQueue } from "./shoot.js";
 import { queue } from "./queue.js";
 import { rpc, friendly, errorCode } from "./supabase.js";
+import { pushSupport, enableAlbumNotify, albumNotifyOn } from "./push.js";
 import { el, esc, toast, confetti, modal, fmtDate, ICON, badge } from "./ui.js";
 import { t } from "./i18n.js";
 
-const ICON_FLIP = `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><path d="M9.5 13.5a3 3 0 0 1 5-2.2M14.5 11.3V9.5h-1.8M14.5 12.5a3 3 0 0 1-5 2.2M9.5 14.7v1.8h1.8"/></svg>`;
-const ICON_FLASH = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>`;
+// Gulungan film untuk layar "Film habis"
+const ROLL_ART = `<svg width="84" height="84" viewBox="0 0 64 64" aria-hidden="true"><circle cx="26" cy="32" r="20" fill="#2D1B33"/><circle cx="26" cy="32" r="7" fill="#FFF8F0"/><circle cx="26" cy="18" r="3" fill="#FFF8F0"/><circle cx="26" cy="46" r="3" fill="#FFF8F0"/><circle cx="12" cy="32" r="3" fill="#FFF8F0"/><circle cx="40" cy="32" r="3" fill="#FFF8F0"/><path d="M26 52h32v-8H34" fill="none" stroke="#D6336C" stroke-width="4" stroke-linecap="round"/></svg>`;
 const ICON_SOUND = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path class="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/><path class="mute" d="m16 9 6 6M22 9l-6 6"/></svg>`;
 
 const FLASH_KEY = "flashOn";
@@ -72,12 +73,10 @@ export async function renderCamera(root, status, go) {
       <div class="viewfinder">
         <canvas class="vf-canvas"></canvas>
         <div class="vf-top">
-          <button class="film-badge" data-act="film"></button>
-          <span class="vf-right">
-            <button class="vf-btn icon-only" data-act="sound" aria-pressed="true" aria-label="${t("Suara rana")}">${ICON_SOUND}</button>
-            <button class="vf-btn" data-act="flash" aria-pressed="false" hidden>${ICON_FLASH}<span>${t("Mati")}</span></button>
-          </span>
+          <button class="vf-btn icon-only" data-act="sound" aria-pressed="true" aria-label="${t("Suara rana")}">${ICON_SOUND}</button>
+          <button class="vf-btn icon-only" data-act="flip" aria-label="${t("Tukar kamera")}" disabled>${ICON.flip}</button>
         </div>
+        <div class="film-chips" role="group" aria-label="${t("Efek film")}"></div>
         <div class="vf-diag" hidden></div>
         <div class="vf-placeholder">
           <p>${t("Kamera belum dibuka.")}</p>
@@ -90,15 +89,20 @@ export async function renderCamera(root, status, go) {
         <div class="developing" hidden>${t("Mencuci foto…")}</div>
         <div class="flash"></div>
       </div>
-      <div class="controls">
-        <button class="ctl" data-act="flip" aria-label="${t("Balik kamera")}" disabled>${ICON_FLIP}</button>
-        <button class="shutter" data-act="shoot" aria-label="${t("Jepret")}" disabled></button>
-        <div class="ctl counter" aria-live="polite"><b>--</b><small>${t("sisa")}</small></div>
-      </div>
       <p class="cam-hint" aria-live="polite"></p>
       <p class="queue-note" hidden></p>
+      <div class="controls">
+        <a class="album-thumb" href="#/e/${status.event_id}/album" aria-label="${t("Buka album")}">${ICON.gridTab}</a>
+        <button class="shutter" data-act="shoot" aria-label="${t("Jepret")}" disabled><span></span></button>
+        <button class="ctl flash-btn" data-act="flash" aria-pressed="false" aria-label="Flash" disabled>${ICON.bolt}</button>
+      </div>
+      <div class="counter" aria-live="polite"><b>--</b><small>${t("sisa jepretan")}</small></div>
     </section>`);
   root.replaceChildren(view);
+  // Penghitung sisa tampil di kanan atas, sebaris dengan nama acara
+  const counterBox = view.querySelector(".counter");
+  const head = root.closest(".event")?.querySelector(".top");
+  if (head) head.append(counterBox);
 
   // Video dibuat langsung (bukan dari <template>) dan hanya dipakai sebagai sumber gambar.
   // Yang tampil di layar adalah canvas yang digambar ulang tiap frame: cara ini tetap
@@ -119,12 +123,12 @@ export async function renderCamera(root, status, go) {
   const flip = view.querySelector('[data-act="flip"]');
   const flashBtn = view.querySelector('[data-act="flash"]');
   const developing = view.querySelector(".developing");
-  const counter = view.querySelector(".counter b");
+  const counter = counterBox.querySelector("b");
   const note = view.querySelector(".queue-note");
   const hint = view.querySelector(".cam-hint");
   const fileLabel = view.querySelector(".file-fallback");
   const fileInput = fileLabel.querySelector("input");
-  const filmBtn = view.querySelector('[data-act="film"]');
+  const filmChips = view.querySelector(".film-chips");
   const soundBtn = view.querySelector('[data-act="sound"]');
   function updateSoundBtn() {
     soundBtn.setAttribute("aria-pressed", String(soundOn));
@@ -139,57 +143,24 @@ export async function renderCamera(root, status, go) {
     const mine = loadFilm(status.event_id);
     return FILMS[mine] ? mine : status.film || "asli";
   }
+  // Chip efek film di bawah jendela bidik. Tanpa izin memilih: satu label efek bawaan.
   function updateFilmBtn() {
-    filmBtn.innerHTML = `${ICON.film}<span>${esc(t(filmName(currentFilm())))}</span>${status.allow_film_choice ? ICON.chevronDown : ""}`;
-    filmBtn.disabled = !status.allow_film_choice;
-    filmBtn.setAttribute("aria-label", status.allow_film_choice ? t("Efek film: {f}. Ketuk untuk mengganti", { f: t(filmName(currentFilm())) }) : t("Efek film: {f}", { f: t(filmName(currentFilm())) }));
-  }
-  filmBtn.onclick = () => { if (status.allow_film_choice) openFilmPicker(); };
-
-  // Lembar pemilih dengan pratinjau dari gambar kamera saat ini
-  function openFilmPicker() {
-    const sample = grabSmall(video);
-    const sheet = el(`
-      <div class="sheet" role="dialog" aria-modal="true" aria-label="${t("Pilih efek film")}">
-        <div class="sheet-card">
-          <div class="sheet-head"><h3>${t("Pilih efek film")}</h3><button class="btn small" data-act="close">${t("Tutup")}</button></div>
-          <p class="hint">${t("Efek langsung tercetak di foto dan tidak bisa diubah setelah dijepret. Boleh ganti kapan saja untuk jepretan berikutnya.")}</p>
-          <div class="film-list"></div>
-        </div>
-      </div>`);
-    const list = sheet.querySelector(".film-list");
     const now = currentFilm();
-    for (const [id, f] of Object.entries(FILMS)) {
-      const item = el(`
-        <button class="film-item${id === now ? " on" : ""}" data-id="${id}" aria-pressed="${id === now}">
-          <span class="film-thumb"></span>
-          <b>${esc(t(f.name))}</b>
-          <small>${esc(t(f.desc))}</small>
-          ${id === status.film ? `<span class="tag">${t("bawaan acara")}</span>` : ""}
-        </button>`);
-      const thumb = item.querySelector(".film-thumb");
-      if (sample) {
-        const c = document.createElement("canvas");
-        c.width = sample.width; c.height = sample.height;
-        const ctx = c.getContext("2d");
-        if (mirrorPreview()) { ctx.translate(c.width, 0); ctx.scale(-1, 1); }
-        ctx.drawImage(sample, 0, 0);
-        applyFilm(c, id);
-        thumb.append(c);
-      } else thumb.classList.add("film-swatch", `fs-${id}`);
-      item.onclick = () => {
-        saveFilm(status.event_id, id);
-        updateFilmBtn();
-        close();
-        toast(t("Efek film: {f}", { f: t(f.name) }));
-      };
-      list.append(item);
+    if (!status.allow_film_choice) {
+      filmChips.innerHTML = now && now !== "asli"
+        ? `<span class="film-chip static">${esc(t("Efek: {f}", { f: t(filmName(now)) }))}</span>` : "";
+      return;
     }
-    const close = () => sheet.remove();
-    sheet.querySelector('[data-act="close"]').onclick = close;
-    sheet.onclick = (e) => { if (e.target === sheet) close(); };
-    document.body.append(sheet);
+    filmChips.innerHTML = Object.entries(FILMS).map(([id, f]) =>
+      `<button type="button" class="film-chip" data-id="${id}" aria-pressed="${id === now}" title="${esc(t(f.desc))}">${esc(t(f.name))}</button>`).join("");
+    filmChips.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "center" });
   }
+  filmChips.onclick = (e) => {
+    const b = e.target.closest("button.film-chip");
+    if (!b || !status.allow_film_choice) return;
+    saveFilm(status.event_id, b.dataset.id);
+    updateFilmBtn();
+  };
 
   // Pengaturan efektif dari server (global + per acara)
   const mirrorPreview = () => facing === "user" && status.mirror_preview;
@@ -236,27 +207,71 @@ export async function renderCamera(root, status, go) {
     note.textContent = t("{n} foto tersimpan di HP dan akan terkirim otomatis saat ada sinyal.", { n: waiting });
     const blocked = status.blocked || !status.is_open || left <= 0;
     shutter.disabled = busy || blocked || (!stream && fileLabel.hidden);
-    if (left <= 0 && !status.blocked) showDone(t("Film habis"), t("Gulungan Anda selesai. Foto Anda akan tampil di album bersama peserta lain."), true);
+    if (left <= 0 && !status.blocked) showDone(t("Film habis!"), t("Gulunganmu sudah dicuci dan masuk ke album bersama."), true);
     else if (!status.is_open) showDone(t("Acara ditutup"), t("Pemotretan sudah selesai."));
     else if (status.blocked) showDone(t("Akses dihentikan"), t("Pemilik acara menghentikan akses Anda."));
   }
 
+  // Layar selesai (desain "Film habis"): latar terang, progres gulungan tamu lain, kabar album
   let done = false;
-  function showDone(title, text, party = false) {
+  async function showDone(title, text, party = false) {
     if (done) return;
     done = true;
     cancelAnimationFrame(raf);
     setTorch(stream, false);
     stopCamera(stream); stream = null;
+    const ev = root.closest(".event");
+    ev?.classList.remove("cam-mode");
+    ev?.classList.add("cam-done");
+    document.body.classList.remove("cam-page");
+    counterBox.remove();
     view.replaceChildren(el(`
       <div class="done">
-        <div class="film-icon">${badge(party ? "sparkle" : "film", party ? "sun" : "coral", "xl")}</div>
-        <h2>${esc(title)}</h2>
-        <p>${esc(text)}</p>
-        <button class="btn primary">${t("Lihat album")}</button>
+        ${party ? `<div class="confetti-dots" aria-hidden="true"><i></i><i></i><i></i><i></i></div>` : ""}
+        <div class="done-art">${party ? ROLL_ART : badge("film", "coral", "xl")}</div>
+        <div class="done-text">
+          ${party ? `<span class="done-count">${status.max_shots} / ${status.max_shots}</span>` : ""}
+          <h2>${esc(title)}</h2>
+          <p>${esc(text)}</p>
+        </div>
+        <div class="done-progress" hidden></div>
+        <div class="done-actions">
+          <button class="btn primary lp-big" data-act="album">${t("Lihat album")}</button>
+          <button class="btn lp-big" data-act="notify" hidden>${ICON.bell}<span>${t("Kabari saya saat album lengkap")}</span></button>
+          <a class="done-link" href="#/e/${status.event_id}/ucapan">${t("Tulis ucapan di buku tamu")}</a>
+        </div>
       </div>`));
-    view.querySelector("button").onclick = () => go("album");
+    view.querySelector('[data-act="album"]').onclick = () => go("album");
     if (party) confetti();
+
+    // Progres gulungan tamu lain
+    try {
+      const p = await rpc("album_progress", { p_event: status.event_id });
+      if (p?.members) {
+        const box = view.querySelector(".done-progress");
+        const pct = Math.round((p.rolls_done / p.members) * 100);
+        box.innerHTML = `
+          <div class="ap-row"><b>${t("Gulungan tamu yang sudah habis")}</b><span>${t("{a} dari {b}", { a: p.rolls_done, b: p.members })}</span></div>
+          <div class="bar mint"><span style="width:${pct}%"></span></div>
+          <small>${t("Foto tamu lain muncul begitu film mereka habis.")}</small>`;
+        box.hidden = false;
+      }
+    } catch { /* tanpa progres */ }
+
+    // Kabari saat album lengkap (notifikasi browser), hanya bila didukung dan belum aktif
+    const revealed = status.reveal_at && new Date(status.reveal_at) <= new Date();
+    if (status.is_open && !revealed && pushSupport() === "ok" && !(await albumNotifyOn(status.event_id))) {
+      const nb = view.querySelector('[data-act="notify"]');
+      nb.hidden = false;
+      nb.onclick = async () => {
+        nb.disabled = true;
+        try {
+          await enableAlbumNotify(status.event_id);
+          toast(t("Siap. Anda akan dikabari saat album terbuka."));
+          nb.hidden = true;
+        } catch (err) { toast(err?.message?.length < 120 ? err.message : friendly(err)); nb.disabled = false; }
+      };
+    }
   }
 
   // ---- Flash ----
@@ -265,13 +280,19 @@ export async function renderCamera(root, status, go) {
     if (!status.flash_enabled || !stream) return false;
     return facing === "user" || hasTorch(stream);
   }
+  // Tombol flash selalu di kanan shutter. Redup bila belum bisa dipakai; slotnya tetap ada
+  // (tak terlihat) bila acara mematikan flash, supaya shutter tetap di tengah.
   function updateFlashBtn() {
     const avail = flashAvailable();
-    flashBtn.hidden = !avail;
-    flashBtn.setAttribute("aria-pressed", String(flashOn));
-    flashBtn.classList.toggle("on", flashOn);
-    flashBtn.querySelector("span").textContent = flashOn ? t("Nyala") : t("Mati");
-    flashBtn.title = facing === "user" ? t("Flash layar") : "Flash";
+    const on = flashOn && avail;
+    flashBtn.style.visibility = status.flash_enabled ? "" : "hidden";
+    flashBtn.disabled = !avail;
+    flashBtn.setAttribute("aria-pressed", String(on));
+    flashBtn.classList.toggle("on", on);
+    const name = facing === "user" ? t("Flash layar") : "Flash";
+    const state = !stream ? t("buka kamera dulu") : !avail ? t("tidak didukung kamera ini") : on ? t("nyala") : t("mati");
+    flashBtn.setAttribute("aria-label", `${name}: ${state}`);
+    flashBtn.title = `${name}: ${state}`;
   }
   flashBtn.onclick = () => {
     flashOn = !flashOn;

@@ -11,7 +11,7 @@ import { renderReports } from "./moderation.js";
 import { attachZoom } from "./zoom.js";
 import {
   el, esc, toast, fmtDate, toLocalInput, fromLocalInput, download, safeName, modal,
-  confirmDialog, typeToConfirm, copyText, actionSheet, ICON, fmtRange, downloadCsv,
+  confirmDialog, typeToConfirm, copyText, actionSheet, ICON, fmtRange, downloadCsv, initial,
 } from "./ui.js";
 
 export const RESOLUTIONS = [1280, 1600, 2048, 2560, 3264, 4096];
@@ -65,28 +65,26 @@ export async function renderPanel(root, status, { reload, home }) {
     <section class="panel">
       ${status.is_admin && !status.is_owner ? `<p class="pill admin-pill">Anda mengelola acara ini sebagai superadmin</p>` : ""}
 
-      <div class="card status-card">
+      <div class="status-card">
         <div class="status-head">
-          <div>
-            <span class="tag ${status.is_open ? "ok" : ""}">${status.is_open ? "Terbuka untuk memotret" : endedBySchedule ? "Selesai sesuai jadwal" : "Ditutup"}</span>
-            <h3>${esc(status.name)}</h3>
-            ${when ? `<small class="when">${ICON.calendar}<span>${esc(when)}</span></small>` : ""}
-          </div>
-          <button class="switch" role="switch" aria-checked="${status.is_open}" data-act="toggle-open">
-            <span class="knob" aria-hidden="true"></span><span>${status.is_open ? "Terbuka" : "Ditutup"}</span>
-          </button>
+          <span class="status-live${status.is_open ? " on" : ""}">${status.is_open ? "Terbuka · berlangsung" : endedBySchedule ? "Selesai sesuai jadwal" : "Ditutup"}</span>
+          ${status.is_open && status.ends_at ? `<small>Tutup otomatis ${esc(new Date(status.ends_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }))}</small>`
+            : when ? `<small>${esc(when)}</small>` : ""}
         </div>
+        <h2 class="status-name">${esc(status.name)}</h2>
         <div class="status-stats">
-          <div class="sstat"><b data-s="members">–</b><small>peserta dari ${status.max_members}</small></div>
-          <div class="sstat"><b data-s="photos">–</b><small>foto masuk</small></div>
-          <div class="sstat"><b data-s="rolls">–</b><small>film habis</small></div>
-          <div class="sstat"><b data-s="pending">–</b><small>belum terunggah</small></div>
+          <div class="sstat"><b><span data-s="members">–</span><small>/${status.max_members}</small></b><span>peserta</span></div>
+          <div class="sstat"><b data-s="photos">–</b><span>foto</span></div>
+          <div class="sstat"><b data-s="rolls">–</b><span>film habis</span></div>
+          <div class="sstat pending-stat" hidden><b data-s="pending">–</b><span>belum terunggah</span></div>
         </div>
-        <div class="funnel" aria-label="Perjalanan peserta"></div>
-        <div class="row">
-          <button class="btn small primary" data-act="share">${ICON.share} Bagikan link</button>
-          <button class="btn small" data-act="card">${ICON.printer} Kartu QR</button>
-          <a class="btn small" href="#/e/${status.event_id}/layar">${ICON.play} Mode layar</a>
+        <div class="status-actions">
+          <button class="btn sc-light" data-act="card">${ICON.printer} Bagikan QR</button>
+          <button class="btn sc-outline" data-act="toggle-open">${status.is_open ? "Tutup acara" : "Buka acara"}</button>
+        </div>
+        <div class="status-more">
+          <button class="linklike" data-act="share">${ICON.link} Salin link undangan</button>
+          <a class="linklike" href="#/e/${status.event_id}/layar">${ICON.play} Mode layar</a>
         </div>
       </div>
 
@@ -135,6 +133,7 @@ export async function renderPanel(root, status, { reload, home }) {
       </div>
 
       <div class="subpanel" data-tab="peserta" role="tabpanel" hidden>
+        <div class="funnel-card"><span class="fc-title">Funnel tamu</span><div class="funnel" aria-label="Perjalanan peserta"></div></div>
         <div class="member-tools">
           <input type="search" placeholder="Cari nama atau email" aria-label="Cari peserta" data-act="member-search" />
           <button class="btn small" data-act="member-csv">${ICON.download} Laporan (CSV)</button>
@@ -272,11 +271,14 @@ export async function renderPanel(root, status, { reload, home }) {
     if (!st) return;
     const set = (k, v) => { view.querySelector(`[data-s="${k}"]`).textContent = Number(v).toLocaleString("id-ID"); };
     set("members", st.members); set("photos", st.photos); set("rolls", st.rolls_done); set("pending", st.pending);
+    view.querySelector(".pending-stat").hidden = !st.pending;
+    // Funnel tamu: batang tegak, angka dan label di bawahnya
     const top = Math.max(st.members, 1);
-    const row = (label, n) => `
-      <div class="funnel-row"><span>${label}</span><div class="bar"><span style="width:${Math.round((n / top) * 100)}%"></span></div><b>${n}</b></div>`;
-    view.querySelector(".funnel").innerHTML =
-      row("Masuk", st.members) + row("Memotret", st.shooters) + row("Film habis", st.rolls_done) + row("Mengunduh", st.downloaders);
+    const steps = [["masuk", st.members], ["memotret", st.shooters], ["film habis", st.rolls_done], ["mengunduh", st.downloaders]];
+    view.querySelector(".funnel").innerHTML = `
+      <div class="fn-bars" aria-hidden="true">${steps.map(([, n], i) =>
+        `<span style="height:${Math.max(4, Math.round((n / top) * 100))}%;opacity:${1 - i * 0.15}"></span>`).join("")}</div>
+      <div class="fn-labels">${steps.map(([l, n]) => `<span><b>${n}</b>${l}</span>`).join("")}</div>`;
   }).catch(() => {});
 
   // --- undangan ---
@@ -384,14 +386,15 @@ export async function renderPanel(root, status, { reload, home }) {
       const pct = Math.round((Math.min(m.shots_used, status.max_shots) / status.max_shots) * 100);
       const n = el(`
         <div class="member-card${m.blocked ? " blocked" : ""}">
+          <span class="mc-avatar" aria-hidden="true">${initial(m.name)}</span>
           <div class="mc-main">
-            <div><button class="linklike" data-act="roll">${esc(m.name)}</button>
-              ${m.blocked ? `<span class="tag bad">diblokir</span>` : m.shots_used >= status.max_shots ? `<span class="tag ok">film habis</span>` : ""}</div>
-            <small>${esc(m.email)}</small>
-            <div class="bar${m.shots_used >= status.max_shots ? " mint" : ""}"><span style="width:${pct}%"></span></div>
-            <small>${m.shots_used}/${status.max_shots} jepretan${m.pending ? ` · <b>${m.pending} belum terunggah</b>` : ""}</small>
+            <div class="mc-row"><button class="linklike" data-act="roll">${esc(m.name)}</button>
+              ${m.blocked ? `<span class="tag bad">diblokir</span>` : ""}
+              <span class="mc-used">${m.shots_used}/${status.max_shots}</span></div>
+            <div class="bar thin mint"><span style="width:${pct}%"></span></div>
+            <small>${esc(m.email)}${m.pending ? ` · <b>${m.pending} belum terunggah</b>` : ""}</small>
           </div>
-          <button class="btn small ghost icon-btn" data-act="menu" aria-label="Aksi untuk ${esc(m.name)}">⋯</button>
+          <button class="mc-menu" data-act="menu" aria-label="Aksi untuk ${esc(m.name)}">${ICON.moreV}</button>
         </div>`);
       n.querySelector('[data-act="roll"]').onclick = () => showRoll(status, m);
       n.querySelector('[data-act="menu"]').onclick = () => actionSheet(m.name, [
