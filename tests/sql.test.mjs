@@ -4,6 +4,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { quote } from "../src/price.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (f) => readFileSync(`${root}/supabase/${f}`, "utf8");
@@ -547,6 +548,98 @@ await as("admin", `select review_event($1)`, [rev]);
 ok((await as("d", `select * from reserve_shot($1, gen_random_uuid())`, [rev])).length === 1, "shooting allowed after review");
 ok((await db.query(`select needs_review, reviewed_at from events where id = $1`, [rev])).rows[0].reviewed_at !== null, "review_event marks reviewed");
 for (const id of [small, big, rev]) await as("admin", `select delete_event($1)`, [id]);
+
+// ---- Pembayaran: rumus harga (SQL = src/price.js) ----
+const cfg = (await as("host", `select price_settings() p`))[0].p;
+ok(cfg.payments_enabled === false && cfg.min === 25000, "price_settings defaults");
+const SIMS = [[5, 24, 0], [20, 12, 32000], [37, 30, 104000], [50, 24, 99000], [100, 36, 238000], [250, 27, 560000], [3, 100, 25000], [2000, 100, 8800000]];
+for (const [g, r, want] of SIMS) {
+  const q = (await db.query(`select price_quote_raw($1, $2) q`, [g, r])).rows[0].q;
+  const js = quote(cfg, g, r);
+  ok(q.total === want && js.total === want && js.volume_discount === Number(q.volume_discount), `harga ${g}×${r} = ${want} (sql ${q.total}, js ${js.total})`);
+}
+await expectErr("admin", `select admin_set_settings($1)`, [{ price_roll_tiers: [[24, 2000], [12, 1500]] }], "violates check");
+
+// ---- Pembayaran mati: alur lama tidak berubah ----
+const freeEv = (await as("host", `select create_event('Gratisan', 24, 300) id`))[0].id;
+ok((await db.query(`select pay_status from events where id = $1`, [freeEv])).rows[0].pay_status === "free", "payments off: event free");
+await expectErr("host", `select start_order($1)`, [freeEv], "PEMBAYARAN_NONAKTIF");
+await as("host", `select delete_event($1)`, [freeEv]);
+
+// ---- Pembayaran aktif: draf, pesanan, webhook ----
+await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: true, free_events_per_user: 2 }]);
+const draft = (await as("host", `select create_event('Wisuda Lunas', 24, 50) id`))[0].id;
+let dr = (await db.query(`select pay_status, join_code from events where id = $1`, [draft])).rows[0];
+ok(dr.pay_status === "draft", "paid-size event starts as draft");
+await expectErr("d", `select join_event($1)`, [dr.join_code], "ACARA_BELUM_DIBAYAR");
+await expectErr("host", `select * from reserve_shot($1, gen_random_uuid())`, [draft], "ACARA_BELUM_DIBAYAR");
+const fr1 = (await as("host", `select create_event('Kecil Gratis', 24, 5) id`))[0].id;
+ok((await db.query(`select pay_status from events where id = $1`, [fr1])).rows[0].pay_status === "free", "free-size event active");
+await expectErr("host", `select create_event('Gratis Kedua', 24, 5)`, [], "BATAS_ACARA_GRATIS");
+
+// Kode promo
+await expectErr("host", `select admin_save_promo($1)`, [{ code: "x" }], "BUKAN_SUPERADMIN");
+await as("admin", `select admin_save_promo($1)`, [{ code: "perdana", kind: "percent", value: 10, max_discount: 50000, max_uses: 1 }]);
+await as("admin", `select admin_save_promo($1)`, [{ code: "KAMPUS25", kind: "amount", value: 25000, email_domain: "kampus.ac.id" }]);
+let pq = (await as("host", `select price_quote(50, 24, 'PERDANA') q`))[0].q;
+ok(pq.total === 99000 && pq.promo_discount === 9900 && pq.amount === 89100, `price_quote with promo ${pq.amount}`);
+pq = (await as("host", `select price_quote(50, 24, 'KAMPUS25') q`))[0].q;
+ok(pq.promo_discount === 0 && /PROMO_TIDAK_BERLAKU/.test(pq.promo_error), "domain promo rejected softly");
+await expectErr("host", `select start_order($1, null, null, 'KAMPUS25')`, [draft], "PROMO_TIDAK_BERLAKU");
+await expectErr("d", `select start_order($1)`, [draft], "BUKAN_PEMILIK");
+
+const o1 = (await as("host", `select start_order($1, null, null, 'perdana') o`, [draft]))[0].o;
+ok(o1.kind === "new" && o1.amount === 89100 && o1.status === "pending" && /^JPR-\d{8}-[A-Z0-9]{6}$/.test(o1.id), `start_order ${o1.id} ${o1.amount}`);
+const o1b = (await as("host", `select start_order($1, null, null, 'PERDANA') o`, [draft]))[0].o;
+ok(o1b.id === o1.id, "same pending order reused");
+await db.query(`select set_order_snap($1, 'tok', 'https://pay')`, [o1.id]);
+await expectErr("d", `select order_status($1)`, [o1.id], "PESANAN_TIDAK_ADA");
+// Webhook: nominal harus cocok; settlement melunasi; ulangan tidak menggandakan
+try { await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', 1000)`, [o1.id]); ok(false, "amount mismatch rejected"); }
+catch (e) { ok(/NOMINAL_TIDAK_COCOK/.test(e.message), "amount mismatch rejected"); }
+ok((await db.query(`select midtrans_notify($1, 'pending', null, 'qris', 89100) s`, [o1.id])).rows[0].s === "pending", "pending keeps order pending");
+ok((await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', '89100.00') s`, [o1.id])).rows[0].s === "paid", "settlement pays");
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', 89100)`, [o1.id]);
+dr = (await db.query(`select pay_status, price_basis from events where id = $1`, [draft])).rows[0];
+ok(dr.pay_status === "paid" && dr.price_basis === 99000, "event paid, basis = list price before promo");
+ok((await db.query(`select used from promo_codes where code = 'PERDANA'`)).rows[0].used === 1, "promo counted once");
+ok((await db.query(`select count(*)::int n from audit_log where action = 'bayar_acara'`)).rows[0].n === 1, "payment audited once");
+ok((await as("host", `select order_status($1) o`, [o1.id]))[0].o.pay_status === "paid", "order_status shows paid");
+ok((await db.query(`select midtrans_notify('JPR-20260101-XXXXXX', 'settlement') s`)).rows[0].s === "tidak_ada", "unknown order ignored");
+pq = (await as("host", `select price_quote(50, 24, 'PERDANA') q`))[0].q;
+ok(/PROMO_HABIS/.test(pq.promo_error || ""), "promo max_uses reached");
+await as("d", `select join_event($1)`, [dr.join_code || (await db.query(`select join_code from events where id = $1`, [draft])).rows[0].join_code]);
+
+// Tambah tamu: bayar selisih; set_event tidak bisa melewati pembayaran
+await expectErr("host", `select set_event($1, $2)`, [draft, { max_members: 100 }], "PERLU_PEMBAYARAN");
+await expectErr("host", `select start_order($1, 40, 24)`, [draft], "TIDAK_BOLEH_TURUN");
+await expectErr("host", `select start_order($1, 50, 24)`, [draft], "TIDAK_ADA_PERUBAHAN");
+const up = (await as("host", `select start_order($1, 100, 24) o`, [draft]))[0].o;
+ok(up.kind === "upgrade" && up.list_price === 187000 && up.credit === 99000 && up.amount === 88000, `upgrade diff ${up.amount}`);
+await db.query(`select midtrans_notify($1, 'settlement', null, 'gopay', 88000)`, [up.id]);
+dr = (await db.query(`select max_members, price_basis from events where id = $1`, [draft])).rows[0];
+ok(dr.max_members === 100 && dr.price_basis === 187000, "upgrade applied");
+ok((await as("host", `select event_orders($1) o`, [draft]))[0].o.length === 2, "event_orders lists both");
+// Gagal / kedaluwarsa
+const up2 = (await as("host", `select start_order($1, 100, 36) o`, [draft]))[0].o;
+ok((await db.query(`select midtrans_notify($1, 'expire', null, null, $2) s`, [up2.id, up2.amount])).rows[0].s === "expired", "expire marks order");
+ok((await db.query(`select max_shots from events where id = $1`, [draft])).rows[0].max_shots === 24, "expired order changes nothing");
+// Pembuatan ditutup juga menahan pembayaran
+await as("admin", `select set_creation_mode('closed', 'Penuh')`);
+await expectErr("host", `select start_order($1, 120, 24)`, [draft], "PEMBUATAN_DITUTUP");
+await as("admin", `select set_creation_mode('open')`);
+// Nominal 0 (draf diperkecil ke ukuran gratis) langsung lunas tanpa Midtrans
+const d2 = (await as("admin", `select create_event('Draf Admin', 24, 50) id`))[0].id;
+await as("admin", `select admin_set_pay_status($1, 'draft')`, [d2]);
+const z = (await as("admin", `select start_order($1, 5, 24) o`, [d2]))[0].o;
+ok(z.status === "paid" && z.amount === 0, "zero-amount order paid instantly");
+ok((await db.query(`select pay_status from events where id = $1`, [d2])).rows[0].pay_status === "free", "zero list price -> free");
+const fin = (await as("admin", `select admin_orders() r`))[0].r;
+ok(fin.summary.revenue_total === 89100 + 88000 && fin.rows.length === 4, `admin_orders revenue ${fin.summary.revenue_total}`);
+await expectErr("host", `select admin_orders()`, [], "BUKAN_SUPERADMIN");
+for (const id of [draft, fr1, d2]) await as("admin", `select delete_event($1)`, [id]);
+ok((await db.query(`select count(*)::int n from orders where event_id is null`)).rows[0].n === 4, "orders kept after event deleted");
+await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: false }]);
 
 await as("host", `select delete_event($1)`, [ev]);
 ok((await db.query(`select count(*)::int n from photos`)).rows[0].n === 0, "delete_event cascades");

@@ -83,6 +83,34 @@ Untuk mencoba dari HP di WiFi yang sama: `npm run dev -- --host`
 
 Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin dan QR di Panel).
 
+### 5. Pembayaran Midtrans
+
+Pembayaran berjalan di Worker situs (`worker/pay.js`, rute `/api/pay/*`), Worker yang sama dengan
+API foto R2. Harga, pesanan, dan kode promo ada di database (`supabase/v2.sql`); rumusnya sama dengan
+`src/price.js`. Selama **Aktifkan pembayaran** mati, semua acara gratis seperti sebelumnya.
+
+1. Jalankan ulang `supabase/v2.sql` di SQL Editor.
+2. Rahasia Worker (dasbor Cloudflare -> Worker -> Settings -> Variables and Secrets, atau
+   `npx wrangler secret put <NAMA>`):
+   - `MIDTRANS_SERVER_KEY`: Server Key dari Midtrans -> Settings -> Access Keys -> Server Keys
+   - `MIDTRANS_SIGNATURE_KEY`: Signature Secret Key di halaman yang sama (untuk memeriksa notifikasi)
+   - `MIDTRANS_PRODUCTION`: `false` untuk sandbox, `true` untuk produksi
+   - `MIDTRANS_ENABLED_PAYMENTS` (opsional): mis. `other_qris,gopay,shopeepay,bca_va,bni_va,bri_va`
+   - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_KEY` (sudah ada bila R2 terpasang)
+3. Midtrans -> Settings -> Payment -> **Payment Notification URL**: `https://<domain>/api/pay/webhook`
+   (juga tertera di Dashboard -> Keuangan, dengan tombol salin).
+4. Deploy ulang Worker, lalu Dashboard -> **Keuangan**: tempel **Client Key**, pastikan "Worker pembayaran"
+   berstatus Siap dan modenya sama (sandbox/produksi), atur harga dan kode promo, lalu nyalakan
+   **Aktifkan pembayaran**.
+5. Uji di sandbox: buat acara di atas batas gratis -> Bayar -> pilih QRIS -> bayar dengan
+   [simulator Midtrans](https://simulator.sandbox.midtrans.com/) -> acara aktif dan QR muncul.
+   Tanpa webhook pun bisa dicek dengan tombol "Saya sudah bayar, cek status".
+6. Lengkapi bagian `[ISI]` di `public/syarat.html` dan `public/pengembalian-dana.html` sebelum
+   meminta aktivasi produksi.
+
+Tes: `npm run test:sql` (harga, pesanan, webhook di database) dan `npm run test:pay` (rute Worker
+dengan Midtrans tiruan: tanda tangan, cek ulang status, Snap).
+
 ## Uji di HP (daftar periksa)
 
 - [ ] Login Google di Android (Chrome) dan iPhone (Safari).

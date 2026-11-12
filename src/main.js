@@ -15,6 +15,7 @@ import { setVapidKey } from "./push.js";
 import { noteEventSize } from "./realtime.js";
 import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial } from "./ui.js";
 import { landingHtml } from "./landing.js";
+import { renderPricing } from "./pricing-page.js";
 import { themeSwitch, bindThemeSwitch } from "./theme.js";
 import { myCreatorRequest, openCreatorRequest, requestStatusCard } from "./creator-request.js";
 import { t, langSwitch, bindLangSwitch } from "./i18n.js";
@@ -371,6 +372,7 @@ async function loadSettings() {
 
 // ---------- Router ----------
 async function route() {
+  if (/^#\/harga/.test(location.hash)) return renderPricing(setView, { loggedIn: Boolean(session) });
   if (!session) return renderLogin();
   await loadSettings();
   const pending = localStorage.getItem("pendingCode");

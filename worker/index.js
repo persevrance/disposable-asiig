@@ -16,6 +16,9 @@
 //   GET    /api/r2/o/<path>?e&s   baca foto (URL bertanda tangan); foto lama diambil dari Supabase
 //   POST   /api/r2/delete         { paths } hapus (pengelola acara / superadmin)
 //   POST   /api/r2/migrate        { limit } pindahkan foto lama dari Supabase ke R2 (superadmin)
+//   /api/pay/*                     pembayaran Midtrans, lihat worker/pay.js
+
+import { payApi } from "./pay.js";
 
 const MAX_PHOTO = 15 * 1024 * 1024;
 const URL_TTL = 3600;
@@ -28,6 +31,14 @@ export default {
     if (url.pathname.startsWith("/api/r2/")) {
       try {
         return await api(req, env, ctx, url);
+      } catch (e) {
+        return json({ error: String(e?.message || e) }, e?.status || 500);
+      }
+    }
+    // Pembayaran Midtrans (worker/pay.js)
+    if (url.pathname.startsWith("/api/pay/")) {
+      try {
+        return await payApi(req, env, url, { json, fail, bearer, rpc, serviceHeaders, timingSafeEqual });
       } catch (e) {
         return json({ error: String(e?.message || e) }, e?.status || 500);
       }

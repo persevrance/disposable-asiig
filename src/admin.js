@@ -10,6 +10,8 @@ import { pingAlbum } from "./realtime.js";
 import { kickNotify, setVapidKey, joinCreationWaitlist } from "./push.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
+import { priceSettings, mountPayment, openPayment } from "./payment.js";
+import { quote, rp } from "./price.js";
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
   fmtRange, fromLocalInput, toLocalInput, downloadCsv, brandLockup, initial,
@@ -19,6 +21,7 @@ const TABS = [
   ["ringkasan", "Ringkasan"],
   ["acara", "Acara"],
   ["pembuatan", "Pembuatan acara"],
+  ["keuangan", "Keuangan"],
   ["pengguna", "Pengguna & peran"],
   ["moderasi", "Moderasi"],
   ["privasi", "Privasi"],
@@ -96,7 +99,7 @@ export async function renderAdmin(app, tab, { setView, me }) {
     set("moderasi", o.reports_open); set("pengguna", o.creator_requests_open); set("privasi", o.data_requests_open);
     set("pembuatan", o.events_review);
   }).catch(() => {});
-  const render = { ringkasan, acara, pembuatan, pengguna, moderasi, privasi, pengaturan, log }[tab];
+  const render = { ringkasan, acara, pembuatan, keuangan, pengguna, moderasi, privasi, pengaturan, log }[tab];
   try { await render(body, me, role); }
   catch (e) { body.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); }
 }
@@ -195,12 +198,18 @@ function revealAt(choice, endsIso) {
 }
 
 export async function createEventDialog() {
-  let settings, quota, gate;
+  // Ukuran yang dipilih di halaman harga (#/harga), dipakai sekali
+  let preset = null;
+  try { preset = JSON.parse(localStorage.getItem("createPreset") || "null"); localStorage.removeItem("createPreset"); } catch { /* abaikan */ }
+  let settings, quota, gate, price;
   try {
-    [settings, quota, gate] = await Promise.all([
+    [settings, quota, gate, price] = await Promise.all([
       rpc("get_settings"), rpc("my_event_quota").catch(() => null), rpc("creation_state").catch(() => null),
+      priceSettings(true).catch(() => null),
     ]);
   } catch (e) { toast(friendly(e)); return; }
+  // Pembayaran aktif (superadmin selalu gratis): harga tampil langsung di langkah jatah
+  const paid = Boolean(price?.payments_enabled && !gate?.bypass);
   // Pembuatan acara ditutup superadmin: tampilkan pesan penutupan, bukan wizard
   if (gate && !gate.bypass && gate.mode === "closed") { creationClosedDialog(gate); return; }
   // Hanya acara kecil: batas tamu dan roll mengikuti status, bukan batas global
@@ -256,12 +265,13 @@ export async function createEventDialog() {
           <label for="wiz-shots" class="wiz-label">Jatah jepretan per tamu</label>
           <div class="stepper">
             <button type="button" data-step-by="-1" aria-label="Kurangi">−</button>
-            <input id="wiz-shots" name="max_shots" type="number" inputmode="numeric" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" />
+            <input id="wiz-shots" name="max_shots" type="number" inputmode="numeric" min="1" max="${settings.max_shots_limit}" value="${Math.min(preset?.shots || 30, settings.max_shots_limit)}" />
             <button type="button" data-step-by="1" aria-label="Tambah">+</button>
           </div>
           <small class="hint">Batas maksimum mengikuti pengaturan admin (${settings.max_shots_limit}).</small>
         </div>
-        <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
+        <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(preset?.guests || 60, settings.max_members_limit)}" /></label>
+        ${paid ? `<div class="wiz-price" aria-live="polite"></div>` : ""}
         <div class="wiz-field">
           <span class="wiz-label">Efek film bawaan</span>
           <input type="hidden" name="film" value="${esc(FILMS[settings.default_film] ? settings.default_film : "asli")}" />
@@ -305,10 +315,24 @@ export async function createEventDialog() {
   let step = 1, coverFile = null;
 
   box.querySelector('[data-act="cancel"]').onclick = () => close();
+  // Harga langsung (rumus sama dengan server; nominal pasti dihitung ulang saat bayar)
+  const priceNow = () => (paid ? quote(price, Number(f.max_members.value) || 1, Number(f.max_shots.value) || 1).total : 0);
+  function showPrice() {
+    const box2 = form.querySelector(".wiz-price");
+    if (!box2) return;
+    const g = Number(f.max_members.value) || 1, q = quote(price, g, Number(f.max_shots.value) || 1);
+    box2.innerHTML = q.total
+      ? `<b>${rp(q.total)}</b><span>sekitar ${rp(q.total / g)} per tamu${q.discount_pct ? ` · diskon ${q.discount_pct}%` : ""}. Dibayar setelah acara disimpan.</span>`
+      : `<b>Gratis</b><span>Sampai ${price.free_guests} tamu × ${price.free_shots} jepretan.</span>`;
+    if (step === 3) nextBtn.textContent = q.total ? "Lanjut ke pembayaran" : "Buat acara";
+  }
+  f.max_members.addEventListener("input", showPrice);
+  f.max_shots.addEventListener("input", showPrice);
   // Stepper jatah jepretan
   form.querySelectorAll("[data-step-by]").forEach((b) => (b.onclick = () => {
     const v = Math.min(settings.max_shots_limit, Math.max(1, (Number(f.max_shots.value) || 0) + Number(b.dataset.stepBy)));
     f.max_shots.value = v;
+    showPrice();
   }));
   // Kartu efek film
   form.querySelector(".film-grid").onclick = (e) => {
@@ -324,7 +348,8 @@ export async function createEventDialog() {
     box.querySelector(".wiz-count").textContent = `Langkah ${step} dari 3`;
     box.querySelector(".wiz-title").textContent = TITLES[step - 1];
     backBtn.textContent = step === 1 ? "Batal" : "Kembali";
-    nextBtn.textContent = NEXT[step - 1];
+    nextBtn.textContent = step === 3 && priceNow() ? "Lanjut ke pembayaran" : NEXT[step - 1];
+    showPrice();
     const noEnd = !f.ends_at.value;
     for (const sel of [f.reveal, f.purge]) {
       [...sel.options].forEach((o) => { o.disabled = noEnd && o.value !== "" && sel === f.reveal; });
@@ -392,12 +417,26 @@ export async function createEventDialog() {
         } catch { coverPath = null; toast("Sampul gagal diunggah. Pasang lagi dari Panel.", 5000); }
       }
       const st = (await rpc("my_status", { p_event: id }))[0];
+      // Acara berbayar tersimpan sebagai draf: bayar dulu, baru QR
+      if (st?.pay_status === "draft") return payThenDone(st);
       showDone(st || { event_id: id, name: f.name.value, join_code: "", max_shots: Number(f.max_shots.value), cover_path: coverPath, starts_at: starts, ends_at: ends });
     } catch (err) {
       toast(friendly(err));
       nextBtn.disabled = false; backBtn.disabled = false; nextBtn.textContent = "Buat acara";
     }
   };
+
+  function payThenDone(st) {
+    const host = el(`<div class="dialog pay-host"></div>`);
+    form.replaceWith(host);
+    mountPayment(host, st, {
+      onPaid: async () => {
+        const fresh = (await rpc("my_status", { p_event: st.event_id }).catch(() => []))[0] || st;
+        host.replaceWith(form);
+        showDone(fresh);
+      },
+    });
+  }
 
   // Layar selesai: QR dan kartu siap cetak
   function showDone(st) {
@@ -1028,6 +1067,290 @@ async function pembuatan(body) {
   renderQueue();
 }
 
+// ---------- Keuangan: pembayaran Midtrans, harga, kode promo, pesanan ----------
+const ORDER_STATUS = { pending: ["Menunggu", "warn"], paid: ["Lunas", "ok"], expired: ["Kedaluwarsa", ""], failed: ["Gagal", "bad"], refunded: ["Dikembalikan", "bad"] };
+const SIM_SIZES = [[5, 24], [20, 12], [37, 30], [50, 24], [100, 36], [250, 27]];
+
+async function keuangan(body) {
+  const [fin, cfg, promos, health] = await Promise.all([
+    rpc("admin_orders", { p_status: "all", p_limit: 50 }), rpc("get_settings"), rpc("admin_promos"),
+    fetch("/api/pay/health", { cache: "no-store" }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+  ]);
+  const S = fin.summary;
+  const st = { status: "all", q: "", offset: 0, tiers: cfg.price_roll_tiers.map((x) => x.slice()), disc: cfg.price_discounts.map((x) => x.slice()) };
+  const webhook = `${location.origin}/api/pay/webhook`;
+
+  const view = el(`
+    <div class="finance">
+      <div class="stats">
+        ${stat("Pendapatan hari ini", 0)}${stat("Pendapatan 30 hari", 0)}${stat("Total pendapatan", 0)}
+        ${stat("Pesanan menunggu", S.pending)}${stat("Acara draf", S.drafts, "belum dibayar")}
+      </div>
+
+      <section class="card" aria-labelledby="h-mid">
+        <h3 id="h-mid">Pembayaran Midtrans</h3>
+        <div class="auto-rules">
+          <div class="auto-rule"><span><b>Aktifkan pembayaran</b><small>Mati = semua acara gratis seperti sebelumnya. Hidup = acara di atas batas gratis tersimpan sebagai draf sampai dibayar.</small></span>
+            <button type="button" class="switch bare" role="switch" data-flag="payments_enabled" aria-checked="${cfg.payments_enabled}" aria-label="Aktifkan pembayaran"><span class="knob"></span></button></div>
+          <div class="auto-rule"><span><b>Mode produksi</b><small>Mati = sandbox (uang tidak sungguhan). Harus sama dengan rahasia <code>MIDTRANS_PRODUCTION</code> di Worker.</small></span>
+            <button type="button" class="switch bare" role="switch" data-flag="midtrans_production" aria-checked="${cfg.midtrans_production}" aria-label="Mode produksi"><span class="knob"></span></button></div>
+        </div>
+        <form class="settings mid-form">
+          <label>Client Key Midtrans (publik)
+            <input name="midtrans_client_key" maxlength="200" autocomplete="off" spellcheck="false" placeholder="Mid-client-…" value="${esc(cfg.midtrans_client_key || "")}" /></label>
+          <button class="btn small" type="submit">Simpan Client Key</button>
+        </form>
+        <div class="mid-health">
+          <b>Worker pembayaran</b>
+          ${health ? `<span class="tag ${health.ok ? "ok" : "bad"}">${health.ok ? "Siap" : "Belum lengkap"}</span>
+            <small>Server Key ${health.server_key ? "✓" : "✗"} · Signature Key ${health.signature_key ? "✓" : "memakai Server Key"} · Supabase service ${health.service ? "✓" : "✗"} · ${health.production ? "produksi" : "sandbox"}${health.production !== cfg.midtrans_production ? ` · <b class="danger-text">mode berbeda dengan pengaturan di atas</b>` : ""}</small>`
+            : `<span class="tag bad">Tidak terjangkau</span><small>Route /api/pay belum ada di Worker yang berjalan (deploy ulang Worker).</small>`}
+        </div>
+        <p class="hint">Server Key dan Signature Secret Key disimpan sebagai rahasia Worker, bukan di sini. Isi <b>Payment Notification URL</b> di dasbor Midtrans (Settings → Payment) dengan:</p>
+        <div class="copy-row"><code>${esc(webhook)}</code><button type="button" class="btn small" data-act="copy-hook">${ICON.copy} Salin</button></div>
+      </section>
+
+      <div class="price-grid">
+        <section class="card" aria-labelledby="h-price">
+          <h3 id="h-price">Harga</h3>
+          <p class="hint">Berlaku untuk pesanan baru. Acara yang sudah dibayar tidak berubah.</p>
+          <fieldset><legend>Tarif per tamu menurut isi roll</legend><div class="tier-rows"></div>
+            <button type="button" class="linklike" data-add="tiers">+ Tambah rentang</button></fieldset>
+          <fieldset><legend>Diskon jumlah tamu</legend><div class="disc-rows"></div>
+            <button type="button" class="linklike" data-add="disc">+ Tambah diskon</button></fieldset>
+          <fieldset><legend>Aturan umum</legend>
+            <div class="date-row">
+              <label>Gratis sampai (tamu)<input type="number" name="price_free_guests" min="0" max="5000" value="${cfg.price_free_guests}" /></label>
+              <label>Gratis jika roll maksimal<input type="number" name="price_free_shots" min="0" max="500" value="${cfg.price_free_shots}" /></label>
+            </div>
+            <div class="date-row">
+              <label>Pembayaran minimum (Rp)<input type="number" name="price_min" min="0" step="1000" value="${cfg.price_min}" /></label>
+              <label>Acara gratis aktif per akun<input type="number" name="free_events_per_user" min="0" max="1000" value="${cfg.free_events_per_user}" /></label>
+            </div>
+            <label>Batas waktu bayar (menit)<input type="number" name="payment_window_min" min="5" max="1440" value="${cfg.payment_window_min}" /></label>
+          </fieldset>
+          <button type="button" class="btn primary" data-act="save-price">Simpan harga</button>
+        </section>
+        <aside class="card sim-card" aria-labelledby="h-sim">
+          <h3 id="h-sim">Simulasi harga</h3>
+          <p class="hint">Berubah langsung saat tarif diubah.</p>
+          <div class="sim-rows"></div>
+          <small class="hint">Rumus: tamu × tarif roll × (1 − diskon), dibulatkan ke atas per Rp1.000, minimal sesuai aturan umum.</small>
+        </aside>
+      </div>
+
+      <section class="card" aria-labelledby="h-promo">
+        <h3 id="h-promo">Kode promo</h3>
+        <div class="table-scroll"><table class="promo-table">
+          <thead><tr><th>Kode</th><th>Potongan</th><th>Terpakai</th><th>Berlaku</th><th>Status</th><th><span class="sr-only">Aksi</span></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <details class="advanced promo-new">
+          <summary>Buat atau ubah kode</summary>
+          <form class="settings promo-form" novalidate>
+            <div class="date-row">
+              <label>Kode<input name="code" required maxlength="30" placeholder="PERDANA" autocomplete="off" /></label>
+              <label>Jenis<select name="kind"><option value="percent">Persen</option><option value="amount">Nominal (Rp)</option></select></label>
+            </div>
+            <div class="date-row">
+              <label>Nilai<input type="number" name="value" min="1" required placeholder="10" /></label>
+              <label>Potongan maksimum (Rp, untuk persen)<input type="number" name="max_discount" min="1" placeholder="Tanpa batas" /></label>
+            </div>
+            <div class="date-row">
+              <label>Kuota pemakaian<input type="number" name="max_uses" min="1" placeholder="Tanpa batas" /></label>
+              <label>Berlaku sampai<input type="date" name="expires_at" /></label>
+            </div>
+            <label>Khusus domain email (opsional)<input name="email_domain" placeholder="kampus.ac.id" autocomplete="off" /></label>
+            <label class="check"><input type="checkbox" name="active" checked /> Aktif</label>
+            <button class="btn small primary" type="submit">Simpan kode</button>
+          </form>
+        </details>
+      </section>
+
+      <section class="card" aria-labelledby="h-orders">
+        <div class="sec-head"><h3 id="h-orders">Pesanan</h3><button type="button" class="btn small" data-act="csv">${ICON.download} CSV</button></div>
+        <div class="toolbar"><input type="search" placeholder="Cari no. pesanan, acara, atau email" aria-label="Cari pesanan" /></div>
+        <div class="order-filter"></div>
+        <div class="table-scroll"><table class="order-table">
+          <thead><tr><th>Pesanan</th><th>Acara</th><th class="num">Tamu × roll</th><th class="num">Nominal</th><th>Metode</th><th>Status</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div class="order-pager"></div>
+      </section>
+    </div>`);
+  body.replaceChildren(view);
+  // Angka rupiah di kartu statistik
+  const statEls = view.querySelectorAll(".stats .stat b");
+  [S.revenue_today, S.revenue_30d, S.revenue_total].forEach((v, i) => (statEls[i].textContent = rp(v)));
+  const fv = (n) => view.querySelector(`[name="${n}"]`);
+
+  view.querySelector('[data-act="copy-hook"]').onclick = () => copyText(webhook, { done: "URL notifikasi disalin." });
+  view.querySelectorAll("[data-flag]").forEach((b) => (b.onclick = async () => {
+    const on = b.getAttribute("aria-checked") !== "true";
+    if (b.dataset.flag === "midtrans_production" && on && !(await confirmDialog({ title: "Pindah ke mode produksi?", text: "Pembayaran berikutnya memakai uang sungguhan. Pastikan rahasia Worker sudah memakai Server Key produksi dan MIDTRANS_PRODUCTION=true.", ok: "Pindah ke produksi", danger: true }))) return;
+    b.setAttribute("aria-checked", String(on));
+    try { await rpc("admin_set_settings", { p_patch: { [b.dataset.flag]: on } }); toast("Tersimpan."); }
+    catch (err) { b.setAttribute("aria-checked", String(!on)); toast(friendly(err)); }
+  }));
+  view.querySelector(".mid-form").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await rpc("admin_set_settings", { p_patch: { midtrans_client_key: fv("midtrans_client_key").value } }); toast("Client Key disimpan."); }
+    catch (err) { toast(friendly(err)); }
+  };
+
+  // ---- Harga: baris tarif dan diskon, simulasi langsung ----
+  const priceCfg = () => ({
+    roll_tiers: st.tiers, discounts: st.disc,
+    free_guests: Number(fv("price_free_guests").value) || 0, free_shots: Number(fv("price_free_shots").value) || 0,
+    min: Number(fv("price_min").value) || 0,
+  });
+  function renderPriceRows() {
+    view.querySelector(".tier-rows").innerHTML = st.tiers.map(([max, v], i) => `
+      <div class="price-row">
+        <span>${i ? st.tiers[i - 1][0] + 1 : 1}–</span>
+        <label><span class="sr-only">Batas roll</span><input type="number" min="1" max="500" data-t="tiers" data-i="${i}" data-k="0" value="${max}" /></label>
+        <span>jepretan</span>
+        <label>Rp<input type="number" min="0" step="100" data-t="tiers" data-i="${i}" data-k="1" value="${v}" aria-label="Tarif roll sampai ${max}" /></label>
+        ${st.tiers.length > 1 ? `<button type="button" class="round-btn ghost-round" data-del="tiers" data-i="${i}" aria-label="Hapus rentang">${ICON.close}</button>` : ""}
+      </div>`).join("");
+    view.querySelector(".disc-rows").innerHTML = st.disc.length ? st.disc.map(([min, v], i) => `
+      <div class="price-row">
+        <span>Mulai</span>
+        <label><span class="sr-only">Jumlah tamu minimum</span><input type="number" min="1" max="5000" data-t="disc" data-i="${i}" data-k="0" value="${min}" /></label>
+        <span>tamu</span>
+        <label><input type="number" min="0" max="90" data-t="disc" data-i="${i}" data-k="1" value="${v}" aria-label="Diskon mulai ${min} tamu" />%</label>
+        <button type="button" class="round-btn ghost-round" data-del="disc" data-i="${i}" aria-label="Hapus diskon">${ICON.close}</button>
+      </div>`).join("") : `<p class="hint">Tanpa diskon jumlah tamu.</p>`;
+    renderSim();
+  }
+  function renderSim() {
+    const c = priceCfg();
+    view.querySelector(".sim-rows").innerHTML = SIM_SIZES.map(([g, r]) => {
+      const q = quote(c, g, r);
+      return `<div class="sim-row"><span>${g} tamu × ${r} jepretan</span><b>${q.total ? rp(q.total) : "Gratis"}</b></div>`;
+    }).join("");
+  }
+  const priceCard = view.querySelector(".price-grid");
+  priceCard.addEventListener("input", (e) => {
+    const t = e.target;
+    if (t.dataset.t) st[t.dataset.t][Number(t.dataset.i)][Number(t.dataset.k)] = Number(t.value) || 0;
+    renderSim();
+  });
+  priceCard.addEventListener("change", (e) => { if (e.target.dataset.k === "0") renderPriceRows(); });
+  priceCard.addEventListener("click", (e) => {
+    const add = e.target.closest("[data-add]"), del = e.target.closest("[data-del]");
+    if (add) {
+      const arr = st[add.dataset.add], last = arr[arr.length - 1];
+      arr.push(add.dataset.add === "tiers" ? [Math.min(500, (last?.[0] || 0) + 12), (last?.[1] || 1000) + 500] : [(last?.[0] || 0) + 100, Math.min(90, (last?.[1] || 0) + 5)]);
+      renderPriceRows();
+    }
+    if (del) { st[del.dataset.del].splice(Number(del.dataset.i), 1); renderPriceRows(); }
+  });
+  view.querySelector('[data-act="save-price"]').onclick = async (e) => {
+    const sorted = (a) => a.every((x, i) => i === 0 || x[0] > a[i - 1][0]);
+    if (!sorted(st.tiers) || !sorted(st.disc)) return toast("Batas roll dan jumlah tamu harus urut naik tanpa angka sama.");
+    const patch = { price_roll_tiers: st.tiers, price_discounts: st.disc };
+    for (const k of ["price_free_guests", "price_free_shots", "price_min", "free_events_per_user", "payment_window_min"]) patch[k] = Number(fv(k).value);
+    e.currentTarget.disabled = true;
+    try { await rpc("admin_set_settings", { p_patch: patch }); toast("Harga disimpan."); }
+    catch (err) { toast(friendly(err)); }
+    e.currentTarget.disabled = false;
+  };
+  renderPriceRows();
+
+  // ---- Kode promo ----
+  let promoRows = promos;
+  const promoForm = view.querySelector(".promo-form");
+  function renderPromos() {
+    view.querySelector(".promo-table tbody").innerHTML = promoRows.length ? promoRows.map((p) => {
+      const expired = p.expires_at && new Date(p.expires_at) <= new Date();
+      const full = p.max_uses && p.used >= p.max_uses;
+      const [label, tone] = !p.active ? ["Nonaktif", ""] : expired ? ["Kedaluwarsa", ""] : full ? ["Habis", "warn"] : ["Aktif", "ok"];
+      return `<tr>
+        <td><code>${esc(p.code)}</code>${p.email_domain ? `<br><small class="hint">khusus @${esc(p.email_domain)}</small>` : ""}</td>
+        <td>${p.kind === "percent" ? `${p.value}%${p.max_discount ? ` · maks. ${rp(p.max_discount)}` : ""}` : rp(p.value)}</td>
+        <td>${p.used}${p.max_uses ? `/${p.max_uses}` : ""}</td>
+        <td>${p.expires_at ? esc(fmtDate(p.expires_at)) : "Tanpa batas"}</td>
+        <td><span class="tag ${tone}">${label}</span></td>
+        <td class="row tight"><button type="button" class="btn small" data-edit="${esc(p.code)}">Ubah</button>
+          <button type="button" class="btn small" data-toggle="${esc(p.code)}">${p.active ? "Nonaktifkan" : "Aktifkan"}</button></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="hint">Belum ada kode promo.</td></tr>`;
+  }
+  const promoPayload = (p) => ({ code: p.code, kind: p.kind, value: p.value, max_discount: p.max_discount ?? "", max_uses: p.max_uses ?? "", expires_at: p.expires_at ?? "", email_domain: p.email_domain ?? "", active: p.active });
+  async function savePromo(p) {
+    await rpc("admin_save_promo", { p });
+    promoRows = await rpc("admin_promos");
+    renderPromos();
+  }
+  view.querySelector(".promo-table").onclick = async (e) => {
+    const ed = e.target.closest("[data-edit]"), tg = e.target.closest("[data-toggle]");
+    const p = promoRows.find((x) => x.code === (ed || tg)?.dataset.edit || x.code === (ed || tg)?.dataset.toggle);
+    if (!p) return;
+    if (tg) { try { await savePromo({ ...promoPayload(p), active: !p.active }); } catch (err) { toast(friendly(err)); } return; }
+    const fe = promoForm.elements;
+    fe.code.value = p.code; fe.kind.value = p.kind; fe.value.value = p.value;
+    fe.max_discount.value = p.max_discount ?? ""; fe.max_uses.value = p.max_uses ?? "";
+    fe.expires_at.value = p.expires_at ? toLocalInput(p.expires_at).slice(0, 10) : "";
+    fe.email_domain.value = p.email_domain || ""; fe.active.checked = p.active;
+    view.querySelector(".promo-new").open = true; fe.code.focus();
+  };
+  promoForm.onsubmit = async (e) => {
+    e.preventDefault();
+    const fe = promoForm.elements;
+    const code = fe.code.value.trim().toUpperCase();
+    if (!/^[A-Z0-9_-]{3,30}$/.test(code)) return toast("Kode 3–30 huruf besar, angka, - atau _.");
+    if (!(Number(fe.value.value) > 0)) return toast("Isi nilai potongan.");
+    if (fe.kind.value === "percent" && Number(fe.value.value) > 100) return toast("Persen maksimal 100.");
+    try {
+      await savePromo({
+        code, kind: fe.kind.value, value: Number(fe.value.value), max_discount: fe.max_discount.value, max_uses: fe.max_uses.value,
+        expires_at: fe.expires_at.value ? new Date(fe.expires_at.value + "T23:59:59").toISOString() : "",
+        email_domain: fe.email_domain.value.trim().replace(/^@/, ""), active: fe.active.checked,
+      });
+      promoForm.reset(); toast("Kode promo disimpan.");
+    } catch (err) { toast(friendly(err)); }
+  };
+  renderPromos();
+
+  // ---- Pesanan ----
+  const tbody = view.querySelector(".order-table tbody");
+  async function loadOrders() {
+    const r = st.offset === 0 && st.status === "all" && !st.q && fin ? fin : await rpc("admin_orders", { p_status: st.status, p_search: st.q || null, p_limit: PAGE, p_offset: st.offset });
+    renderOrders(r);
+  }
+  function renderOrders(r) {
+    tbody.innerHTML = r.rows.length ? r.rows.map((o) => {
+      const [label, tone] = ORDER_STATUS[o.status] || [o.status, ""];
+      return `<tr>
+        <td><code>${esc(o.id)}</code><br><small class="hint">${esc(fmtDate(o.paid_at || o.created_at))}</small></td>
+        <td>${o.event_id ? `<a href="#/e/${o.event_id}/panel">${esc(o.event_name)}</a>` : esc(o.event_name)}<br><small class="hint">${esc(o.user_name || "")} ${esc(o.user_email || "")}</small></td>
+        <td class="num">${o.kind === "upgrade" ? "+ " : ""}${o.guests} × ${o.shots}</td>
+        <td class="num"><b>${rp(o.amount)}</b>${o.promo_code ? `<br><small class="hint">${esc(o.promo_code)} −${rp(o.promo_discount)}</small>` : ""}${o.credit ? `<br><small class="hint">selisih dari ${rp(o.list_price)}</small>` : ""}</td>
+        <td>${esc(o.payment_type || "–")}</td>
+        <td><span class="tag ${tone}">${label}</span></td>
+      </tr>`;
+    }).join("") : `<tr><td colspan="6" class="hint">Belum ada pesanan.</td></tr>`;
+    view.querySelector(".order-pager").replaceChildren(pagerEl(Number(r.total), st.offset, (o) => { st.offset = o; loadOrders(); }));
+  }
+  view.querySelector(".order-filter").append(chips([["all", "Semua"], ["paid", "Lunas"], ["pending", "Menunggu"], ["expired", "Kedaluwarsa"], ["failed", "Gagal"], ["refunded", "Dikembalikan"]],
+    "all", (v) => { st.status = v; st.offset = 0; loadOrders().catch((e) => toast(friendly(e))); }, "Saring pesanan"));
+  let qTimer = 0;
+  view.querySelector('.finance input[type="search"]').oninput = (e) => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => { st.q = e.target.value.trim(); st.offset = 0; loadOrders().catch((err) => toast(friendly(err))); }, 300);
+  };
+  view.querySelector('[data-act="csv"]').onclick = async () => {
+    try {
+      const r = await rpc("admin_orders", { p_status: st.status, p_search: st.q || null, p_limit: 200, p_offset: 0 });
+      downloadCsv(`pesanan-${new Date().toISOString().slice(0, 10)}.csv`,
+        ["No. pesanan", "Acara", "Email", "Jenis", "Tamu", "Roll", "Harga daftar", "Kredit", "Promo", "Potongan", "Nominal", "Status", "Metode", "Dibuat", "Lunas"],
+        r.rows.map((o) => [o.id, o.event_name, o.user_email || "", o.kind, o.guests, o.shots, o.list_price, o.credit, o.promo_code || "", o.promo_discount, o.amount, o.status, o.payment_type || "", o.created_at, o.paid_at || ""]));
+    } catch (err) { toast(friendly(err)); }
+  };
+  renderOrders(fin);
+}
+
 // ---------- Acara ----------
 async function acara(body, me, role) {
   const admin = role === "superadmin";
@@ -1130,6 +1453,7 @@ async function acara(body, me, role) {
                 ${e.starts_at || e.ends_at ? `<br><small>${esc(fmtRange(e.starts_at, e.ends_at))}</small>` : ""}</td>
               <td><span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
                 ${e.reports ? `<br><span class="tag warn">${e.reports} dilaporkan</span>` : ""}
+                ${e.pay_status === "draft" ? `<br><span class="tag bad">Belum dibayar</span>` : ""}
                 ${e.purge_at && new Date(e.purge_at) <= new Date() ? `<br><span class="tag bad">lewat tanggal hapus</span>` : ""}</td>
               <td class="num" data-label="Peserta">${e.members}/${e.max_members}</td>
               <td class="num" data-label="Film habis">${e.rolls_done}</td>
@@ -1179,6 +1503,7 @@ async function acara(body, me, role) {
           </div>
           <small class="ec-meta">Kode ${esc(e.join_code)} · ${e.photos} foto${e.pending ? ` · <b>${e.pending} tertahan</b>` : ""} · ${fmtBytes(e.bytes)}</small>
           <div class="ec-actions">
+            ${e.pay_status === "draft" ? `<button class="btn primary" data-pay="${e.event_id}">Bayar</button>` : ""}
             <a class="btn ec-dark" href="#/e/${e.event_id}/panel">Kelola</a>
             <a class="btn" href="#/e/${e.event_id}/album">Album</a>
             <button class="round-btn" data-more="${e.event_id}" aria-label="Menu lainnya untuk ${esc(e.name)}: bagikan, duplikat, hapus">${ICON.more}</button>
@@ -1186,12 +1511,17 @@ async function acara(body, me, role) {
         </div>
       </article>`).join("")}</div>`);
     n.querySelectorAll("[data-more]").forEach((b) => (b.onclick = () => eventMenu(rows.find((e) => e.event_id === b.dataset.more))));
+    n.querySelectorAll("[data-pay]").forEach((b) => (b.onclick = async () => {
+      const st = (await rpc("my_status", { p_event: b.dataset.pay }).catch(() => []))[0];
+      if (st) openPayment(st, { onPaid: () => load() });
+    }));
     return n;
   }
 
   // Lencana status pada sampul: Berlangsung / Terjadwal / Selesai
   function statusBadge(e) {
     const now = new Date();
+    if (e.pay_status === "draft") return `<span class="ec-badge coral">Draf · belum dibayar</span>`;
     if (e.is_open && e.starts_at && new Date(e.starts_at) > now) return `<span class="ec-badge sky">Terjadwal</span>`;
     if (e.is_open) return `<span class="ec-badge mint">Berlangsung</span>`;
     return `<span class="ec-badge grape">Selesai · album terbuka</span>`;
@@ -1792,6 +2122,10 @@ function describe(r) {
       return `${d.auto ? "pengaman otomatis " : ""}mengubah status pembuatan acara menjadi ${m}${d.auto === "jadwal" ? " (jadwal buka lagi)" : d.peak ? ` (perkiraan ${Math.round(d.peak)}%)` : ""}`;
     }
     case "tinjau_acara": return `menandai acara “${t}” sudah ditinjau`;
+    case "bayar_acara": return `membayar ${rp(d.amount)} untuk acara “${d.name || t}” (${d.kind === "upgrade" ? "tambah" : "baru"} ${d.guests} tamu × ${d.shots}, ${d.order})`;
+    case "refund_acara": return `pengembalian dana ${rp(d.amount)} untuk acara “${d.name || t}” (${d.order})`;
+    case "kode_promo": return `menyimpan kode promo ${r.target}`;
+    case "ubah_status_bayar": return `mengubah status bayar acara “${t}” menjadi ${({ free: "gratis", draft: "draf", paid: "lunas" })[d.status] || d.status}`;
     case "hapus_acara": return `menghapus acara “${d.name || t}”${d.files !== undefined ? ` (${d.files} file)` : ""}`;
     case "ubah_sampul": return `${d.path ? "mengganti" : "menghapus"} sampul acara “${t}”`;
     case "ubah_acara": return `mengubah acara “${t}”: ${patch()}`;

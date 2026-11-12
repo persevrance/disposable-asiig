@@ -192,6 +192,12 @@ alter table events add column if not exists collage_theme jsonb
 alter table events
   add column if not exists needs_review boolean not null default false,
   add column if not exists reviewed_at timestamptz;
+-- Pembayaran: free = gratis/aktif, draft = menunggu bayar (tamu belum bisa masuk), paid = lunas.
+-- price_basis = harga daftar (sebelum promo) yang sudah dibayar; dasar selisih saat tambah tamu.
+alter table events
+  add column if not exists pay_status text not null default 'free'
+    check (pay_status in ('free', 'draft', 'paid')),
+  add column if not exists price_basis int not null default 0 check (price_basis >= 0);
 
 
 -- Penyimpanan foto: 'supabase' (Storage) atau 'r2' (Cloudflare R2 lewat Worker situs)
@@ -403,6 +409,7 @@ begin
   end if;
 
   if v_ev.owner_id <> v_uid then
+    if v_ev.pay_status = 'draft' then raise exception 'ACARA_BELUM_DIBAYAR'; end if;
     if v_ev.invite_only and not exists (
          select 1 from event_invites
          where event_id = v_ev.id and lower(email) = lower(auth.jwt()->>'email')) then
@@ -461,6 +468,9 @@ begin
 
   select e.max_shots, open_now(e) into v_max, v_open from events e where e.id = p_event;
   if not v_open then raise exception 'ACARA_TUTUP'; end if;
+  if exists (select 1 from events where id = p_event and pay_status = 'draft') then
+    raise exception 'ACARA_BELUM_DIBAYAR';
+  end if;
   if exists (select 1 from events where id = p_event and needs_review) then
     raise exception 'ACARA_MENUNGGU_TINJAUAN';
   end if;
@@ -603,7 +613,8 @@ returns table (event_id uuid, name text, join_code text, max_shots int, max_memb
                ev_film text, ev_mirror_preview boolean, ev_mirror_photo boolean,
                ev_photo_max_side int, downloads_used int,
                max_shots_limit int, max_members_limit int, allow_film_choice boolean,
-               starts_at timestamptz, ends_at timestamptz, collage_theme jsonb, needs_review boolean)
+               starts_at timestamptz, ends_at timestamptz, collage_theme jsonb, needs_review boolean,
+               pay_status text, price_basis int)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name,
          case when can_manage(e.id) then e.join_code end,
@@ -620,7 +631,8 @@ language sql stable security definer set search_path = public as $$
          (select count(*)::int from downloads d join photos p on p.id = d.photo_id
            where d.event_id = e.id and d.user_id = auth.uid() and p.user_id <> auth.uid()),
          s.max_shots_limit, s.max_members_limit, e.allow_film_choice,
-         e.starts_at, e.ends_at, e.collage_theme, e.needs_review
+         e.starts_at, e.ends_at, e.collage_theme, e.needs_review,
+         e.pay_status, e.price_basis
     from events e
     cross join app_settings s
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
@@ -751,6 +763,7 @@ create or replace function create_event(p_name text, p_max_shots int default 30,
 returns uuid
 language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_try int := 0; s app_settings%rowtype; r user_roles%rowtype; v_gate jsonb;
+        v_pay text := 'free';
 begin
   perform assert_not_banned();
   if not can_create_event() then raise exception 'TIDAK_BOLEH_MEMBUAT'; end if;
@@ -775,11 +788,20 @@ begin
     raise exception 'PESERTA_MELEBIHI_BATAS';
   end if;
   if p_film is not null and not valid_film(p_film) then raise exception 'FILM_TIDAK_DIKENAL'; end if;
+  -- Pembayaran aktif: acara berbayar tersimpan sebagai draf sampai lunas; gratis dibatasi per akun
+  if s.payments_enabled and r.role <> 'superadmin' then
+    if (price_quote_raw(p_max_members, p_max_shots)->>'total')::int > 0 then
+      v_pay := 'draft';
+    elsif (select count(*) from events e where e.owner_id = auth.uid() and e.pay_status = 'free'
+              and open_now(e)) >= s.free_events_per_user then
+      raise exception 'BATAS_ACARA_GRATIS';
+    end if;
+  end if;
   loop
     begin
-      insert into events (owner_id, name, join_code, max_shots, max_members, invite_only, film)
+      insert into events (owner_id, name, join_code, max_shots, max_members, invite_only, film, pay_status)
       values (auth.uid(), trim(p_name), gen_code(), p_max_shots, p_max_members, p_invite_only,
-              coalesce(p_film, s.default_film))
+              coalesce(p_film, s.default_film), v_pay)
       returning id into v_id;
       exit;
     exception when unique_violation then
@@ -901,6 +923,10 @@ begin
   if e.max_members > v_old_members or e.max_shots > v_old_shots then
     v_gate := can_create_event(e.max_members, e.max_shots);
     if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
+    if s.payments_enabled and not v_admin and e.pay_status <> 'draft'
+       and (price_quote_raw(e.max_members, e.max_shots)->>'total')::int > e.price_basis then
+      raise exception 'PERLU_PEMBAYARAN';
+    end if;
     if not v_admin and e.max_members >= s.review_guests and v_old_members < s.review_guests then
       e.needs_review := true;
     end if;
@@ -1187,6 +1213,17 @@ begin
     capacity_realtime   = coalesce((p_patch->>'capacity_realtime')::int,   capacity_realtime),
     capacity_worker_req = coalesce((p_patch->>'capacity_worker_req')::bigint, capacity_worker_req),
     worker_req_per_photo = coalesce((p_patch->>'worker_req_per_photo')::int, worker_req_per_photo),
+    payments_enabled    = coalesce((p_patch->>'payments_enabled')::boolean, payments_enabled),
+    midtrans_production = coalesce((p_patch->>'midtrans_production')::boolean, midtrans_production),
+    midtrans_client_key = case when p_patch ? 'midtrans_client_key'
+                               then nullif(trim(p_patch->>'midtrans_client_key'), '') else midtrans_client_key end,
+    price_roll_tiers    = coalesce(p_patch->'price_roll_tiers', price_roll_tiers),
+    price_discounts     = coalesce(p_patch->'price_discounts', price_discounts),
+    price_free_guests   = coalesce((p_patch->>'price_free_guests')::int, price_free_guests),
+    price_free_shots    = coalesce((p_patch->>'price_free_shots')::int, price_free_shots),
+    price_min           = coalesce((p_patch->>'price_min')::int, price_min),
+    free_events_per_user = coalesce((p_patch->>'free_events_per_user')::int, free_events_per_user),
+    payment_window_min  = coalesce((p_patch->>'payment_window_min')::int, payment_window_min),
     photo_mb_estimate   = coalesce((p_patch->>'photo_mb_estimate')::numeric, photo_mb_estimate),
     updated_at = now(), updated_by = auth.uid()
   where id;
@@ -1208,7 +1245,7 @@ returns table (event_id uuid, name text, owner_name text, owner_email text, join
                photos int, pending int, bytes bigint,
                created_at timestamptz, purge_at timestamptz, last_photo_at timestamptz,
                total_count bigint, starts_at timestamptz, ends_at timestamptz,
-               cover_path text, reports int)
+               cover_path text, reports int, pay_status text)
 language plpgsql stable security definer set search_path = public as $$
 #variable_conflict use_column
 declare v_admin boolean := is_superadmin();
@@ -1221,7 +1258,7 @@ begin
     base as (
       select e.id as b_id, e.name as b_name, pr.name as b_owner, u.email::text as b_email,
              e.join_code as b_code, open_now(e) as b_open, e.max_shots as b_shots,
-             e.starts_at as b_starts, e.ends_at as b_ends, e.cover_path as b_cover,
+             e.starts_at as b_starts, e.ends_at as b_ends, e.cover_path as b_cover, e.pay_status as b_pay,
              (select count(distinct r.photo_id)::int from photo_reports r
                where r.event_id = e.id and r.resolved_at is null) as b_reports,
              e.max_members as b_max_members, e.film as b_film, e.hide_names as b_hide,
@@ -1255,7 +1292,7 @@ begin
     select b.b_id, b.b_name, b.b_owner, b.b_email, b.b_code, b.b_open, b.b_shots, b.b_max_members,
            b.b_film, b.b_hide, b.b_members, b.b_shooters, b.b_rolls, b.b_dl, b.b_photos, b.b_pending,
            b.b_bytes, b.b_created, b.b_purge, b.b_last, count(*) over (),
-           b.b_starts, b.b_ends, b.b_cover, b.b_reports
+           b.b_starts, b.b_ends, b.b_cover, b.b_reports, b.b_pay
       from base b
      order by
        -- 'date': yang akan datang/berlangsung (terdekat dulu), lalu yang sudah lewat, lalu tanpa jadwal
@@ -2284,6 +2321,391 @@ begin
   perform log_audit('tinjau_acara', p_event::text, '{}');
 end $$;
 
+-- ---------- Pembayaran (Midtrans Snap) -------------------------------
+-- Harga = tamu × tarif roll × (1 − diskon jumlah tamu), dibulatkan ke atas per Rp1.000,
+-- minimal price_min; gratis bila tamu ≤ price_free_guests dan roll ≤ price_free_shots.
+-- Samakan rumus dengan src/price.js. Pembayaran mati (payments_enabled = false) = semua
+-- acara gratis seperti sebelumnya.
+
+-- [[batas_roll, tarif], ...] atau [[min_tamu, persen], ...]: urut naik, angka positif
+create or replace function valid_price_steps(p jsonb, p_max_second int) returns boolean
+language sql immutable as $$
+  select jsonb_typeof(p) = 'array' and jsonb_array_length(p) between 1 and 20
+     and not exists (
+       select 1 from jsonb_array_elements(p) with ordinality x(v, i)
+        where jsonb_typeof(v) <> 'array' or jsonb_array_length(v) <> 2
+           or jsonb_typeof(v->0) <> 'number' or jsonb_typeof(v->1) <> 'number'
+           or (v->>0)::numeric < 1 or (v->>1)::numeric < 0 or (v->>1)::numeric > p_max_second
+           or (v->>0)::numeric <> floor((v->>0)::numeric) or (v->>1)::numeric <> floor((v->>1)::numeric)
+           or (i > 1 and (v->>0)::int <= (p->(i::int - 2)->>0)::int));
+$$;
+
+alter table app_settings
+  add column if not exists payments_enabled boolean not null default false,
+  add column if not exists midtrans_production boolean not null default false,
+  add column if not exists midtrans_client_key text
+    check (midtrans_client_key is null or midtrans_client_key ~ '^[A-Za-z0-9_.:-]{8,200}$'),
+  add column if not exists price_roll_tiers jsonb not null
+    default '[[12, 1600], [24, 2200], [36, 2800], [50, 3400], [100, 5500]]'
+    check (valid_price_steps(price_roll_tiers, 10000000)),
+  add column if not exists price_discounts jsonb not null
+    default '[[50, 10], [100, 15], [200, 20]]'
+    check (jsonb_array_length(price_discounts) = 0 or valid_price_steps(price_discounts, 90)),
+  add column if not exists price_free_guests int not null default 5 check (price_free_guests between 0 and 5000),
+  add column if not exists price_free_shots int not null default 36 check (price_free_shots between 0 and 500),
+  add column if not exists price_min int not null default 25000 check (price_min between 0 and 100000000),
+  add column if not exists free_events_per_user int not null default 2 check (free_events_per_user between 0 and 1000),
+  add column if not exists payment_window_min int not null default 15 check (payment_window_min between 5 and 1440);
+
+create table if not exists promo_codes (
+  code         text primary key check (code ~ '^[A-Z0-9_-]{3,30}$'),
+  kind         text not null check (kind in ('percent', 'amount')),
+  value        int  not null check (value > 0),
+  max_discount int  check (max_discount is null or max_discount > 0),   -- batas potongan untuk persen
+  max_uses     int  check (max_uses is null or max_uses > 0),
+  used         int  not null default 0,
+  expires_at   timestamptz,
+  email_domain text check (email_domain is null or email_domain ~ '^[a-z0-9.-]+\.[a-z]{2,}$'),
+  active       boolean not null default true,
+  created_at   timestamptz not null default now(),
+  check (kind <> 'percent' or value <= 100)
+);
+
+-- Pesanan. Catatan keuangan tetap ada walau acaranya dihapus (event_id jadi NULL).
+create table if not exists orders (
+  id              text primary key check (id ~ '^JPR-[0-9]{8}-[A-Z0-9]{6}$'),
+  event_id        uuid references events(id) on delete set null,
+  user_id         uuid references profiles(id) on delete set null,
+  event_name      text not null,
+  kind            text not null check (kind in ('new', 'upgrade')),
+  guests          int  not null check (guests >= 1),
+  shots           int  not null check (shots >= 1),
+  list_price      int  not null check (list_price >= 0),   -- harga daftar ukuran baru
+  credit          int  not null default 0,                 -- sudah dibayar (tambah tamu)
+  promo_code      text references promo_codes(code) on delete set null,
+  promo_discount  int  not null default 0,
+  amount          int  not null check (amount >= 0),       -- yang ditagih
+  status          text not null default 'pending'
+                    check (status in ('pending', 'paid', 'expired', 'failed', 'refunded')),
+  snap_token      text,
+  snap_url        text,
+  payment_type    text,
+  midtrans_status text,
+  created_at      timestamptz not null default now(),
+  expires_at      timestamptz not null,
+  paid_at         timestamptz,
+  updated_at      timestamptz not null default now()
+);
+create index if not exists orders_event on orders (event_id, created_at desc);
+create index if not exists orders_status on orders (status, created_at desc);
+alter table promo_codes enable row level security;
+alter table orders enable row level security;
+
+-- Pengaturan harga untuk halaman harga publik, wizard, dan pembayaran (juga tanpa login)
+create or replace function price_settings() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'payments_enabled', s.payments_enabled, 'roll_tiers', s.price_roll_tiers,
+    'discounts', s.price_discounts, 'free_guests', s.price_free_guests,
+    'free_shots', s.price_free_shots, 'min', s.price_min,
+    'free_events_per_user', s.free_events_per_user, 'payment_window_min', s.payment_window_min,
+    'max_shots_limit', s.max_shots_limit, 'max_members_limit', s.max_members_limit,
+    'midtrans_client_key', s.midtrans_client_key, 'midtrans_production', s.midtrans_production)
+    from app_settings s;
+$$;
+
+-- Harga daftar untuk tamu × roll: { rate, subtotal, discount_pct, volume_discount, total, free }
+create or replace function price_quote_raw(p_guests int, p_shots int) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare s app_settings%rowtype; v_rate int; v_pct int; v_sub bigint; v_total bigint; v_free boolean;
+begin
+  select * into s from app_settings;
+  select (t->>1)::int into v_rate
+    from jsonb_array_elements(s.price_roll_tiers) with ordinality x(t, i)
+   where p_shots <= (t->>0)::int order by i limit 1;
+  if v_rate is null then   -- di atas batas tertinggi: pakai tarif tertinggi
+    select (t->>1)::int into v_rate
+      from jsonb_array_elements(s.price_roll_tiers) with ordinality x(t, i) order by i desc limit 1;
+  end if;
+  select coalesce((select (d->>1)::int from jsonb_array_elements(s.price_discounts) d
+                    where p_guests >= (d->>0)::int order by (d->>0)::int desc limit 1), 0)
+    into v_pct;
+  v_sub := p_guests::bigint * v_rate;
+  v_free := p_guests <= s.price_free_guests and p_shots <= s.price_free_shots;
+  v_total := case when v_free then 0
+                  else greatest(s.price_min, ceil((v_sub * (100 - v_pct))::numeric / 100000) * 1000) end;
+  return jsonb_build_object('rate', v_rate, 'subtotal', v_sub, 'discount_pct', v_pct,
+    'volume_discount', v_sub - round((v_sub * (100 - v_pct))::numeric / 100),
+    'total', v_total, 'free', v_free);
+end $$;
+
+-- Potongan kode promo untuk nominal p_base. Galat bila kode tidak berlaku.
+create or replace function promo_discount(p_code text, p_base int) returns int
+language plpgsql stable security definer set search_path = public as $$
+declare c promo_codes%rowtype;
+begin
+  select * into c from promo_codes where code = upper(trim(p_code));
+  if not found or not c.active then raise exception 'PROMO_TIDAK_VALID'; end if;
+  if c.expires_at is not null and c.expires_at <= now() then raise exception 'PROMO_KEDALUWARSA'; end if;
+  if c.max_uses is not null and c.used >= c.max_uses then raise exception 'PROMO_HABIS'; end if;
+  if c.email_domain is not null and coalesce(split_part(my_verified_email(), '@', 2), '') <> c.email_domain then
+    raise exception 'PROMO_TIDAK_BERLAKU';
+  end if;
+  if c.kind = 'percent' then
+    return least(coalesce(c.max_discount, p_base), floor(p_base::numeric * c.value / 100)::int, p_base);
+  end if;
+  return least(c.value, p_base);
+end $$;
+
+-- Rincian harga untuk layar: ukuran baru, kredit (tambah tamu acara lunas), promo.
+-- Kode promo yang tidak berlaku tidak menggagalkan: dikembalikan sebagai promo_error.
+create or replace function price_quote(p_guests int, p_shots int, p_promo text default null,
+                                       p_event uuid default null)
+returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare q jsonb; e events%rowtype; v_credit int := 0; v_sub int; v_disc int := 0; v_err text;
+begin
+  q := price_quote_raw(p_guests, p_shots);
+  if p_event is not null then
+    select * into e from events where id = p_event;
+    if found and can_manage(p_event) and e.pay_status = 'paid' then v_credit := e.price_basis; end if;
+  end if;
+  v_sub := greatest(0, (q->>'total')::int - v_credit);
+  if nullif(trim(coalesce(p_promo, '')), '') is not null and v_sub > 0 then
+    begin
+      v_disc := promo_discount(p_promo, v_sub);
+    exception when others then v_err := sqlerrm;
+    end;
+  end if;
+  return q || jsonb_build_object('credit', v_credit, 'due', v_sub, 'promo_discount', v_disc,
+                                 'promo_error', v_err, 'amount', v_sub - v_disc);
+end $$;
+
+-- Lunasi pesanan (dari webhook Midtrans, atau langsung bila nominalnya 0). Aman diulang.
+create or replace function apply_order_paid(p_order text, p_type text default null) returns boolean
+language plpgsql security definer set search_path = public as $$
+declare o orders%rowtype; e events%rowtype; s app_settings%rowtype;
+begin
+  select * into o from orders where id = p_order for update;
+  if not found or o.status = 'paid' then return false; end if;
+  select * into s from app_settings;
+  update orders set status = 'paid', paid_at = now(), updated_at = now(),
+                    payment_type = coalesce(p_type, payment_type)
+   where id = p_order;
+  if o.event_id is not null then
+    select * into e from events where id = o.event_id for update;
+    update events set
+      max_members = greatest(max_members, o.guests),
+      max_shots   = greatest(max_shots, o.shots),
+      pay_status  = case when o.list_price = 0 and pay_status <> 'paid' then 'free' else 'paid' end,
+      price_basis = greatest(price_basis, o.list_price),
+      needs_review = needs_review
+        or (o.guests >= s.review_guests and (e.reviewed_at is null or e.max_members < s.review_guests))
+     where id = o.event_id;
+  end if;
+  if o.promo_code is not null then update promo_codes set used = used + 1 where code = o.promo_code; end if;
+  insert into audit_log (actor_id, actor_email, action, target, detail)
+  values (o.user_id, null, 'bayar_acara', coalesce(o.event_id::text, o.event_name),
+          jsonb_build_object('order', o.id, 'amount', o.amount, 'kind', o.kind, 'guests', o.guests,
+                             'shots', o.shots, 'name', o.event_name, 'via', coalesce(p_type, o.payment_type)));
+  return true;
+end $$;
+
+-- Buat pesanan untuk acara: draf (bayar pertama) atau tambah tamu/roll acara yang sudah aktif.
+-- Dipanggil Edge Function create-order dengan sesi pengguna. Pesanan tertunda yang sama dipakai ulang.
+create or replace function start_order(p_event uuid, p_guests int default null, p_shots int default null,
+                                       p_promo text default null)
+returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  s app_settings%rowtype; e events%rowtype; o orders%rowtype;
+  v_g int; v_r int; v_kind text; v_credit int := 0; v_list int; v_sub int; v_disc int := 0;
+  v_code text := nullif(upper(trim(coalesce(p_promo, ''))), ''); v_gate jsonb; v_id text;
+begin
+  perform assert_not_banned();
+  select * into s from app_settings;
+  if not s.payments_enabled then raise exception 'PEMBAYARAN_NONAKTIF'; end if;
+  select * into e from events where id = p_event for update;
+  if not found then raise exception 'ACARA_TIDAK_ADA'; end if;
+  if e.owner_id <> auth.uid() and not is_superadmin() then raise exception 'BUKAN_PEMILIK'; end if;
+  v_g := coalesce(p_guests, e.max_members);
+  v_r := coalesce(p_shots, e.max_shots);
+  if v_g < 1 or v_g > s.max_members_limit then raise exception 'PESERTA_MELEBIHI_BATAS'; end if;
+  if v_r < 1 or v_r > s.max_shots_limit then raise exception 'JATAH_MELEBIHI_BATAS'; end if;
+  if e.pay_status = 'draft' then
+    v_kind := 'new';
+  else
+    v_kind := 'upgrade';
+    if v_g < e.max_members or v_r < e.max_shots then raise exception 'TIDAK_BOLEH_TURUN'; end if;
+    if v_g = e.max_members and v_r = e.max_shots then raise exception 'TIDAK_ADA_PERUBAHAN'; end if;
+    if e.pay_status = 'paid' then v_credit := e.price_basis; end if;
+  end if;
+  -- Status pembuatan acara (Tutup / Hanya acara kecil) juga menahan pembayaran
+  v_gate := can_create_event(v_g, v_r);
+  if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
+  v_list := (price_quote_raw(v_g, v_r)->>'total')::int;
+  v_sub := greatest(0, v_list - v_credit);
+  if v_code is not null and v_sub > 0 then v_disc := promo_discount(v_code, v_sub); end if;
+  if v_disc = 0 then v_code := null; end if;
+
+  select * into o from orders
+   where event_id = p_event and status = 'pending' and expires_at > now() + interval '1 minute'
+     and guests = v_g and shots = v_r and amount = v_sub - v_disc
+     and coalesce(promo_code, '') = coalesce(v_code, '')
+   order by created_at desc limit 1;
+  if not found then
+    update orders set status = 'expired', updated_at = now() where event_id = p_event and status = 'pending';
+    loop
+      v_id := 'JPR-' || to_char(now() at time zone 'Asia/Jakarta', 'YYYYMMDD') || '-'
+              || upper(substr(md5(gen_random_uuid()::text), 1, 6));
+      exit when not exists (select 1 from orders where id = v_id);
+    end loop;
+    insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, credit,
+                        promo_code, promo_discount, amount, expires_at)
+    values (v_id, p_event, auth.uid(), e.name, v_kind, v_g, v_r, v_list, v_credit,
+            v_code, v_disc, v_sub - v_disc, now() + make_interval(mins => s.payment_window_min))
+    returning * into o;
+    if o.amount = 0 then
+      perform apply_order_paid(o.id, 'tanpa_biaya');
+      select * into o from orders where id = o.id;
+    end if;
+  end if;
+  return to_jsonb(o) - 'user_id' || jsonb_build_object('window_min', s.payment_window_min,
+                                                       'production', s.midtrans_production);
+end $$;
+
+-- Edge Function create-order (service role): simpan token Snap
+create or replace function set_order_snap(p_order text, p_token text, p_url text) returns void
+language sql security definer set search_path = public as $$
+  update orders set snap_token = p_token, snap_url = p_url, updated_at = now() where id = p_order;
+$$;
+
+-- Edge Function midtrans-webhook (service role), setelah tanda tangan dan status dicek ke Midtrans
+create or replace function midtrans_notify(p_order text, p_status text, p_fraud text default null,
+                                           p_type text default null, p_gross numeric default null)
+returns text
+language plpgsql security definer set search_path = public as $$
+declare o orders%rowtype;
+begin
+  select * into o from orders where id = p_order for update;
+  if not found then return 'tidak_ada'; end if;
+  if p_gross is not null and round(p_gross) <> o.amount then raise exception 'NOMINAL_TIDAK_COCOK'; end if;
+  update orders set midtrans_status = p_status, payment_type = coalesce(p_type, payment_type), updated_at = now()
+   where id = p_order;
+  if p_status = 'settlement' or (p_status = 'capture' and coalesce(p_fraud, 'accept') = 'accept') then
+    perform apply_order_paid(p_order, p_type);
+    return 'paid';
+  elsif p_status = 'expire' and o.status = 'pending' then
+    update orders set status = 'expired' where id = p_order; return 'expired';
+  elsif p_status in ('cancel', 'deny', 'failure') and o.status = 'pending' then
+    update orders set status = 'failed' where id = p_order; return 'failed';
+  elsif p_status in ('refund', 'partial_refund') and o.status = 'paid' then
+    update orders set status = 'refunded' where id = p_order;
+    insert into audit_log (actor_id, action, target, detail)
+    values (o.user_id, 'refund_acara', coalesce(o.event_id::text, o.event_name),
+            jsonb_build_object('order', o.id, 'amount', o.amount, 'name', o.event_name));
+    return 'refunded';
+  end if;
+  return (select status from orders where id = p_order);
+end $$;
+
+-- Status pesanan untuk layar Menunggu pembayaran (pemilik acara)
+create or replace function order_status(p_order text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare o orders%rowtype;
+begin
+  select * into o from orders where id = p_order;
+  if not found or (o.user_id is distinct from auth.uid() and not is_superadmin()) then
+    raise exception 'PESANAN_TIDAK_ADA';
+  end if;
+  -- Lewat batas waktu jauh: anggap kedaluwarsa (webhook lunas yang terlambat tetap diterima)
+  if o.status = 'pending' and o.expires_at < now() - interval '10 minutes' then
+    update orders set status = 'expired', updated_at = now() where id = p_order returning * into o;
+  end if;
+  return to_jsonb(o) - 'user_id' || jsonb_build_object(
+    'pay_status', (select pay_status from events where id = o.event_id));
+end $$;
+
+-- Riwayat pesanan satu acara (Panel)
+create or replace function event_orders(p_event uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+begin
+  perform assert_owner(p_event);
+  return coalesce((select jsonb_agg(to_jsonb(o) - 'user_id' - 'snap_token' order by o.created_at desc)
+                     from orders o where o.event_id = p_event), '[]');
+end $$;
+
+-- Keuangan superadmin: pesanan (saring + cari) dan ringkasan pendapatan
+create or replace function admin_orders(p_status text default 'all', p_search text default null,
+                                        p_limit int default 50, p_offset int default 0)
+returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+begin
+  perform assert_superadmin();
+  return jsonb_build_object(
+    'summary', (select jsonb_build_object(
+        'revenue_30d', coalesce(sum(amount) filter (where status = 'paid' and paid_at > now() - interval '30 days'), 0),
+        'revenue_today', coalesce(sum(amount) filter (where status = 'paid'
+                           and paid_at >= date_trunc('day', now() at time zone 'Asia/Jakarta') at time zone 'Asia/Jakarta'), 0),
+        'revenue_total', coalesce(sum(amount) filter (where status = 'paid'), 0),
+        'paid_30d', count(*) filter (where status = 'paid' and paid_at > now() - interval '30 days'),
+        'pending', count(*) filter (where status = 'pending' and expires_at > now()),
+        'refunded', coalesce(sum(amount) filter (where status = 'refunded'), 0),
+        'drafts', (select count(*) from events where pay_status = 'draft'))
+      from orders),
+    'total', (select count(*) from orders o
+               where (coalesce(p_status, 'all') = 'all' or o.status = p_status)
+                 and (p_search is null or p_search = '' or o.id ilike '%' || p_search || '%'
+                      or o.event_name ilike '%' || p_search || '%')),
+    'rows', coalesce((select jsonb_agg(r) from (
+        select o.id, o.event_id, o.event_name, o.kind, o.guests, o.shots, o.list_price, o.credit,
+               o.promo_code, o.promo_discount, o.amount, o.status, o.payment_type, o.midtrans_status,
+               o.created_at, o.paid_at, o.expires_at, pr.name as user_name, u.email::text as user_email
+          from orders o
+          left join profiles pr on pr.id = o.user_id
+          left join auth.users u on u.id = o.user_id
+         where (coalesce(p_status, 'all') = 'all' or o.status = p_status)
+           and (p_search is null or p_search = '' or o.id ilike '%' || p_search || '%'
+                or o.event_name ilike '%' || p_search || '%' or u.email ilike '%' || p_search || '%')
+         order by o.created_at desc
+         limit least(greatest(p_limit, 1), 200) offset greatest(p_offset, 0)) r), '[]'));
+end $$;
+
+create or replace function admin_promos() returns setof promo_codes
+language plpgsql stable security definer set search_path = public as $$
+begin
+  perform assert_superadmin();
+  return query select * from promo_codes order by active desc, created_at desc;
+end $$;
+
+-- Buat / ubah kode promo. p: { code, kind, value, max_discount, max_uses, expires_at, email_domain, active }
+create or replace function admin_save_promo(p jsonb) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_code text := upper(trim(coalesce(p->>'code', '')));
+begin
+  perform assert_superadmin();
+  insert into promo_codes (code, kind, value, max_discount, max_uses, expires_at, email_domain, active)
+  values (v_code, p->>'kind', (p->>'value')::int, nullif(p->>'max_discount', '')::int,
+          nullif(p->>'max_uses', '')::int, nullif(p->>'expires_at', '')::timestamptz,
+          nullif(lower(trim(coalesce(p->>'email_domain', ''))), ''), coalesce((p->>'active')::boolean, true))
+  on conflict (code) do update set
+    kind = excluded.kind, value = excluded.value, max_discount = excluded.max_discount,
+    max_uses = excluded.max_uses, expires_at = excluded.expires_at,
+    email_domain = excluded.email_domain, active = excluded.active;
+  perform log_audit('kode_promo', v_code, p);
+end $$;
+
+-- Superadmin: tandai acara lunas/gratis secara manual (pembayaran di luar Midtrans)
+create or replace function admin_set_pay_status(p_event uuid, p_status text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform assert_superadmin();
+  if p_status not in ('free', 'draft', 'paid') then raise exception 'STATUS_TIDAK_DIKENAL'; end if;
+  update events set pay_status = p_status where id = p_event;
+  if not found then raise exception 'ACARA_TIDAK_ADA'; end if;
+  perform log_audit('ubah_status_bayar', p_event::text, jsonb_build_object('status', p_status));
+end $$;
+
 revoke execute on all functions in schema public from public, anon;
 
 -- Pembantu internal: hanya dipanggil dari dalam fungsi lain
@@ -2292,7 +2714,9 @@ revoke execute on function
   gen_code(), handle_new_user(), visible_photos(uuid), my_verified_email(),
   open_now(events), owner_bytes(uuid), normalize_wa(text),
   due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]), r2_migration_batch(int),
-  capacity_meters(), due_waitlist_notifications(), mark_waitlist_notified(uuid[])
+  capacity_meters(), due_waitlist_notifications(), mark_waitlist_notified(uuid[]),
+  apply_order_paid(text, text), set_order_snap(text, text, text),
+  midtrans_notify(text, text, text, text, numeric), promo_discount(text, int)
 from authenticated;
 
 grant execute on function
@@ -2326,14 +2750,23 @@ grant execute on function
   admin_overdue_events(), admin_client_errors(int), log_client_error(uuid, text, text, text),
   valid_ornament(text), creation_state(), can_create_event(int, int),
   set_creation_mode(text, text, timestamptz, int, int), join_creation_waitlist(boolean),
-  admin_capacity(), capacity_tick(), review_event(uuid)
+  admin_capacity(), capacity_tick(), review_event(uuid),
+  price_settings(), price_quote_raw(int, int), price_quote(int, int, text, uuid),
+  start_order(uuid, int, int, text), order_status(text), event_orders(uuid),
+  admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
+  admin_set_pay_status(uuid, text)
 to authenticated;
+
+-- Halaman harga publik bisa dibuka tanpa login
+grant execute on function price_settings(), price_quote_raw(int, int) to anon;
 
 -- Fungsi untuk Edge Function notify-album: hanya service_role
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant execute on function due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]),
-      r2_migration_batch(int), due_waitlist_notifications(), mark_waitlist_notified(uuid[]) to service_role;
+      r2_migration_batch(int), due_waitlist_notifications(), mark_waitlist_notified(uuid[]),
+      set_order_snap(text, text, text), midtrans_notify(text, text, text, text, numeric),
+      apply_order_paid(text, text) to service_role;
   end if;
 end $$;
 

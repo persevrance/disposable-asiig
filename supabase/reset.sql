@@ -19,7 +19,7 @@ drop policy if exists "suara: dengar"            on storage.objects;
 drop policy if exists "suara: hapus"             on storage.objects;
 
 drop view if exists stored_objects;
-drop table if exists creation_waitlist, creator_requests, data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
+drop table if exists orders, promo_codes, creation_waitlist, creator_requests, data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
   photo_reports, favorites, client_errors, downloads, audit_log, user_roles, app_settings,
   photos, event_members, event_invites, events, event_creators, profiles cascade;
 
@@ -72,5 +72,11 @@ drop function if exists
   creation_state(), can_create_event(int, int), set_creation_mode(text, text, timestamptz, int, int),
   join_creation_waitlist(boolean), due_waitlist_notifications(), mark_waitlist_notified(uuid[]),
   capacity_meter(text, numeric, numeric, numeric), capacity_meters(), capacity_peak(jsonb),
-  admin_capacity(), capacity_tick(), review_event(uuid)
+  admin_capacity(), capacity_tick(), review_event(uuid),
+  -- pembayaran
+  valid_price_steps(jsonb, int), price_settings(), price_quote_raw(int, int), promo_discount(text, int),
+  price_quote(int, int, text, uuid), apply_order_paid(text, text), start_order(uuid, int, int, text),
+  set_order_snap(text, text, text), midtrans_notify(text, text, text, text, numeric), order_status(text),
+  event_orders(uuid), admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
+  admin_set_pay_status(uuid, text)
 cascade;

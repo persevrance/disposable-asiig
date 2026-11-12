@@ -56,6 +56,7 @@ export function landingHtml({ code, shareLink }) {
         <nav aria-label="${t("Navigasi utama")}">
           <button type="button" class="lp-link" data-scroll="lp-cara">${t("Cara kerja")}</button>
           <button type="button" class="lp-link" data-scroll="lp-fitur">${t("Fitur")}</button>
+          <a class="lp-link" href="#/harga">${t("Harga")}</a>
           ${langSwitch()}
           <button type="button" class="btn lp-outline" data-act="google">${t("Masuk")}</button>
         </nav>
@@ -129,7 +130,7 @@ export function landingHtml({ code, shareLink }) {
       <footer class="lp-foot">
         <div class="lp-inner">
           <span class="wordmark">jepretin</span>
-          <div><a href="/privacy.html">${t("Kebijakan privasi")}</a><span>© ${new Date().getFullYear()} Jepretin</span></div>
+          <div><a href="#/harga">${t("Harga")}</a><a href="/syarat.html">${t("Syarat layanan")}</a><a href="/pengembalian-dana.html">${t("Kebijakan pengembalian dana")}</a><a href="/privacy.html">${t("Kebijakan privasi")}</a><span>© ${new Date().getFullYear()} Jepretin</span></div>
         </div>
       </footer>
     </div>`;

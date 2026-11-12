@@ -1,6 +1,7 @@
 {
   // Cloudflare Workers dengan static assets: menyajikan hasil build Vite di folder dist,
-  // ditambah API foto di R2 (/api/r2/*, lihat worker/index.js).
+  // ditambah API foto di R2 (/api/r2/*, lihat worker/index.js) dan pembayaran Midtrans
+  // (/api/pay/*, lihat worker/pay.js; rahasia MIDTRANS_* diatur di dasbor, bukan di file ini).
   // "name" harus sama dengan nama proyek Worker di dasbor Cloudflare.
   // Bucket R2 harus dibuat lebih dulu (README, bagian R2), kalau tidak deploy gagal.
   "$schema": "node_modules/wrangler/config-schema.json",

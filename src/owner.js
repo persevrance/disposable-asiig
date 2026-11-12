@@ -7,6 +7,8 @@ import { pingAlbum } from "./realtime.js";
 import { kickNotify } from "./push.js";
 import { FILMS } from "./film.js";
 import { ORNAMENTS } from "./collage-layouts.js";
+import { openPayment, openUpgrade, paymentsOn } from "./payment.js";
+import { rp } from "./price.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
 import { attachZoom } from "./zoom.js";
@@ -66,6 +68,15 @@ export async function renderPanel(root, status, { reload, home }) {
   const view = el(`
     <section class="panel">
       ${status.is_admin && !status.is_owner ? `<p class="pill admin-pill">Anda mengelola acara ini sebagai superadmin</p>` : ""}
+      ${status.pay_status === "draft" ? `
+      <div class="review-banner pay-banner" role="status">
+        <div><b>Acara belum dibayar</b>
+          <small>Tamu belum bisa bergabung dan kamera belum aktif. Selesaikan pembayaran untuk mengaktifkan QR undangan.</small></div>
+        <div class="row tight">
+          <button type="button" class="btn small primary" data-act="pay">Bayar sekarang</button>
+          ${status.is_admin ? `<button type="button" class="btn small" data-act="mark-paid">Tandai lunas (manual)</button>` : ""}
+        </div>
+      </div>` : ""}
       ${status.needs_review ? `
       <div class="review-banner" role="status">
         <div><b>Menunggu tinjauan superadmin</b>
@@ -91,6 +102,7 @@ export async function renderPanel(root, status, { reload, home }) {
           <button class="btn sc-outline" data-act="toggle-open">${status.is_open ? "Tutup acara" : "Buka acara"}</button>
         </div>
         <div class="status-more">
+          <button class="linklike" data-act="upgrade" hidden>${ICON.people} Tambah tamu atau jepretan</button>
           <button class="linklike" data-act="share">${ICON.link} Salin link undangan</button>
           <a class="linklike" href="#/e/${status.event_id}/layar">${ICON.play} Mode layar</a>
         </div>
@@ -211,6 +223,10 @@ export async function renderPanel(root, status, { reload, home }) {
           </details>
           <button class="btn primary" type="submit">Simpan</button>
         </form>
+        <div class="card pay-history" hidden>
+          <h3>Pembayaran</h3>
+          <div class="pay-history-list"></div>
+        </div>
         <div class="card">
           <h3>Acara berikutnya</h3>
           <p class="hint">Buat acara baru dengan pengaturan, undangan, dan sampul yang sama. Peserta dan foto tidak ikut.</p>
@@ -238,6 +254,32 @@ export async function renderPanel(root, status, { reload, home }) {
       </div>
     </section>`);
   root.replaceChildren(view);
+  // --- pembayaran ---
+  view.querySelector('[data-act="pay"]')?.addEventListener("click", () => openPayment(status, { onPaid: reload }));
+  view.querySelector('[data-act="mark-paid"]')?.addEventListener("click", async (e) => {
+    if (!(await confirmDialog({ title: "Tandai acara sudah dibayar?", text: "Pakai bila pembayaran diterima di luar Midtrans. Tercatat di log.", ok: "Tandai lunas" }))) return;
+    e.currentTarget.disabled = true;
+    try { await rpc("admin_set_pay_status", { p_event: status.event_id, p_status: "paid" }); toast("Acara ditandai lunas."); reload(); }
+    catch (err) { toast(friendly(err)); e.currentTarget.disabled = false; }
+  });
+  let membersNow = null;
+  paymentsOn().then((on) => {
+    if (!on || status.pay_status === "draft") return;
+    const b = view.querySelector('[data-act="upgrade"]');
+    b.hidden = false;
+    b.onclick = () => openUpgrade(status, { members: membersNow, onPaid: reload });
+  });
+  rpc("event_orders", { p_event: status.event_id }).then((rows) => {
+    if (!rows?.length) return;
+    const card = view.querySelector(".pay-history");
+    card.hidden = false;
+    const LABEL = { pending: ["Menunggu", "warn"], paid: ["Lunas", "ok"], expired: ["Kedaluwarsa", ""], failed: ["Gagal", "bad"], refunded: ["Dikembalikan", "bad"] };
+    card.querySelector(".pay-history-list").innerHTML = rows.map((o) => {
+      const [l, tone] = LABEL[o.status] || [o.status, ""];
+      return `<div class="pay-row"><div><b>${rp(o.amount)}</b><small>${o.kind === "upgrade" ? "Tambah" : "Acara"} ${o.guests} tamu × ${o.shots} · ${esc(fmtDate(o.paid_at || o.created_at))} · <code>${esc(o.id)}</code></small></div><span class="tag ${tone}">${l}</span></div>`;
+    }).join("");
+  }).catch(() => {});
+
   view.querySelector('[data-act="review"]')?.addEventListener("click", async (e) => {
     e.currentTarget.disabled = true;
     try { await rpc("review_event", { p_event: status.event_id }); toast("Acara ditandai sudah ditinjau."); reload(); }
@@ -298,6 +340,7 @@ export async function renderPanel(root, status, { reload, home }) {
     if (!st) return;
     const set = (k, v) => { view.querySelector(`[data-s="${k}"]`).textContent = Number(v).toLocaleString("id-ID"); };
     set("members", st.members); set("photos", st.photos); set("rolls", st.rolls_done); set("pending", st.pending);
+    membersNow = st.members;
     view.querySelector(".pending-stat").hidden = !st.pending;
     // Funnel tamu: batang tegak, angka dan label di bawahnya
     const top = Math.max(st.members, 1);
