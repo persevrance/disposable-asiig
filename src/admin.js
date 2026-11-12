@@ -427,14 +427,14 @@ async function ringkasan(body) {
       <div class="card errors-card">
         <h3>Kegagalan kamera terbaru</h3>
         ${errors.length ? `
-        <div class="table-scroll"><table>
+        <div class="table-scroll"><table class="stack">
           <thead><tr><th>Waktu</th><th>Masalah</th><th>Peserta · acara</th><th>Perangkat</th></tr></thead>
           <tbody>${errors.map((r) => `
             <tr>
-              <td><small>${esc(fmtDate(r.at))}</small></td>
+              <td data-label="Waktu"><small>${esc(fmtDate(r.at))}</small></td>
               <td><b>${esc(ERROR_KINDS[r.kind] || r.kind)}</b>${r.detail ? `<details><summary>Detail</summary><code>${esc(r.detail)}</code></details>` : ""}</td>
-              <td><small>${esc(r.user_name || "-")}<br>${esc(r.event_name || "-")}</small></td>
-              <td><small>${esc(shortUA(r.ua))}</small></td>
+              <td data-label="Peserta"><small>${esc(r.user_name || "-")}<br>${esc(r.event_name || "-")}</small></td>
+              <td data-label="Perangkat"><small>${esc(shortUA(r.ua))}</small></td>
             </tr>`).join("")}
           </tbody>
         </table></div>` : `<p class="hint">Belum ada laporan. Laporan dikirim otomatis saat kamera peserta gagal dibuka atau menampilkan gambar hitam.</p>`}
@@ -595,7 +595,7 @@ async function acara(body, me, role) {
   function tableView() {
     const n = el(`
       <div class="card table-scroll" style="padding:.25rem .5rem">
-        <table>
+        <table class="stack event-table">
           <thead><tr>
             <th class="pick"><input type="checkbox" data-pick-all aria-label="Pilih semua di halaman ini" /></th>
             <th>Acara</th><th>Status</th><th class="num">Peserta</th><th class="num">Film habis</th>
@@ -609,11 +609,11 @@ async function acara(body, me, role) {
               <td><span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
                 ${e.reports ? `<br><span class="tag warn">${e.reports} dilaporkan</span>` : ""}
                 ${e.purge_at && new Date(e.purge_at) <= new Date() ? `<br><span class="tag bad">lewat tanggal hapus</span>` : ""}</td>
-              <td class="num">${e.members}/${e.max_members}</td>
-              <td class="num">${e.rolls_done}</td>
-              <td class="num">${e.photos}${e.pending ? `<br><small>${e.pending} tertahan</small>` : ""}</td>
-              <td class="num">${fmtBytes(e.bytes)}</td>
-              <td><small>${esc(fmtDate(e.last_photo_at) || "-")}</small></td>
+              <td class="num" data-label="Peserta">${e.members}/${e.max_members}</td>
+              <td class="num" data-label="Film habis">${e.rolls_done}</td>
+              <td class="num" data-label="Foto">${e.photos}${e.pending ? ` <small>(${e.pending} tertahan)</small>` : ""}</td>
+              <td class="num" data-label="Ukuran">${fmtBytes(e.bytes)}</td>
+              <td data-label="Aktivitas"><small>${esc(fmtDate(e.last_photo_at) || "-")}</small></td>
               <td class="actions"><button class="btn small ghost icon-btn" data-more="${e.event_id}" aria-label="Aksi untuk ${esc(e.name)}">⋯</button></td>
             </tr>`).join("")}
           </tbody>
@@ -799,7 +799,7 @@ async function pengguna(body, me) {
         <div class="card">
           <h3>Menunggu login pertama</h3>
           <p class="hint">Peran sudah diberikan, tetapi pemilik email belum pernah masuk.</p>
-          <div class="table-scroll"><table><tbody>${roles.map((r) => `
+          <div class="table-scroll"><table class="stack"><tbody>${roles.map((r) => `
             <tr>
               <td><b>${esc(r.email)}</b> ${roleTag(r.role)}${r.role === "creator" ? `<br><small>${limitText(r)}</small>` : ""}</td>
               <td><small>ditambahkan ${esc(fmtDate(r.added_at))}${r.added_by ? ` oleh ${esc(r.added_by)}` : ""}</small></td>
@@ -822,14 +822,14 @@ async function pengguna(body, me) {
     if (!rows.length) { results.replaceChildren(el(`<p class="hint">Tidak ada pengguna yang cocok.</p>`)); return; }
     const table = el(`
       <div class="card table-scroll" style="padding:.25rem .5rem">
-        <table>
+        <table class="stack">
           <thead><tr><th>Pengguna</th><th>Aktivitas</th><th>Login terakhir</th><th></th></tr></thead>
           <tbody>${rows.map((u) => `
             <tr class="${u.banned ? "blocked" : ""}">
               <td><b>${esc(u.name)}</b> ${roleTag(u.role)} ${u.banned ? `<span class="tag bad">diblokir</span>` : ""}
                 <br><small>${esc(u.email)}</small>${u.role === "creator" ? `<br><small>${limitText(u)}</small>` : ""}</td>
-              <td><small>${u.events_owned} acara dibuat · ${u.events_joined} diikuti · ${u.photos} foto</small></td>
-              <td><small>${esc(fmtDate(u.last_sign_in_at) || "-")}</small></td>
+              <td data-label="Aktivitas"><small>${u.events_owned} acara dibuat · ${u.events_joined} diikuti · ${u.photos} foto</small></td>
+              <td data-label="Login terakhir"><small>${esc(fmtDate(u.last_sign_in_at) || "-")}</small></td>
               <td class="actions">${u.user_id === me.id ? `<small>Anda</small>` :
                 `<button class="btn small ghost icon-btn" data-user="${u.user_id}" aria-label="Aksi untuk ${esc(u.name)}">⋯</button>`}</td>
             </tr>`).join("")}

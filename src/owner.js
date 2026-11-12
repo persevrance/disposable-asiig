@@ -6,6 +6,7 @@ import { getUrls, removeFiles, uploadCover, coverUrl, removeCover, copyCover } f
 import { FILMS } from "./film.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
+import { attachZoom } from "./zoom.js";
 import {
   el, esc, toast, fmtDate, toLocalInput, fromLocalInput, download, safeName, modal,
   confirmDialog, typeToConfirm, copyText, actionSheet, ICON, fmtRange,
@@ -533,25 +534,80 @@ export async function showRoll(status, member) {
     const rows = await rpc("get_roll", { p_event: status.event_id, p_user: member.user_id });
     const ready = rows.filter((r) => r.status === "ready");
     const urls = await getUrls(ready.map((r) => r.thumb_path));
+    const time = (iso) => new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const slots = [];
-    for (let i = 1; i <= status.max_shots; i++) {
+    const total = Math.max(status.max_shots, ...rows.map((r) => r.seq));
+    for (let i = 1; i <= total; i++) {
       const r = rows.find((x) => x.seq === i);
       if (!r) slots.push(`<div class="tile slot empty-slot"><span>${i}</span></div>`);
       else if (r.status !== "ready") slots.push(`<div class="tile slot"><span>${i}</span><span class="badge">belum terunggah</span></div>`);
       else slots.push(`
-        <button class="tile${r.hidden ? " is-hidden" : ""}" data-m="${esc(r.medium_path)}">
-          <img loading="lazy" alt="Foto ${i}" src="${esc(urls[r.thumb_path] || "")}" />
-          <span class="badge">${i} · ${esc(fmtDate(r.taken_at))}</span>
+        <button class="tile${r.hidden ? " is-hidden" : ""}" data-i="${ready.indexOf(r)}" aria-label="Foto ${i}, ${esc(fmtDate(r.taken_at))}">
+          <img loading="lazy" alt="" src="${esc(urls[r.thumb_path] || "")}" />
+          <span class="badge">${i} · ${esc(time(r.taken_at))}</span>
+          ${r.hidden ? `<span class="badge mine hidden-tag">disembunyikan</span>` : ""}
         </button>`);
     }
     grid.innerHTML = slots.join("");
-    grid.querySelectorAll("[data-m]").forEach((b) => (b.onclick = async () => {
-      const u = await getUrls([b.dataset.m]);
-      const lb = el(`<div class="lightbox"><img alt="" src="${esc(u[b.dataset.m] || "")}" /><div class="lb-bar"><span></span><button class="btn small">Tutup</button></div></div>`);
-      lb.onclick = () => lb.remove();
-      document.body.append(lb);
-    }));
+    grid.querySelectorAll("[data-i]").forEach((b) => (b.onclick = () => openRollViewer(member, ready, Number(b.dataset.i))));
   } catch (e) { grid.textContent = friendly(e); }
+}
+
+// Penampil foto gulungan: sama seperti penampil Album (geser, panah, zoom), di atas jendela gulungan
+function openRollViewer(member, list, start) {
+  let idx = start;
+  const box = el(`
+    <div class="lightbox over-modal" role="dialog" aria-modal="true" aria-label="Foto ${esc(member.name)}">
+      <div class="lb-top">
+        <span class="lb-count"></span>
+        <button class="lb-icon" data-act="close" aria-label="Tutup">×</button>
+      </div>
+      <div class="lb-stage"><img class="lb-img" alt="" draggable="false" /></div>
+      <button class="lb-nav prev" data-act="prev" aria-label="Foto sebelumnya">‹</button>
+      <button class="lb-nav next" data-act="next" aria-label="Foto berikutnya">›</button>
+      <div class="lb-bar"><span class="lb-info"><span class="lb-who"></span><small class="lb-film"></small></span></div>
+    </div>`);
+  const img = box.querySelector(".lb-img");
+  const before = document.activeElement;
+  document.body.append(box);
+  box.querySelector('[data-act="close"]').focus();
+  const cache = new Map();
+  async function url(r) {
+    if (!cache.has(r.medium_path)) cache.set(r.medium_path, (await getUrls([r.medium_path]))[r.medium_path]);
+    return cache.get(r.medium_path);
+  }
+  async function show() {
+    const r = list[idx];
+    box.querySelector(".lb-count").textContent = `${idx + 1} / ${list.length}`;
+    box.querySelector(".lb-who").textContent = `${member.name} · #${r.seq} · ${fmtDate(r.taken_at)}`;
+    box.querySelector(".lb-film").textContent = r.hidden ? "Disembunyikan dari album" : "";
+    box.querySelector('[data-act="prev"]').disabled = idx <= 0;
+    box.querySelector('[data-act="next"]').disabled = idx >= list.length - 1;
+    zoom.reset();
+    img.classList.add("loading");
+    try { const u = await url(r); if (list[idx] === r) img.src = u; } catch (e) { toast(friendly(e)); }
+    if (list[idx + 1]) url(list[idx + 1]).then((u) => { new Image().src = u; }).catch(() => {});
+  }
+  const step = (d) => { const n = idx + d; if (n >= 0 && n < list.length) { idx = n; show(); } };
+  const zoom = attachZoom(box.querySelector(".lb-stage"), img, { onSwipe: step });
+  img.onload = () => { img.classList.remove("loading"); zoom.measure(); };
+  // Esc menutup penampil saja, bukan jendela gulungan di belakangnya
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.stopImmediatePropagation(); close(); }
+    else if (e.key === "ArrowRight") step(1);
+    else if (e.key === "ArrowLeft") step(-1);
+  };
+  document.addEventListener("keydown", onKey, true);
+  function close() {
+    document.removeEventListener("keydown", onKey, true);
+    zoom.destroy();
+    box.remove();
+    before?.focus?.();
+  }
+  box.querySelector('[data-act="close"]').onclick = close;
+  box.querySelector('[data-act="prev"]').onclick = () => step(-1);
+  box.querySelector('[data-act="next"]').onclick = () => step(1);
+  show();
 }
 
 // Perkecil gambar menjadi JPEG (untuk sampul)

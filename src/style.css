@@ -419,9 +419,13 @@ button.ctl:active:not(:disabled) { transform: scale(.94); }
 /* touch-action: none — gestur di area foto ditangani aplikasi, bukan zoom halaman Safari */
 .lb-stage { flex: 1; min-height: 0; overflow: hidden; display: grid; place-items: center; touch-action: none; position: relative; cursor: zoom-in; }
 .lb-stage.zoomed { cursor: grab; }
-.lb-img { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; transform-origin: 0 0; will-change: transform; transition: opacity .15s; }
+/* Diposisikan absolut di tengah stage supaya batas tinggi selalu berlaku (foto tegak di layar lebar) */
+.lb-img { position: absolute; inset: 0; margin: auto; max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; transform-origin: 0 0; will-change: transform; transition: opacity .15s; }
 .lb-img.anim { transition: opacity .15s, transform .22s ease; }
 .lb-img.loading { opacity: .3; }
+/* Penampil di atas jendela dialog (gulungan per tamu) */
+.lightbox.over-modal { z-index: 30; }
+.roll-grid .hidden-tag { background: rgba(45, 27, 51, .8); }
 .lb-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; width: 48px; height: 48px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .12); color: #fff; font-size: 1.8rem; cursor: pointer; display: grid; place-items: center; }
 .lb-nav.prev { left: max(.5rem, env(safe-area-inset-left)); }
 .lb-nav.next { right: max(.5rem, env(safe-area-inset-right)); }
@@ -684,6 +688,29 @@ body.show-page { background: #0d0810; overflow: hidden; }
   body.printing { background: #fff !important; }
   body.printing .print-sheet { display: block; }
   .print-sheet img { width: 100%; height: auto; display: block; }
+}
+
+/* ===================== HP: tabel menjadi kartu bertumpuk ===================== */
+@media (max-width: 640px) {
+  table.stack { min-width: 0; }
+  table.stack thead { display: none; }
+  table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
+  table.stack tr { position: relative; padding: .7rem 3.2rem .7rem 0; border-bottom: 1px solid var(--line); }
+  table.stack tr:last-child { border-bottom: 0; }
+  table.stack td { border: 0; padding: .1rem 0; text-align: left !important; font-size: .88rem; }
+  table.stack td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: .8rem; font-weight: 700; }
+  table.stack td.actions { position: absolute; top: .55rem; right: 0; width: auto; padding: 0; }
+  table.stack.event-table tr { padding-left: 2.4rem; }
+  table.stack td.pick { position: absolute; top: .75rem; left: .2rem; width: auto; padding: 0; }
+  table.stack.event-table td.num, table.stack.event-table td[data-label="Aktivitas"] { display: inline-block; width: auto; margin-right: .9rem; }
+  table.stack td br + small, table.stack td small { line-height: 1.45; }
+  .card.table-scroll { padding: .25rem .9rem !important; }
+
+  /* Sub-tab Panel: bisa digeser, lencana tidak terpotong */
+  .subtabs button { flex: 0 0 auto; padding: .5rem .9rem; }
+  /* Tombol dalam kartu mengisi baris dengan rata */
+  .status-card > .row .btn, .keep-card .row .btn, .qr-card-box .row .btn { flex: 1 1 auto; }
+  .keep-card .row.tight.wrap { width: 100%; }
 }
 
 #toast {
