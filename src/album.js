@@ -1,11 +1,20 @@
-// Tab Album: daftar foto, muat bertahap, diperbarui tiap 15 detik, unduh dengan kuota
+// Tab Album: daftar foto, saringan (semua / foto saya / favorit / per tamu), muat bertahap,
+// diperbarui tiap 15 detik, unduh dengan kuota, favorit, dan laporan foto.
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
 import { getUrls } from "./storage.js";
 import { attachZoom } from "./zoom.js";
-import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, ICON } from "./ui.js";
+import { filmName } from "./film.js";
+import { canInstall, promptInstall } from "./install.js";
+import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, copyText, ICON } from "./ui.js";
 
 const PAGE = 60;
+
+const REASONS = [
+  ["tidak_pantas", "Tidak pantas", "Konten tidak sopan atau menyinggung"],
+  ["privasi", "Privasi", "Saya ada di foto ini dan tidak ingin dibagikan"],
+  ["lainnya", "Lainnya", "Alasan lain"],
+];
 
 export async function renderAlbum(root, status) {
   const items = new Map(); // photo_id -> row
@@ -14,11 +23,22 @@ export async function renderAlbum(root, status) {
   let endReached = false;
   let loading = false;
   let selecting = false;
+  let gen = 0;                                     // naik setiap saringan berganti
+  const filter = { kind: "all", owner: null };
 
   const view = el(`
     <section class="album">
+      <div class="keep-slot"></div>
       <div class="album-progress" hidden></div>
       <button class="new-pill" hidden></button>
+      <div class="album-filter" hidden>
+        <div class="chips" role="group" aria-label="Saring album">
+          <button type="button" class="chip" data-f="all" aria-pressed="true">Semua</button>
+          ${status.is_member ? `<button type="button" class="chip" data-f="mine" aria-pressed="false">Foto saya</button>` : ""}
+          <button type="button" class="chip" data-f="fav" aria-pressed="false">${ICON.heart}<span>Favorit</span></button>
+        </div>
+        <select class="owner-filter" aria-label="Foto dari tamu" hidden></select>
+      </div>
       <div class="album-bar">
         <span class="dl-quota"></span>
         <button class="btn small" data-act="select">Pilih untuk unduh</button>
@@ -41,6 +61,8 @@ export async function renderAlbum(root, status) {
   const selectBtn = view.querySelector('[data-act="select"]');
   const progressEl = view.querySelector(".album-progress");
   const pill = view.querySelector(".new-pill");
+  const filterBar = view.querySelector(".album-filter");
+  const ownerSel = view.querySelector(".owner-filter");
   let freshCount = 0;
 
   // ---- progres: gulungan sendiri dan tamu yang filmnya sudah habis ----
@@ -60,6 +82,42 @@ export async function renderAlbum(root, status) {
       <div class="bar mint"><span style="width:${pct(progress.rolls_done, progress.members)}%"></span></div>
       <small>${reveal ? `Semua foto terbuka ${esc(fmtDate(status.reveal_at))}.`
         : "Foto setiap tamu muncul di sini setelah filmnya habis atau acara ditutup."}</small>`;
+    renderKeepCard();
+  }
+
+  // ---- simpan album: link permanen + pasang di layar utama ----
+  // Muncul setelah gulungan tamu habis atau acara ditutup, bisa ditutup.
+  const keepKey = `keepCard:${status.event_id}`;
+  function renderKeepCard() {
+    const slot = view.querySelector(".keep-slot");
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(keepKey) === "1"; } catch { /* abaikan */ }
+    const rollDone = progress && progress.my_used !== null && progress.my_used >= progress.max_shots;
+    if (dismissed || !status.is_member || !(rollDone || !status.is_open)) { slot.replaceChildren(); return; }
+    if (slot.firstChild) return;
+    const link = `${location.origin}/#/e/${status.event_id}/album`;
+    const card = el(`
+      <div class="card keep-card">
+        <div>
+          <b>Simpan album ini</b>
+          <p>Foto tamu lain terus bertambah sampai acara selesai. Buka lagi kapan saja lewat link ini atau dari layar utama HP.</p>
+        </div>
+        <div class="row tight wrap">
+          <button class="btn small" data-act="link">${ICON.link} Salin link album</button>
+          ${canInstall() ? `<button class="btn small primary" data-act="install">${ICON.phone} Pasang di layar utama</button>` : ""}
+          <button class="btn small ghost" data-act="hide">Tutup</button>
+        </div>
+      </div>`);
+    card.querySelector('[data-act="link"]').onclick = () =>
+      copyText(link, { done: "Link album disalin. Buka dengan akun Google yang sama.", title: "Link album" });
+    card.querySelector('[data-act="install"]')?.addEventListener("click", async () => {
+      if (await promptInstall()) toast("Aplikasi terpasang di layar utama.");
+    });
+    card.querySelector('[data-act="hide"]').onclick = () => {
+      try { localStorage.setItem(keepKey, "1"); } catch { /* abaikan */ }
+      card.remove();
+    };
+    slot.replaceChildren(card);
   }
 
   // ---- pil "foto baru" saat pengguna sedang menggulir ke bawah ----
@@ -70,6 +128,51 @@ export async function renderAlbum(root, status) {
   };
   const onScroll = () => { if (window.scrollY < 120 && !pill.hidden) { freshCount = 0; pill.hidden = true; } };
   window.addEventListener("scroll", onScroll, { passive: true });
+
+  // ---- saringan ----
+  // Hanya kirim parameter baru bila dipakai, supaya tetap jalan di database lama
+  const albumArgs = (before, limit) => {
+    const a = { p_event: status.event_id, p_before: before, p_limit: limit };
+    if (filter.kind !== "all") a.p_filter = filter.kind;
+    if (filter.owner) a.p_owner = filter.owner;
+    return a;
+  };
+  filterBar.querySelector(".chips").onclick = (e) => {
+    const b = e.target.closest(".chip");
+    if (!b || (b.dataset.f === filter.kind && !filter.owner)) return;
+    filter.kind = b.dataset.f;
+    filter.owner = null;          // chip apa pun (termasuk Semua) melepas saringan per tamu
+    ownerSel.value = "";
+    syncChips();
+    reload();
+  };
+  ownerSel.onchange = () => {
+    filter.owner = ownerSel.value || null;
+    if (filter.owner) filter.kind = "all";
+    syncChips();
+    reload();
+  };
+  function syncChips() {
+    filterBar.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.f === filter.kind && !filter.owner)));
+  }
+  async function loadOwners() {
+    let owners = [];
+    try { owners = await rpc("album_owners", { p_event: status.event_id }); } catch { /* database lama: tanpa saringan tamu */ }
+    ownerSel.hidden = owners.length < 2;
+    if (ownerSel.hidden) return;
+    ownerSel.innerHTML = `<option value="">Semua tamu</option>` + owners.map((o) =>
+      `<option value="${o.user_id}" ${o.user_id === filter.owner ? "selected" : ""}>${esc(o.name)} (${o.photos})</option>`).join("");
+  }
+  function reload() {
+    gen++;
+    items.clear();
+    grid.replaceChildren();
+    oldest = null;
+    endReached = false;
+    loading = false;
+    if (selecting) setSelecting(false);
+    loadMore();
+  }
 
   // ---- kuota unduhan ----
   const unlimited = () => status.can_manage;
@@ -111,6 +214,9 @@ export async function renderAlbum(root, status) {
   };
 
   function emptyText() {
+    if (filter.kind === "fav") return "Belum ada favorit. Ketuk ikon hati saat melihat foto untuk menyimpannya di sini.";
+    if (filter.kind === "mine") return "Foto Anda muncul di sini setelah film Anda habis atau acara ditutup.";
+    if (filter.owner) return "Belum ada foto dari tamu ini.";
     if (status.reveal_at && new Date(status.reveal_at) > new Date())
       return `Mode cuci film: semua foto tampil pada ${fmtDate(status.reveal_at)}.`;
     return `Foto tampil setelah pemotretnya menghabiskan ${status.max_shots} jepretan atau saat acara ditutup.`;
@@ -118,18 +224,25 @@ export async function renderAlbum(root, status) {
 
   const label = (r) => (r.owner_name ? `#${r.seq} · ${r.owner_name}` : "Tamu");
 
+  function tileBadges(r) {
+    return `${r.hidden ? `<span class="badge">disembunyikan</span>` : ""}
+      ${r.is_mine ? `<span class="badge mine">milik Anda</span>` : ""}
+      ${r.is_fav ? `<span class="badge fav" aria-label="Favorit">${ICON.heart}</span>` : ""}`;
+  }
+
   // Sisipkan ubin sesuai urutan taken_at (terbaru di atas)
-  async function addRows(rows) {
+  async function addRows(rows, myGen) {
     const fresh = rows.filter((r) => !items.has(r.photo_id));
     if (!fresh.length) return;
     const urls = await getUrls(fresh.map((r) => r.thumb_path));
+    if (myGen !== gen) return;                     // saringan berganti selama menunggu
     for (const r of fresh) {
+      if (items.has(r.photo_id)) continue;
       items.set(r.photo_id, r);
       const n = el(`
         <button class="tile${r.hidden ? " is-hidden" : ""}" data-id="${r.photo_id}" data-t="${esc(r.taken_at)}">
           <img loading="lazy" alt="Foto ${esc(label(r))}" src="${esc(urls[r.thumb_path] || "")}" />
-          ${r.hidden ? `<span class="badge">disembunyikan</span>` : ""}
-          ${r.is_mine ? `<span class="badge mine">milik Anda</span>` : ""}
+          <span class="tile-badges">${tileBadges(r)}</span>
           <span class="check" aria-hidden="true">${ICON.check}</span>
         </button>`);
       n.onclick = () => {
@@ -143,37 +256,49 @@ export async function renderAlbum(root, status) {
       grid.insertBefore(n, after || null);
     }
   }
+  function refreshTile(r) {
+    const tile = grid.querySelector(`[data-id="${r.photo_id}"]`);
+    if (!tile) return;
+    tile.classList.toggle("is-hidden", r.hidden);
+    tile.querySelector(".tile-badges").innerHTML = tileBadges(r);
+  }
 
+  let everHadPhotos = false;
   function updateEmpty() {
+    if (items.size) everHadPhotos = true;
     empty.hidden = items.size > 0;
     empty.textContent = emptyText();
     view.querySelector(".album-bar").hidden = items.size === 0;
+    filterBar.hidden = !everHadPhotos && filter.kind === "all" && !filter.owner;
   }
 
   async function loadMore() {
     if (loading || endReached) return;
     loading = true;
+    const myGen = gen;
     try {
-      const rows = await rpc("get_album", { p_event: status.event_id, p_before: oldest, p_limit: PAGE });
+      const rows = await rpc("get_album", albumArgs(oldest, PAGE));
+      if (myGen !== gen) return;
       if (rows.length < PAGE) endReached = true;
       if (rows.length) oldest = rows[rows.length - 1].taken_at;
-      await addRows(rows);
+      await addRows(rows, myGen);
     } catch (e) {
-      toast(friendly(e));
+      if (myGen === gen) toast(friendly(e));
     } finally {
-      loading = false;
-      updateEmpty();
+      if (myGen === gen) { loading = false; updateEmpty(); }
     }
   }
 
   async function poll() {
+    const myGen = gen;
     try {
-      const rows = await rpc("get_album", { p_event: status.event_id, p_before: null, p_limit: 100 });
+      const rows = await rpc("get_album", albumArgs(null, 100));
+      if (myGen !== gen) return;
       // Gulungan yang baru habis bisa berisi foto lama: sisipkan sesuai urutan,
       // dan izinkan gulir ke bawah memuat lagi yang lebih lama.
       const fresh = rows.filter((r) => !items.has(r.photo_id));
       if (fresh.length) {
-        await addRows(fresh);
+        await addRows(fresh, myGen);
         if (!oldest) oldest = rows[rows.length - 1].taken_at;
         endReached = false;
         if (window.scrollY > 300) {
@@ -181,6 +306,7 @@ export async function renderAlbum(root, status) {
           pill.textContent = `↑ ${freshCount} foto baru`;
           pill.hidden = false;
         }
+        loadOwners();
       }
       updateEmpty();
       loadProgress();
@@ -266,6 +392,40 @@ export async function renderAlbum(root, status) {
       });
   }
 
+  // ---- laporkan foto ----
+  function reportDialog(r) {
+    return new Promise((resolve) => {
+      let sent = false;
+      const { box, close } = modal(`
+        <form class="dialog">
+          <h3>Laporkan foto</h3>
+          <p>Laporan dikirim ke pengelola acara. Nama Anda tidak ditampilkan ke pemotret.</p>
+          <div class="radio-list">${REASONS.map(([v, t, d], i) => `
+            <label class="radio"><input type="radio" name="reason" value="${v}" ${i === 0 ? "checked" : ""}/>
+              <span><b>${t}</b><small>${d}</small></span></label>`).join("")}
+          </div>
+          <label>Catatan (opsional) <textarea name="note" rows="2" maxlength="300"></textarea></label>
+          <div class="dialog-actions">
+            <button type="button" class="btn ghost" data-act="no">Batal</button>
+            <button class="btn primary">Kirim laporan</button>
+          </div>
+        </form>`, { onClose: () => resolve(sent) });
+      const f = box.querySelector("form");
+      box.querySelector('[data-act="no"]').onclick = close;
+      f.onsubmit = async (e) => {
+        e.preventDefault();
+        const btn = f.querySelector(".btn.primary");
+        btn.disabled = true;
+        try {
+          await rpc("report_photo", { p_photo: r.photo_id, p_reason: f.elements.reason.value, p_note: f.elements.note.value });
+          sent = true;
+          toast("Terima kasih. Laporan dikirim ke pengelola acara.");
+          close();
+        } catch (err) { toast(friendly(err)); btn.disabled = false; }
+      };
+    });
+  }
+
   // ---- penampil foto: geser kiri/kanan, panah keyboard, ketuk dua kali untuk zoom ----
   const order = () => [...grid.querySelectorAll(".tile")].map((t) => t.dataset.id);
   const urlCache = new Map();
@@ -289,15 +449,19 @@ export async function renderAlbum(root, status) {
         <button class="lb-nav prev" data-act="prev" aria-label="Foto sebelumnya">‹</button>
         <button class="lb-nav next" data-act="next" aria-label="Foto berikutnya">›</button>
         <div class="lb-bar">
-          <span class="lb-info"></span>
+          <span class="lb-info"><span class="lb-who"></span><small class="lb-film"></small></span>
           <span class="lb-actions">
+            <button class="btn small icon-btn lb-fav" data-act="fav" aria-pressed="false" aria-label="Favorit">${ICON.heart}</button>
             <button class="btn small" data-act="dl"></button>
             ${status.can_manage ? `<button class="btn small" data-act="hide"></button>` : ""}
+            ${status.can_manage ? "" : `<button class="btn small icon-btn" data-act="report" aria-label="Laporkan foto" title="Laporkan foto">${ICON.flag}</button>`}
           </span>
         </div>
       </div>`);
     const stage = box.querySelector(".lb-stage");
     const img = box.querySelector(".lb-img");
+    const favBtn = box.querySelector('[data-act="fav"]');
+    const reportBtn = box.querySelector('[data-act="report"]');
     const before = document.activeElement;
     document.body.append(box);
     box.querySelector('[data-act="close"]').focus();
@@ -308,10 +472,15 @@ export async function renderAlbum(root, status) {
       const list = order();
       const idx = list.indexOf(id);
       box.querySelector(".lb-count").textContent = `${idx + 1} / ${list.length}${endReached ? "" : "+"}`;
-      box.querySelector(".lb-info").textContent = `${label(r)} · ${fmtDate(r.taken_at)}`;
+      box.querySelector(".lb-who").textContent = `${label(r)} · ${fmtDate(r.taken_at)}`;
+      box.querySelector(".lb-film").textContent = r.film ? `Film ${filmName(r.film)}` : "";
       box.querySelector('[data-act="prev"]').disabled = idx <= 0;
       box.querySelector('[data-act="next"]').disabled = idx >= list.length - 1 && endReached;
       box.querySelector('[data-act="dl"]').textContent = r.is_mine || r.downloaded || unlimited() ? "Unduh" : "Unduh (1 kuota)";
+      favBtn.setAttribute("aria-pressed", String(Boolean(r.is_fav)));
+      favBtn.setAttribute("aria-label", r.is_fav ? "Hapus dari favorit" : "Tambah ke favorit");
+      favBtn.classList.toggle("on", Boolean(r.is_fav));
+      if (reportBtn) reportBtn.hidden = r.is_mine;
       const hideBtn = box.querySelector('[data-act="hide"]');
       if (hideBtn) hideBtn.textContent = r.hidden ? "Tampilkan" : "Sembunyikan";
       setZoom(false);
@@ -339,6 +508,7 @@ export async function renderAlbum(root, status) {
     const setZoom = (on) => { if (!on) zoom.reset(); };
 
     const onKey = (e) => {
+      if (document.querySelector(".modal")) return;  // dialog laporan sedang terbuka
       if (e.key === "Escape") close();
       else if (e.key === "ArrowRight") step(1);
       else if (e.key === "ArrowLeft") step(-1);
@@ -360,16 +530,25 @@ export async function renderAlbum(root, status) {
       b.disabled = false;
       show();
     };
+    favBtn.onclick = async () => {
+      const r = items.get(id);
+      favBtn.disabled = true;
+      try {
+        r.is_fav = await rpc("toggle_favorite", { p_photo: r.photo_id });
+        refreshTile(r);
+        toast(r.is_fav ? "Disimpan di Favorit." : "Dihapus dari Favorit.", 1500);
+        show();
+      } catch (e) { toast(friendly(e)); }
+      finally { favBtn.disabled = false; }
+    };
+    if (reportBtn) reportBtn.onclick = () => reportDialog(items.get(id));
     const hide = box.querySelector('[data-act="hide"]');
     if (hide) hide.onclick = async () => {
       const r = items.get(id);
       try {
         await rpc("hide_photo", { p_photo: r.photo_id, p_hidden: !r.hidden });
         r.hidden = !r.hidden;
-        const tile = grid.querySelector(`[data-id="${r.photo_id}"]`);
-        tile?.classList.toggle("is-hidden", r.hidden);
-        tile?.querySelector(".badge:not(.mine)")?.remove();
-        if (r.hidden) tile?.append(el(`<span class="badge">disembunyikan</span>`));
+        refreshTile(r);
         show();
       } catch (e) { toast(friendly(e)); }
     };
@@ -378,6 +557,7 @@ export async function renderAlbum(root, status) {
 
   updateQuota();
   loadProgress();
+  loadOwners();
   const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) loadMore(); }, { rootMargin: "600px" });
   io.observe(view.querySelector(".sentinel"));
   await loadMore();

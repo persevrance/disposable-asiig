@@ -203,7 +203,29 @@ Object.assign(ICON, {
   sparkle: svg('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 15l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>'),
   check: svg('<path d="m5 12.5 4.5 4.5L19 7.5"/>', 18),
   chevronDown: svg('<path d="m6 9 6 6 6-6"/>', 16),
+  heart: svg('<path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/>', 18),
+  flag: svg('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>', 18),
+  link: svg('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', 18),
+  phone: svg('<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>', 18),
+  play: svg('<path d="M7 4.5v15l12-7.5z"/>', 18),
+  printer: svg('<path d="M7 9V3h10v6M7 17H4v-7h16v7h-3M7 14h10v7H7z"/>', 18),
+  calendar: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>', 18),
+  copy: svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>', 18),
+  shield: svg('<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z"/>', 18),
+  expand: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', 18),
 });
+
+// Waktu acara singkat: "Sab, 14 Des 2026 · 19.00–22.00"
+export function fmtRange(start, end) {
+  if (!start && !end) return "";
+  const d = (x) => new Date(x).toLocaleDateString("id-ID", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  const t = (x) => new Date(x).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  if (start && end) {
+    const same = new Date(start).toDateString() === new Date(end).toDateString();
+    return same ? `${d(start)} · ${t(start)}–${t(end)}` : `${d(start)} ${t(start)} – ${d(end)} ${t(end)}`;
+  }
+  return start ? `${d(start)} · mulai ${t(start)}` : `selesai ${d(end)} ${t(end)}`;
+}
 
 // Ikon dalam lingkaran berwarna lembut. tone: coral | sun | mint | grape; size: "" | lg | xl
 export const badge = (name, tone = "coral", size = "") =>

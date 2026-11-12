@@ -31,6 +31,12 @@ export function coverUrl(path) {
   return path ? covers().getPublicUrl(path).data.publicUrl : "";
 }
 
+// Salin sampul ke acara lain (duplikat acara)
+export async function copyCover(from, to) {
+  const { error } = await covers().copy(from, to);
+  if (error) throw error;
+}
+
 export async function removeCover(path) {
   if (!path) return;
   const { error } = await covers().remove([path]);

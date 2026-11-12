@@ -77,6 +77,25 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
 - [x] Tab Peran digabung ke Pengguna & peran
 - [x] Log terbaca dengan saringan (`admin_audit` dengan label nama)
 
+## Fase 3 fitur bernilai
+
+Jalankan ulang `supabase/v2.sql` sebelum merilis tampilan Fase 3.
+
+- [x] Mode layar `#/e/<id>/layar`: slideshow untuk proyektor, foto baru didahulukan, QR di pojok, layar tetap menyala (`slideshow_photos`)
+- [x] Kartu QR siap cetak A6 (PNG dan cetak) dengan sampul, nama, jadwal, QR, kode (`src/qrcard.js`)
+- [x] Funnel masuk / memotret / film habis / mengunduh di Panel, kartu Dashboard, dan total di Ringkasan
+- [x] Saringan album: semua, foto saya, favorit, per tamu (`get_album` p_filter/p_owner, `album_owners`, `toggle_favorite`)
+- [x] Efek film dicatat per foto (`photos.film`, `reserve_shot` p_film) dan tampil di penampil
+- [x] Link album permanen `#/e/<id>/album` yang bertahan melewati login, kartu "Simpan album ini", ajakan pasang di layar utama
+- [x] Suara rana (bisa dimatikan) dan angka penghitung bergulir
+- [x] Wizard buat acara tiga langkah (nama & jadwal, jatah & film, sampul & pembukaan album), diakhiri QR
+- [x] Jadwal acara `starts_at`/`ends_at`: tertutup otomatis lewat `open_now()` tanpa jadwal server; cuci film dan rencana hapus dari wizard
+- [x] Duplikat acara (`duplicate_event`, sampul disalin di Storage)
+- [x] Tren 30 hari di Ringkasan (`admin_trends`), dengan tabel
+- [x] Kuota storage per pembuat acara (`user_roles.storage_limit_mb`, `owner_bytes`) dan batas bawaan pembuat baru di Pengaturan
+- [x] Laporkan foto dan tab Moderasi (`photo_reports`, `report_photo`, `list_reports`, `resolve_reports`); tiga pelapor menyembunyikan foto otomatis
+- [x] Ringkasan perubahan pengaturan sebelum simpan, tombol kembalikan ke bawaan
+
 ## Catatan storage
 
 Kuota gratis Supabase sekitar 1 GB storage. Pada 2560px satu foto (3 file) kira-kira 1,2–2 MB, jadi sekitar 500–800 foto.

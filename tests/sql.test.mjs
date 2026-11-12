@@ -17,7 +17,7 @@ create function auth.uid() returns uuid language sql stable as $$ select nullif(
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create schema storage;
 create table storage.buckets (id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]);
-create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text, metadata jsonb, unique (bucket_id, name));
+create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text, metadata jsonb, created_at timestamptz default now(), unique (bucket_id, name));
 alter table storage.objects enable row level security;
 grant usage on schema public, auth, storage to authenticated;
 grant select, insert, delete on storage.objects to authenticated;
@@ -76,8 +76,8 @@ await as("c", `select join_event($1)`, [code]);
 await as("d", `select join_event($1)`, [code]);
 
 // C shoots 2 (finishes roll), D shoots 1
-async function shot(who) {
-  const r = (await as(who, `select * from reserve_shot($1, gen_random_uuid())`, [ev]))[0];
+async function shot(who, film = null) {
+  const r = (await as(who, `select * from reserve_shot($1, gen_random_uuid(), $2)`, [ev, film]))[0];
   ok(!r.o_file_path.includes(U[who][0]), "path has no user_id");
   for (const p of [r.o_file_path, r.o_medium_path, r.o_thumb_path])
     await as(who, `insert into storage.objects (bucket_id, name, metadata) values ('photos', $1, '{"size": 1000}')`, [p]);
@@ -242,6 +242,112 @@ await db.exec(`update profiles set banned = false`);
 const pend = (await as("c", `select * from reserve_shot($1, gen_random_uuid())`, [ev]))[0];
 const rel = await as("host", `select * from release_pending($1, $2)`, [ev, U.c[0]]);
 ok(rel.length === 3 && rel.some((r) => r.file_path === pend.o_medium_path), "release_pending paths");
+
+// ---------- Fase 3 ----------
+await db.exec(`update events set max_shots = 3`); // C: 2/3, D: 2/3 -> gulungan belum habis
+const k1 = await shot("c", "klasik");               // C habis (3/3)
+await shot("d", "bukan-film");                      // D habis, film tidak dikenal -> NULL
+const filmOf = async (who, id) => (await as(who, `select film from get_album($1) where photo_id = $2`, [ev, id]))[0]?.film;
+ok((await filmOf("d", k1.o_photo_id)) === "klasik", "film recorded per photo");
+ok((await db.query(`select count(*)::int n from photos where film is null and event_id = $1`, [ev])).rows[0].n >= 1, "unknown film stored as null");
+
+// Favorit dan saringan album
+ok((await as("d", `select toggle_favorite($1) v`, [k1.o_photo_id]))[0].v === true, "favorite on");
+const favs = await as("d", `select * from get_album($1, null, 60, 'fav')`, [ev]);
+ok(favs.length === 1 && favs[0].is_fav, "filter fav");
+ok((await as("c", `select count(*)::int n from get_album($1, null, 60, 'fav')`, [ev]))[0].n === 0, "favorites are per user");
+ok((await as("d", `select toggle_favorite($1) v`, [k1.o_photo_id]))[0].v === false, "favorite off");
+await expectErr("evil", `select toggle_favorite($1)`, [k1.o_photo_id], "FOTO_TIDAK_ADA");
+const mine = await as("c", `select * from get_album($1, null, 60, 'mine')`, [ev]);
+ok(mine.length === 3 && mine.every((r) => r.is_mine), "filter mine");
+ok((await as("d", `select * from album_owners($1)`, [ev])).length === 0, "album_owners empty when names hidden");
+ok((await as("d", `select count(*)::int n from get_album($1, null, 60, 'all', $2)`, [ev, U.c[0]]))[0].n === 0, "owner filter blocked when names hidden");
+ok((await as("host", `select * from album_owners($1)`, [ev])).length === 2, "album_owners for host");
+await as("host", `select set_event($1, '{"hide_names": false}')`, [ev]);
+const owners = await as("d", `select * from album_owners($1)`, [ev]);
+ok(owners.length === 2 && owners.find((o) => o.name === "Cici").photos === 3, "album_owners for guest");
+const onlyC = await as("d", `select * from get_album($1, null, 60, 'all', $2)`, [ev, U.c[0]]);
+ok(onlyC.length === 3 && onlyC.every((r) => r.owner_name === "Cici"), "filter per guest");
+
+// Jadwal acara: selesai otomatis, dibuka lagi menghapus jadwal selesai
+await db.exec(`update events set max_shots = 4`);   // C dan D bisa memotret lagi
+await expectErr("host", `select set_event($1, '{"starts_at": "2030-01-02T00:00:00Z", "ends_at": "2030-01-01T00:00:00Z"}')`, [ev], "JADWAL_TIDAK_VALID");
+await as("host", `select set_event($1, '{"starts_at": "2020-01-01T00:00:00Z", "ends_at": "2020-01-01T05:00:00Z"}')`, [ev]);
+ok((await as("d", `select is_open from my_status($1)`, [ev]))[0].is_open === false, "ended event reads as closed");
+ok((await as("d", `select is_open from my_events() where event_id = $1`, [ev]))[0].is_open === false, "my_events uses schedule");
+await expectErr("d", `select * from reserve_shot($1, gen_random_uuid())`, [ev], "ACARA_TUTUP");
+ok((await as("c", `select count(*)::int n from get_album($1)`, [ev]))[0].n === 6, "ended event reveals all");
+ok((await as("c", `select starts_at from event_preview($1)`, [code]))[0].starts_at !== null, "event_preview has schedule");
+ok((await as("admin", `select count(*)::int n from admin_events(null, 'closed')`))[0].n >= 1, "admin_events closed by schedule");
+await as("host", `select set_event($1, '{"is_open": true}')`, [ev]);
+const reopened = (await as("host", `select is_open, ends_at from my_status($1)`, [ev]))[0];
+ok(reopened.is_open === true && reopened.ends_at === null, "reopen clears ends_at");
+ok((await as("admin", `select count(*)::int n from admin_events(null, 'all', 'date')`))[0].n >= 1, "admin_events sort by date");
+await db.exec(`update events set max_shots = 3`);
+
+// Laporan foto dan moderasi
+await expectErr("d", `select report_photo($1, 'jelek')`, [k1.o_photo_id], "ALASAN_TIDAK_VALID");
+await as("d", `select report_photo($1, 'privasi', 'wajah saya')`, [k1.o_photo_id]);
+await as("d", `select report_photo($1, 'lainnya')`, [k1.o_photo_id]); // laporan kedua dari orang yang sama diabaikan
+let reps = await as("host", `select * from list_reports($1)`, [ev]);
+ok(reps.length === 1 && reps[0].reports === 1 && reps[0].uploader_name === "Cici" && reps[0].notes[0] === "wajah saya", "list_reports for owner");
+await expectErr("c", `select * from list_reports($1)`, [ev], "BUKAN_PEMILIK");
+await expectErr("host", `select * from list_reports(null)`, [], "BUKAN_SUPERADMIN");
+ok((await as("admin", `select * from list_reports(null)`)).length === 1, "list_reports all for superadmin");
+ok((await as("admin", `select admin_overview() o`))[0].o.reports_open === 1, "overview reports_open");
+ok((await as("admin", `select count(*)::int n from admin_events(null, 'reported')`))[0].n === 1, "admin_events reported filter");
+await as("host", `select report_photo($1, 'tidak_pantas')`, [k1.o_photo_id]);
+await as("admin", `select report_photo($1, 'tidak_pantas')`, [k1.o_photo_id]);
+ok((await db.query(`select hidden from photos where id = $1`, [k1.o_photo_id])).rows[0].hidden === true, "3 reporters auto-hide");
+await expectErr("c", `select resolve_reports($1, 'dismiss')`, [k1.o_photo_id], "BUKAN_PEMILIK");
+await as("host", `select resolve_reports($1, 'dismiss')`, [k1.o_photo_id]);
+ok((await db.query(`select hidden from photos where id = $1`, [k1.o_photo_id])).rows[0].hidden === false, "dismiss shows photo again");
+ok((await as("host", `select * from list_reports($1)`, [ev])).length === 0, "resolved reports leave the list");
+await as("d", `select report_photo($1, 'privasi')`, [k1.o_photo_id]);
+ok((await as("host", `select * from list_reports($1)`, [ev])).length === 0, "same reporter cannot reopen");
+await as("d", `select report_photo($1, 'tidak_pantas')`, [c1.o_photo_id]);
+await as("host", `select resolve_reports($1, 'block')`, [c1.o_photo_id]);
+const cMember = (await db.query(`select blocked from event_members where event_id = $1 and user_id = $2`, [ev, U.c[0]])).rows[0];
+ok(cMember.blocked === true && (await db.query(`select hidden from photos where id = $1`, [c1.o_photo_id])).rows[0].hidden, "block hides photo and blocks uploader");
+ok((await as("admin", `select count(*)::int n from admin_audit(50, 0, 'moderasi')`))[0].n === 2, "moderation logged");
+await db.query(`update event_members set blocked = false where user_id = $1`, [U.c[0]]);
+
+// Mode layar: hanya foto yang terbuka untuk tamu dan tidak disembunyikan
+const slides = await as("host", `select * from slideshow_photos($1)`, [ev]);
+ok(slides.length === 5 && !slides.some((r) => r.photo_id === c1.o_photo_id), `slideshow skips hidden photo (${slides.length})`);
+await expectErr("c", `select * from slideshow_photos($1)`, [ev], "BUKAN_PEMILIK");
+
+// Duplikat acara
+await as("host", `select set_invites($1, array['a@x.id', 'b@x.id'])`, [ev]);
+const dup = (await as("host", `select duplicate_event($1) id`, [ev]))[0].id;
+const dupRow = (await db.query(`select name, max_shots, hide_names, owner_id from events where id = $1`, [dup])).rows[0];
+ok(dupRow.name === "Nikahan (salinan)" && dupRow.max_shots === 3 && dupRow.owner_id === U.host[0], "duplicate_event copies settings");
+ok((await db.query(`select count(*)::int n from event_invites where event_id = $1`, [dup])).rows[0].n === 2, "duplicate copies invites");
+ok((await db.query(`select count(*)::int n from event_members where event_id = $1`, [dup])).rows[0].n === 1, "duplicate has only owner");
+await expectErr("c", `select duplicate_event($1)`, [ev], "BUKAN_PEMILIK");
+await db.query(`delete from events where id = $1`, [dup]);
+
+// Kuota storage per pembuat acara dan batas bawaan
+await as("admin", `select admin_set_storage_limit('host@x.id', 1)`);
+const q = (await as("host", `select my_event_quota() q`))[0].q;
+ok(q.storage_limit_mb === 1 && Number(q.storage_bytes) > 0, `my_event_quota storage ${JSON.stringify(q)}`);
+await db.query(`insert into storage.objects (bucket_id, name, metadata) values ('photos', $1, '{"size": 2000000}')`, [`${ev}/besar.jpg`]);
+await expectErr("host", `select create_event('Ketiga', 2)`, [], "BATAS_STORAGE_HABIS");
+ok(Number((await as("admin", `select storage_bytes from admin_users('host')`))[0].storage_bytes) > 2000000, "admin_users storage_bytes");
+await as("admin", `select admin_set_storage_limit('host@x.id', null)`);
+await expectErr("host", `select admin_set_storage_limit('host@x.id', 5)`, [], "BUKAN_SUPERADMIN");
+await as("admin", `select admin_set_settings('{"creator_event_limit": 5, "creator_storage_mb": 2048}')`);
+await as("admin", `select admin_set_role('fresh@x.id', 'creator')`);
+const fresh = (await as("admin", `select * from admin_roles() where email = 'fresh@x.id'`))[0];
+ok(fresh.event_limit === 5 && fresh.storage_limit_mb === 2048, "new creator gets default limits");
+await as("admin", `select admin_set_settings('{"creator_event_limit": null}')`);
+const s3 = (await as("admin", `select get_settings() s`))[0].s;
+ok(s3.creator_event_limit === null && s3.creator_storage_mb === 2048, "settings can clear default limit");
+
+// Tren 30 hari
+const tr = await as("admin", `select * from admin_trends(30)`);
+ok(tr.length === 30 && tr.reduce((a, r) => a + r.photos, 0) >= 6 && Number(tr[29].bytes) > 0, "admin_trends");
+await expectErr("host", `select * from admin_trends(30)`, [], "BUKAN_SUPERADMIN");
 
 await as("host", `select delete_event($1)`, [ev]);
 ok((await db.query(`select count(*)::int n from photos`)).rows[0].n === 0, "delete_event cascades");

@@ -11,10 +11,47 @@ import { el, esc, toast, confetti, modal, fmtDate, ICON, badge } from "./ui.js";
 
 const ICON_FLIP = `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><path d="M9.5 13.5a3 3 0 0 1 5-2.2M14.5 11.3V9.5h-1.8M14.5 12.5a3 3 0 0 1-5 2.2M9.5 14.7v1.8h1.8"/></svg>`;
 const ICON_FLASH = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>`;
+const ICON_SOUND = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path class="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/><path class="mute" d="m16 9 6 6M22 9l-6 6"/></svg>`;
 
 const FLASH_KEY = "flashOn";
 const loadFlash = () => { try { return localStorage.getItem(FLASH_KEY) === "1"; } catch { return false; } };
 const saveFlash = (on) => { try { localStorage.setItem(FLASH_KEY, on ? "1" : "0"); } catch { /* abaikan */ } };
+const SOUND_KEY = "shutterSound";
+const loadSound = () => { try { return localStorage.getItem(SOUND_KEY) !== "0"; } catch { return true; } };
+const saveSound = (on) => { try { localStorage.setItem(SOUND_KEY, on ? "1" : "0"); } catch { /* abaikan */ } };
+
+// Suara rana kamera film, dibuat langsung (tanpa file): desis pendek lalu klik.
+// AudioContext dibuat saat ketukan pertama (aturan autoplay browser).
+let audio = null;
+// Panggil langsung di dalam ketukan (sebelum await) supaya Safari mengizinkan suara
+function primeAudio() {
+  try {
+    audio ||= new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === "suspended") audio.resume();
+  } catch { /* tanpa suara */ }
+}
+function shutterSound() {
+  try {
+    if (!audio) return;
+    const t = audio.currentTime;
+    const len = Math.floor(audio.sampleRate * 0.12);
+    const buf = audio.createBuffer(1, len, audio.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const env = i < len * 0.08 ? 1 : Math.exp(-(i - len * 0.08) / (len * 0.12));
+      const second = i > len * 0.55 && i < len * 0.6 ? 1.6 : 0;   // klik kedua: tirai menutup
+      d[i] = (Math.random() * 2 - 1) * (env + second) * 0.5;
+    }
+    const src = audio.createBufferSource();
+    src.buffer = buf;
+    const filter = audio.createBiquadFilter();
+    filter.type = "bandpass"; filter.frequency.value = 2400; filter.Q.value = 0.8;
+    const gain = audio.createGain();
+    gain.gain.setValueAtTime(0.9, t);
+    src.connect(filter).connect(gain).connect(audio.destination);
+    src.start(t);
+  } catch { /* tanpa suara */ }
+}
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Pilihan efek film tamu, diingat per acara di HP ini
@@ -27,6 +64,7 @@ export async function renderCamera(root, status, go) {
   let facing = "environment";
   let busy = false;
   let flashOn = loadFlash();
+  let soundOn = loadSound();
 
   const view = el(`
     <section class="camera">
@@ -34,7 +72,10 @@ export async function renderCamera(root, status, go) {
         <canvas class="vf-canvas"></canvas>
         <div class="vf-top">
           <button class="film-badge" data-act="film"></button>
-          <button class="vf-btn" data-act="flash" aria-pressed="false" hidden>${ICON_FLASH}<span>Mati</span></button>
+          <span class="vf-right">
+            <button class="vf-btn icon-only" data-act="sound" aria-pressed="true" aria-label="Suara rana">${ICON_SOUND}</button>
+            <button class="vf-btn" data-act="flash" aria-pressed="false" hidden>${ICON_FLASH}<span>Mati</span></button>
+          </span>
         </div>
         <div class="vf-diag" hidden></div>
         <div class="vf-placeholder">
@@ -83,6 +124,13 @@ export async function renderCamera(root, status, go) {
   const fileLabel = view.querySelector(".file-fallback");
   const fileInput = fileLabel.querySelector("input");
   const filmBtn = view.querySelector('[data-act="film"]');
+  const soundBtn = view.querySelector('[data-act="sound"]');
+  function updateSoundBtn() {
+    soundBtn.setAttribute("aria-pressed", String(soundOn));
+    soundBtn.classList.toggle("muted", !soundOn);
+    soundBtn.title = soundOn ? "Suara rana nyala" : "Suara rana mati";
+  }
+  soundBtn.onclick = () => { soundOn = !soundOn; saveSound(soundOn); updateSoundBtn(); toast(soundOn ? "Suara rana nyala" : "Suara rana mati", 1500); };
 
   // ---- Efek film: bawaan acara, atau pilihan tamu jika diizinkan ----
   function currentFilm() {
@@ -164,10 +212,22 @@ export async function renderCamera(root, status, go) {
     return Math.max(0, status.max_shots - status.shots_used - local);
   }
 
+  // Angka sisa bergulir seperti penghitung film saat berkurang
+  let shown = null;
+  function setCounter(n) {
+    if (shown !== null && n < shown) {
+      counter.classList.remove("tick");
+      void counter.offsetWidth;
+      counter.classList.add("tick");
+    }
+    shown = n;
+    counter.textContent = n;
+  }
+
   async function refresh() {
     const left = await remaining();
     const waiting = (await queue.forEvent(status.event_id)).length;
-    counter.textContent = left;
+    setCounter(left);
     hint.textContent = status.reveal_at && new Date(status.reveal_at) > new Date()
       ? `Semua foto terbuka ${fmtDate(status.reveal_at)}.`
       : left > 0 ? `Foto Anda terbuka di album setelah ${left} jepretan lagi.` : "";
@@ -369,7 +429,7 @@ export async function renderCamera(root, status, go) {
       void view.offsetWidth;
       view.querySelector(".flash").classList.add("go");
       navigator.vibrate?.(30);
-      const p = shoot(status.event_id, shot);
+      const p = shoot(status.event_id, shot, currentFilm());
       await refresh(); // penghitung turun segera (foto sudah di antrean)
       await p;
     } catch (e) {
@@ -391,9 +451,11 @@ export async function renderCamera(root, status, go) {
   shutter.onclick = () => {
     if (!stream) return;
     if (!video.videoWidth || video.paused) return toast("Jendela bidik belum menyala. Ketuk Mulai dulu.");
+    if (soundOn) primeAudio();
     take(async () => {
       // Ambil bingkai saat flash menyala, lalu olah setelah flash padam
       const frame = await withFlash(async () => grabFrame(video));
+      if (soundOn) shutterSound();
       developing.hidden = false;
       await wait(16); // biarkan tulisan "Mencuci" tampil sebelum proses berat
       return captureFromCanvas(frame, devOpts(true));
@@ -478,6 +540,7 @@ export async function renderCamera(root, status, go) {
 
   updateFlashBtn();
   updateFilmBtn();
+  updateSoundBtn();
   await refresh();
   flushQueue().then((n) => n && onOnline());
   if (!done) maybeAutoStart();

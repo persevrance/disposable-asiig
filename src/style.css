@@ -551,6 +551,141 @@ td.pick input, th.pick input { width: 1.15rem; height: 1.15rem; accent-color: va
 .audit li { padding: .6rem 0; border-bottom: 1px solid var(--line); display: grid; gap: .15rem; font-size: .9rem; line-height: 1.45; }
 .audit small { color: var(--muted); }
 
+/* ===================== Fase 3 ===================== */
+:root { --chart: #c22b60; --chart-grid: #f1dfcf; }
+@media (prefers-color-scheme: dark) { :root { --chart: #e05585; --chart-grid: #3a2b42; } }
+
+/* Kamera: tombol suara rana, angka penghitung bergulir */
+.vf-right { display: inline-flex; gap: .4rem; pointer-events: none; }
+.vf-btn.icon-only { width: 44px; padding: 0; justify-content: center; }
+.vf-btn .mute { display: none; }
+.vf-btn.muted .wave { display: none; }
+.vf-btn.muted .mute { display: inline; }
+.counter b { display: inline-block; }
+.counter b.tick { animation: tick .32s cubic-bezier(.2, .8, .3, 1.2); }
+@keyframes tick { from { transform: translateY(-70%); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Masuk acara: jadwal */
+.join-when { display: inline-flex; align-items: center; gap: .4rem; margin: 0; color: var(--muted); font-weight: 700; font-size: .92rem; }
+small.when { display: flex !important; align-items: center; gap: .3rem; color: var(--muted); font-weight: 700; margin: .15rem 0; }
+small.when svg { width: 14px; height: 14px; flex: none; }
+
+/* Album: saringan, lencana favorit, penampil */
+.album-filter { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; padding: 0 .5rem .6rem; }
+.album-filter .chips { flex: 1 1 auto; }
+.chip { display: inline-flex; align-items: center; gap: .3rem; }
+.chip svg { width: 15px; height: 15px; }
+.owner-filter { width: auto; max-width: 100%; flex: 0 1 220px; min-height: 40px; padding: .4rem .7rem; font-size: .88rem; }
+.tile-badges { position: absolute; inset: 0; pointer-events: none; }
+.badge.fav { left: auto; right: 4px; bottom: 4px; display: grid; place-items: center; padding: 3px; background: rgba(214, 51, 108, .9); }
+.badge.fav svg { width: 12px; height: 12px; }
+.badge.fav svg path { fill: currentColor; }
+.lb-info { display: grid; gap: .1rem; }
+.lb-film { color: #cbb8d0; font-size: .78rem; }
+.lb-fav.on { background: var(--primary) !important; border-color: var(--primary) !important; }
+.lb-fav.on svg path { fill: currentColor; }
+.radio-list { display: grid; gap: .45rem; }
+label.radio { display: flex; gap: .6rem; align-items: flex-start; border: 1.5px solid var(--line); border-radius: 14px; padding: .6rem .75rem; margin: 0; color: var(--text); cursor: pointer; }
+label.radio:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); }
+label.radio input { width: 1.1rem; height: 1.1rem; min-height: 0; margin-top: .15rem; accent-color: var(--primary); flex: none; }
+label.radio span { display: grid; gap: .1rem; }
+label.radio small { color: var(--muted); font-weight: 500; }
+.keep-card { display: flex; justify-content: space-between; align-items: center; gap: .75rem; flex-wrap: wrap; margin: 0 .5rem .75rem; background: var(--mint-soft); border-color: var(--mint); }
+.keep-card p { margin: .2rem 0 0; color: var(--text); font-size: .88rem; line-height: 1.45; max-width: 36rem; }
+.row.tight.wrap { flex-wrap: wrap; }
+ol.steps { margin: 0; padding-left: 1.2rem; display: grid; gap: .45rem; line-height: 1.45; }
+
+/* Panel: kartu QR, hitungan laporan di sub-tab, laporan */
+.qr-card-box { margin-top: 1rem; padding-top: 1rem; border-top: 1.5px dashed var(--line); }
+.tab-count { display: inline-grid; place-items: center; min-width: 1.3rem; height: 1.3rem; padding: 0 .3rem; margin-left: .35rem; border-radius: 999px; background: var(--danger-fill); color: #fff; font-size: .72rem; font-weight: 800; vertical-align: 1px; }
+@media (min-width: 960px) { .subpanel.two-col > .span-2 { grid-column: 1 / -1; } }
+h3.with-icon { display: flex; align-items: center; gap: .45rem; }
+h3.with-icon svg { color: var(--primary-text); }
+.report-list { display: grid; gap: .6rem; }
+.report-item { display: flex; gap: .8rem; align-items: flex-start; border: 1.5px solid var(--line); border-radius: 16px; padding: .6rem; background: var(--card); }
+.report-thumb { position: relative; flex: none; width: 84px; aspect-ratio: 3 / 4; padding: 0; border: 0; border-radius: 10px; overflow: hidden; background: var(--bg-2); cursor: zoom-in; }
+.report-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.report-main { flex: 1; min-width: 0; display: grid; gap: .3rem; }
+.report-main small { color: var(--muted); }
+.report-notes { margin: 0; padding-left: 1rem; font-size: .85rem; color: var(--text); }
+.report-preview img { width: 100%; max-height: 70dvh; object-fit: contain; border-radius: 12px; background: #000; }
+.ec-tags { display: grid; gap: .25rem; justify-items: end; }
+a.tag { text-decoration: none; }
+
+/* Wizard buat acara */
+.wizard fieldset.wiz-step { border: 0; padding: 0; margin: 0; display: grid; gap: .75rem; min-width: 0; }
+.wiz-head { display: grid; gap: .4rem; }
+.wiz-steps { display: flex; gap: .3rem; }
+.wiz-steps i { flex: 1; height: 6px; border-radius: 999px; background: var(--line); }
+.wiz-steps i.on { background: var(--primary); }
+.wiz-count { font-size: .85rem; font-weight: 700; color: var(--muted) !important; }
+.wiz-cover { display: grid; gap: .5rem; justify-items: start; }
+.wiz-cover .cover-preview { width: 100%; }
+.wiz-done-head { display: flex; align-items: center; gap: .5rem; color: var(--mint-text); }
+.wiz-done-head h3 { color: var(--text); }
+.wiz-done-head svg { width: 28px; height: 28px; background: var(--mint-soft); border-radius: 50%; padding: 4px; }
+
+/* Ringkasan: tren 30 hari (small multiples, satu seri per grafik) */
+.trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 1.25rem 1.5rem; }
+.trend { margin: 0; display: grid; gap: .3rem; }
+.trend figcaption { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; font-size: .85rem; font-weight: 700; color: var(--muted); }
+.trend figcaption span { min-width: 0; }
+.trend figcaption b { white-space: nowrap; font-family: "Fredoka", system-ui, sans-serif; font-size: 1.15rem; color: var(--text); font-variant-numeric: tabular-nums; }
+.tc-plot { position: relative; touch-action: pan-y; cursor: crosshair; margin-top: 1rem; }
+.tc-plot svg { display: block; width: 100%; height: auto; overflow: visible; }
+.tc-bar { fill: var(--chart); transition: opacity .12s; }
+.tc-bar.dim { opacity: .35; }
+.tc-grid, .tc-axis { stroke: var(--chart-grid); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.tc-max { position: absolute; top: 0; left: 0; font-size: .7rem; line-height: 1; color: var(--muted); transform: translateY(-120%); }
+.tc-x { display: flex; justify-content: space-between; font-size: .72rem; color: var(--muted); }
+.tc-tip { position: absolute; bottom: 100%; transform: translate(-50%, -4px); background: var(--toast-bg); color: var(--toast-fg); border-radius: 10px; padding: .3rem .55rem; font-size: .75rem; display: grid; text-align: center; white-space: nowrap; pointer-events: none; z-index: 2; }
+.trend-table { margin-top: .75rem; }
+
+/* Pengaturan: ringkasan perubahan */
+.changes { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+.changes li { display: flex; justify-content: space-between; gap: .75rem; flex-wrap: wrap; font-size: .88rem; padding: .45rem .6rem; background: var(--bg-2); border-radius: 10px; }
+.changes s { color: var(--muted); }
+
+/* Mode layar (proyektor) */
+body.show-page { background: #0d0810; overflow: hidden; }
+.show-wrap { position: fixed; inset: 0; max-width: none; margin: 0; padding: 0; }
+.slideshow { position: absolute; inset: 0; background: #0d0810; color: #f6eaf0; outline: none; overflow: hidden; }
+.show-stage { position: absolute; inset: 0; }
+.show-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 1s ease; }
+.show-img.on { opacity: 1; }
+.show-title { position: absolute; top: max(1rem, env(safe-area-inset-top)); left: 1.25rem; display: grid; gap: .1rem; text-shadow: 0 2px 10px rgba(0, 0, 0, .7); }
+.show-title b { font-family: "Fredoka", system-ui, sans-serif; font-size: clamp(1.1rem, 2.4vw, 1.8rem); font-weight: 600; }
+.show-title span { font-size: .9rem; color: #d9c9dd; }
+.show-caption { position: absolute; left: 1.25rem; bottom: 1.25rem; display: flex; gap: .5rem; align-items: center; font-weight: 700; font-size: clamp(.9rem, 1.6vw, 1.2rem); text-shadow: 0 2px 10px rgba(0, 0, 0, .8); }
+.show-qr-card { position: absolute; right: 1.25rem; bottom: 1.25rem; display: flex; gap: .8rem; align-items: center; background: rgba(255, 255, 255, .96); color: #2d1b33; border-radius: 18px; padding: .6rem .9rem .6rem .6rem; box-shadow: 0 10px 30px rgba(0, 0, 0, .4); }
+.show-qr-card canvas { width: clamp(90px, 11vw, 150px) !important; height: auto !important; display: block; }
+.show-qr-card div { display: grid; gap: .1rem; }
+.show-qr-card b { font-family: "Fredoka", system-ui, sans-serif; font-size: 1.1rem; }
+.show-qr-card span { font-size: .8rem; color: #6e5d72; }
+.show-qr-card .show-code { font-family: "Courier New", monospace; font-weight: 700; font-size: 1.3rem; color: #c22b60; letter-spacing: .12rem; }
+.show-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: .75rem; text-align: center; padding: 2rem; }
+.show-empty canvas { background: #fff; border-radius: 20px; padding: 10px; width: min(320px, 60vw) !important; height: auto !important; }
+.show-empty p { color: #d9c9dd; max-width: 32rem; margin: 0; }
+.show-code-big { font-family: "Courier New", monospace; font-weight: 700; font-size: 2.4rem; letter-spacing: .3rem; color: #ff86a8 !important; }
+.show-controls { position: absolute; top: max(1rem, env(safe-area-inset-top)); right: 1rem; display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; justify-content: flex-end; opacity: 0; transition: opacity .25s; }
+.slideshow.controls-on .show-controls { opacity: 1; }
+.slideshow.controls-on, .slideshow.controls-on * { cursor: auto; }
+.slideshow:not(.controls-on) { cursor: none; }
+.show-controls { background: rgba(20, 10, 24, .72); padding: .4rem; border-radius: 999px; }
+.show-controls .btn { background: rgba(255, 255, 255, .12); border-color: rgba(255, 255, 255, .25); color: #fff; }
+.show-speed { flex-direction: row; display: flex; align-items: center; gap: .35rem; margin: 0 .25rem; color: #fff; font-size: .8rem; }
+.show-speed select { width: auto; min-height: 36px; padding: .3rem .5rem; background: rgba(0, 0, 0, .5); color: #fff; border-color: rgba(255, 255, 255, .25); }
+
+/* Cetak kartu QR: hanya lembar kartu yang tercetak */
+.print-sheet { display: none; }
+@media print {
+  @page { size: A6 portrait; margin: 0; }
+  body.printing > *:not(.print-sheet) { display: none !important; }
+  body.printing { background: #fff !important; }
+  body.printing .print-sheet { display: block; }
+  .print-sheet img { width: 100%; height: auto; display: block; }
+}
+
 #toast {
   position: fixed; left: 50%; bottom: calc(1.5rem + env(safe-area-inset-bottom)); transform: translate(-50%, 2rem);
   background: var(--toast-bg); color: var(--toast-fg); padding: .75rem 1.15rem; border-radius: 14px; font-size: .9rem; font-weight: 600;
@@ -561,6 +696,7 @@ td.pick input, th.pick input { width: 1.15rem; height: 1.15rem; accent-color: va
 
 @media (prefers-reduced-motion: reduce) {
   .lb-img.anim { transition: opacity .15s; }
-  .logo, .film-icon, .sheet-card, .live-dot { animation: none; }
+  .logo, .film-icon, .sheet-card, .live-dot, .counter b.tick { animation: none; }
+  .show-img, .tc-bar { transition: none; }
   .btn, .shutter, .ctl, .switch .knob, .switch .knob::after { transition: none; }
 }

@@ -41,6 +41,12 @@ const MESSAGES = {
   BATAS_ACARA_HABIS: "Batas jumlah acara Anda sudah habis. Hubungi superadmin untuk menambahnya.",
   BATAS_ACARA_TIDAK_VALID: "Batas acara harus angka 0 sampai 10000.",
   PERAN_TIDAK_ADA: "Email ini belum punya peran.",
+  BATAS_STORAGE_HABIS: "Kuota storage Anda sudah penuh. Hapus acara lama atau hubungi superadmin.",
+  BATAS_STORAGE_TIDAK_VALID: "Kuota storage harus angka 1 ke atas (MB).",
+  JADWAL_TIDAK_VALID: "Waktu selesai harus setelah waktu mulai.",
+  FOTO_TIDAK_ADA: "Foto tidak ditemukan atau belum bisa dilihat.",
+  ALASAN_TIDAK_VALID: "Pilih alasan laporan.",
+  AKSI_TIDAK_VALID: "Aksi tidak dikenal.",
 };
 
 export function errorCode(e) {

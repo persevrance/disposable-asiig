@@ -3,11 +3,13 @@ import { supabase, configured, rpc, friendly } from "./supabase.js";
 import { flushQueue } from "./shoot.js";
 import { renderCamera } from "./camera-view.js";
 import { renderAlbum } from "./album.js";
+import { renderSlideshow } from "./slideshow.js";
+import "./install.js"; // tangkap prompt pasang aplikasi sedini mungkin
 import { renderPanel } from "./owner.js";
 import { renderAdmin, createEventDialog } from "./admin.js";
 import { coverUrl } from "./storage.js";
 import { inAppBrowser, isAndroid, chromeIntentUrl } from "./camera.js";
-import { el, esc, toast, copyText, ICON, badge, BRAND } from "./ui.js";
+import { el, esc, toast, copyText, ICON, badge, BRAND, fmtRange } from "./ui.js";
 
 const app = document.getElementById("app");
 let cleanup = () => {};
@@ -41,14 +43,31 @@ function forgetJoined() {
   try { localStorage.removeItem(joinedKey()); } catch { /* abaikan */ }
 }
 
+// Link langsung ke halaman acara (mis. link album) harus bertahan melewati login Google,
+// yang selalu kembali ke halaman utama.
+const PENDING_HASH = "pendingHash";
+function savePendingHash() {
+  if (/^#\/e\//.test(location.hash)) {
+    try { localStorage.setItem(PENDING_HASH, location.hash); } catch { /* abaikan */ }
+  }
+}
+function takePendingHash() {
+  try {
+    const h = localStorage.getItem(PENDING_HASH);
+    localStorage.removeItem(PENDING_HASH);
+    return h;
+  } catch { return null; }
+}
+
 function setView(node) {
   cleanup(); cleanup = () => {};
-  document.body.classList.remove("cam-page", "has-bottom-nav");
+  document.body.classList.remove("cam-page", "has-bottom-nav", "show-page");
   app.replaceChildren(node);
 }
 
 // ---------- Layar login ----------
 function renderLogin() {
+  savePendingHash();
   const code = localStorage.getItem("pendingCode");
   const shareLink = code ? `${location.origin}/?kode=${code}` : location.origin;
   setView(el(`
@@ -94,6 +113,7 @@ async function renderJoin(code) {
       <h1>${ev ? esc(ev.name) : "Masuk acara"}</h1>
       ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
       <p class="pill">Kode: <b>${esc(code)}</b>${ev ? ` · ${ev.max_shots} jepretan` : ""}</p>
+      ${ev?.starts_at || ev?.ends_at ? `<p class="join-when">${ICON.calendar}<span>${esc(fmtRange(ev.starts_at, ev.ends_at))}</span></p>` : ""}
       ${ev && !ev.is_open ? `<p class="hint">Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.</p>` : ""}
       <ul class="rules">
         <li>${badge("film", "coral")}<div><b>${ev ? `${ev.max_shots} jepretan` : "Jepretan terbatas"}</b><span>Seperti satu gulungan film. Pilih momen terbaik.</span></div></li>
@@ -215,6 +235,15 @@ async function renderEvent(eventId, tab) {
     return;
   }
   status.me = session.user.id;
+  // Acara yang dibuka lewat link di perangkat ini ikut tampil di beranda
+  if (status.is_member) rememberJoined(eventId);
+  if (tab === "layar") {
+    if (!status.can_manage) { location.hash = `#/e/${eventId}/album`; return; }
+    const box = el(`<main class="show-wrap"></main>`);
+    setView(box);
+    cleanup = await renderSlideshow(box, status, { exit: () => (location.hash = `#/e/${eventId}/panel`) });
+    return;
+  }
   if (tab === "panel" && !status.can_manage) tab = "kamera";
   if (tab === "kamera" && !status.is_member) tab = status.can_manage ? "panel" : "album"; // superadmin bukan peserta
 
@@ -248,9 +277,11 @@ async function route() {
   if (!session) return renderLogin();
   const pending = localStorage.getItem("pendingCode");
   if (pending) return renderJoin(pending);
+  const back = takePendingHash();
+  if (back && back !== location.hash) { location.hash = back; return; } // hashchange memanggil route lagi
   const a = location.hash.match(/^#\/admin(?:\/(\w+))?/);
   if (a) return renderAdmin(app, a[1] || "ringkasan", { setView, me: session.user });
-  const m = location.hash.match(/^#\/e\/([0-9a-f-]{36})(?:\/(album|panel))?/);
+  const m = location.hash.match(/^#\/e\/([0-9a-f-]{36})(?:\/(album|panel|layar))?/);
   if (m) return renderEvent(m[1], m[2] || "kamera");
   return renderHome();
 }

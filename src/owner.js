@@ -2,11 +2,13 @@
 import QRCode from "qrcode";
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
-import { getUrls, removeFiles, uploadCover, coverUrl, removeCover } from "./storage.js";
+import { getUrls, removeFiles, uploadCover, coverUrl, removeCover, copyCover } from "./storage.js";
 import { FILMS } from "./film.js";
+import { downloadQrCard, printQrCard } from "./qrcard.js";
+import { renderReports } from "./moderation.js";
 import {
   el, esc, toast, fmtDate, toLocalInput, fromLocalInput, download, safeName, modal,
-  confirmDialog, typeToConfirm, copyText, actionSheet, ICON,
+  confirmDialog, typeToConfirm, copyText, actionSheet, ICON, fmtRange,
 } from "./ui.js";
 
 export const RESOLUTIONS = [1280, 1600, 2048, 2560, 3264, 4096];
@@ -25,9 +27,37 @@ const triOptions = (v) => `
   <option value="false" ${v === false ? "selected" : ""}>Tidak</option>`;
 const triValue = (s) => (s === "" ? null : s === "true");
 
+// Data kartu QR siap cetak dari status acara
+export const cardData = (ev) => ({
+  name: ev.name, code: ev.join_code, link: `${location.origin}/?kode=${ev.join_code}`,
+  coverUrl: coverUrl(ev.cover_path), maxShots: ev.max_shots, starts: ev.starts_at, ends: ev.ends_at,
+});
+
+// Duplikat acara: pengaturan, undangan, dan sampul; lalu buka Panel acara baru
+export async function duplicateEvent(ev) {
+  if (!(await confirmDialog({
+    title: `Duplikat "${ev.name}"?`,
+    text: "Pengaturan, daftar undangan, dan sampul disalin ke acara baru. Peserta, foto, dan jadwal tidak ikut. Kode undangan baru dibuat.",
+    ok: "Duplikat",
+  }))) return null;
+  try {
+    const id = await rpc("duplicate_event", { p_event: ev.event_id });
+    if (ev.cover_path) {
+      const to = `${id}/${crypto.randomUUID()}.jpg`;
+      try { await copyCover(ev.cover_path, to); await rpc("set_cover", { p_event: id, p_path: to }); }
+      catch { toast("Acara diduplikat, tetapi sampul gagal disalin. Pasang sampul dari Panel.", 5000); }
+    }
+    toast("Acara diduplikat. Atur jadwalnya di Pengaturan.");
+    location.hash = `#/e/${id}/panel`;
+    return id;
+  } catch (e) { toast(friendly(e)); return null; }
+}
+
 export async function renderPanel(root, status, { reload, home }) {
   const link = `${location.origin}/?kode=${status.join_code}`;
   const tabKey = `panelTab:${status.event_id}`;
+  const endedBySchedule = !status.is_open && status.ends_at && new Date(status.ends_at) <= new Date();
+  const when = fmtRange(status.starts_at, status.ends_at);
   const view = el(`
     <section class="panel">
       ${status.is_admin && !status.is_owner ? `<p class="pill admin-pill">Anda mengelola acara ini sebagai superadmin</p>` : ""}
@@ -35,8 +65,9 @@ export async function renderPanel(root, status, { reload, home }) {
       <div class="card status-card">
         <div class="status-head">
           <div>
-            <span class="tag ${status.is_open ? "ok" : ""}">${status.is_open ? "Terbuka untuk memotret" : "Ditutup"}</span>
+            <span class="tag ${status.is_open ? "ok" : ""}">${status.is_open ? "Terbuka untuk memotret" : endedBySchedule ? "Selesai sesuai jadwal" : "Ditutup"}</span>
             <h3>${esc(status.name)}</h3>
+            ${when ? `<small class="when">${ICON.calendar}<span>${esc(when)}</span></small>` : ""}
           </div>
           <button class="switch" role="switch" aria-checked="${status.is_open}" data-act="toggle-open">
             <span class="knob" aria-hidden="true"></span><span>${status.is_open ? "Terbuka" : "Ditutup"}</span>
@@ -51,7 +82,8 @@ export async function renderPanel(root, status, { reload, home }) {
         <div class="funnel" aria-label="Perjalanan peserta"></div>
         <div class="row">
           <button class="btn small primary" data-act="share">${ICON.share} Bagikan link</button>
-          <button class="btn small" data-act="show-invite">QR undangan</button>
+          <button class="btn small" data-act="card">${ICON.printer} Kartu QR</button>
+          <a class="btn small" href="#/e/${status.event_id}/layar">${ICON.play} Mode layar</a>
         </div>
       </div>
 
@@ -59,7 +91,7 @@ export async function renderPanel(root, status, { reload, home }) {
         <button role="tab" data-tab="undangan">Undangan</button>
         <button role="tab" data-tab="peserta">Peserta</button>
         <button role="tab" data-tab="pengaturan">Pengaturan</button>
-        <button role="tab" data-tab="album">Album</button>
+        <button role="tab" data-tab="album">Album<span class="tab-count" hidden></span></button>
       </nav>
 
       <div class="subpanel two-col" data-tab="undangan" role="tabpanel">
@@ -75,6 +107,14 @@ export async function renderPanel(root, status, { reload, home }) {
                 <button class="btn small" data-act="qr">Unduh QR</button>
                 <button class="btn small ghost" data-act="rotate">Ganti kode</button>
               </div>
+            </div>
+          </div>
+          <div class="qr-card-box">
+            <b>Kartu QR siap cetak</b>
+            <p class="hint">Ukuran A6 dengan sampul, nama acara, jadwal, QR, dan kode. Taruh di meja tamu atau tempel di pintu masuk.</p>
+            <div class="row">
+              <button class="btn small primary" data-act="card-dl">Unduh kartu (PNG)</button>
+              <button class="btn small" data-act="card-print">${ICON.printer} Cetak</button>
             </div>
           </div>
         </div>
@@ -108,6 +148,11 @@ export async function renderPanel(root, status, { reload, home }) {
         <form class="card settings">
           <h3>Pengaturan acara</h3>
           <label>Nama acara <input name="name" required maxlength="80" value="${esc(status.name)}" /></label>
+          <div class="row">
+            <label>Mulai <input type="datetime-local" name="starts_at" value="${toLocalInput(status.starts_at)}" /></label>
+            <label>Selesai <input type="datetime-local" name="ends_at" value="${toLocalInput(status.ends_at)}" /></label>
+          </div>
+          <p class="hint">Opsional. Saat waktu selesai lewat, acara tertutup otomatis dan semua foto terbuka di album.</p>
           <label>Kalimat sambutan (opsional)
             <textarea name="welcome_text" rows="2" maxlength="300" placeholder="Contoh: Abadikan momen bahagia kami, ya!">${esc(status.welcome_text || "")}</textarea>
           </label>
@@ -141,9 +186,18 @@ export async function renderPanel(root, status, { reload, home }) {
           </details>
           <button class="btn primary" type="submit">Simpan</button>
         </form>
+        <div class="card">
+          <h3>Acara berikutnya</h3>
+          <p class="hint">Buat acara baru dengan pengaturan, undangan, dan sampul yang sama. Peserta dan foto tidak ikut.</p>
+          <button class="btn small" data-act="duplicate">${ICON.copy} Duplikat acara</button>
+        </div>
       </div>
 
       <div class="subpanel two-col" data-tab="album" role="tabpanel" hidden>
+        <div class="card reports-card span-2" hidden>
+          <h3 class="with-icon">${ICON.shield}<span>Laporan foto dari tamu</span></h3>
+          <div class="report-list"></div>
+        </div>
         <div class="card">
           <h3>Unduh album</h3>
           <p class="hint">Semua foto ukuran penuh sebagai ZIP. Album besar dibagi menjadi beberapa file berisi paling banyak ${ZIP_PART} foto supaya memori perangkat tidak habis.</p>
@@ -189,10 +243,26 @@ export async function renderPanel(root, status, { reload, home }) {
     } catch (err) { toast(friendly(err)); b.disabled = false; }
   };
   view.querySelector('[data-act="share"]').onclick = () => copyText(link, { done: "Link undangan disalin." });
-  view.querySelector('[data-act="show-invite"]').onclick = () => {
+  view.querySelector('[data-act="card"]').onclick = () => {
     selectTab("undangan");
-    view.querySelector(".qr").scrollIntoView({ block: "center" });
+    view.querySelector(".qr-card-box").scrollIntoView({ block: "center" });
   };
+  view.querySelector('[data-act="card-dl"]').onclick = () => downloadQrCard(cardData(status)).catch((e) => toast(friendly(e)));
+  view.querySelector('[data-act="card-print"]').onclick = () => printQrCard(cardData(status)).catch((e) => toast(friendly(e)));
+  view.querySelector('[data-act="duplicate"]').onclick = () => duplicateEvent(status);
+
+  // --- laporan foto ---
+  async function loadReports() {
+    let rows = [];
+    try { rows = await rpc("list_reports", { p_event: status.event_id }); } catch { return; }
+    const card = view.querySelector(".reports-card");
+    const count = view.querySelector(".tab-count");
+    card.hidden = !rows.length;
+    count.hidden = !rows.length;
+    count.textContent = rows.length;
+    if (rows.length) renderReports(card.querySelector(".report-list"), rows, { onChange: loadReports });
+  }
+  loadReports();
   rpc("event_stats", { p_event: status.event_id }).then((st) => {
     if (!st) return;
     const set = (k, v) => { view.querySelector(`[data-s="${k}"]`).textContent = Number(v).toLocaleString("id-ID"); };
@@ -260,6 +330,8 @@ export async function renderPanel(root, status, { reload, home }) {
     const f = form.elements;
     const reveal = f.reveal.checked ? fromLocalInput(f.reveal_at.value) : null;
     if (f.reveal.checked && !reveal) return toast("Isi waktu cuci film.");
+    const startsAt = fromLocalInput(f.starts_at.value), endsAt = fromLocalInput(f.ends_at.value);
+    if (startsAt && endsAt && new Date(endsAt) <= new Date(startsAt)) return toast("Waktu selesai harus setelah waktu mulai.");
     const patch = {
       name: f.name.value,
       welcome_text: f.welcome_text.value,
@@ -270,6 +342,8 @@ export async function renderPanel(root, status, { reload, home }) {
       purge_at: f.purge_at.value ? new Date(f.purge_at.value + "T00:00").toISOString() : null,
       max_members: Number(f.max_members.value),
       invite_only: f.invite_only.checked,
+      starts_at: startsAt,
+      ends_at: endsAt,
     };
     if (Number(f.max_shots.value) !== status.max_shots) patch.max_shots = Number(f.max_shots.value);
     if (status.is_admin) {
@@ -481,7 +555,7 @@ export async function showRoll(status, member) {
 }
 
 // Perkecil gambar menjadi JPEG (untuk sampul)
-async function resizeImage(file, maxSide, quality) {
+export async function resizeImage(file, maxSide, quality) {
   const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
   const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
   const c = document.createElement("canvas");

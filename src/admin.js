@@ -1,16 +1,22 @@
 // Dashboard: #/admin/<tab>. Superadmin melihat semua tab;
 // pembuat acara hanya tab Acara (acaranya sendiri), yang menjadi pusat kerjanya.
+import QRCode from "qrcode";
 import { rpc, friendly } from "./supabase.js";
 import { FILMS, filmName } from "./film.js";
-import { RESOLUTIONS, deleteEventFiles } from "./owner.js";
+import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData, resizeImage } from "./owner.js";
+import { uploadCover } from "./storage.js";
+import { downloadQrCard, printQrCard } from "./qrcard.js";
+import { renderReports } from "./moderation.js";
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
+  fmtRange, fromLocalInput,
 } from "./ui.js";
 
 const TABS = [
   ["ringkasan", "Ringkasan"],
   ["acara", "Acara"],
   ["pengguna", "Pengguna & peran"],
+  ["moderasi", "Moderasi"],
   ["pengaturan", "Pengaturan"],
   ["log", "Log"],
 ];
@@ -43,7 +49,7 @@ export async function renderAdmin(app, tab, { setView, me }) {
     </main>`);
   setView(view);
   const body = view.querySelector(".admin-body");
-  const render = { ringkasan, acara, pengguna, pengaturan, log }[tab];
+  const render = { ringkasan, acara, pengguna, moderasi, pengaturan, log }[tab];
   try { await render(body, me, role); }
   catch (e) { body.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); }
 }
@@ -98,7 +104,26 @@ async function deleteEventFully(eventId, coverPath) {
   await rpc("delete_event", { p_event: eventId });
 }
 
-// ---------- Buat acara (dipakai juga dari beranda) ----------
+// ---------- Buat acara: wizard tiga langkah, diakhiri kartu QR ----------
+// Dipakai juga dari beranda. Langkah: (1) nama & jadwal, (2) jatah & film,
+// (3) sampul, sambutan, cuci film & rencana hapus. Lalu layar selesai dengan QR.
+const REVEAL_CHOICES = [
+  ["", "Saat film tiap tamu habis (bawaan)"],
+  ["end", "Semua foto terbuka saat acara selesai"],
+  ["end+2", "2 jam setelah acara selesai"],
+  ["next9", "Besok pagi pukul 09.00 setelah acara"],
+];
+const PURGE_CHOICES = [["", "Tanpa rencana hapus"], ["30", "30 hari setelah acara"], ["90", "90 hari setelah acara"]];
+
+function revealAt(choice, endsIso) {
+  if (!choice || !endsIso) return null;
+  const end = new Date(endsIso);
+  if (choice === "end") return end.toISOString();
+  if (choice === "end+2") return new Date(end.getTime() + 2 * 3600e3).toISOString();
+  const d = new Date(end); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0);
+  return d.toISOString();
+}
+
 export async function createEventDialog() {
   let settings, quota;
   try {
@@ -114,44 +139,182 @@ export async function createEventDialog() {
     });
     return;
   }
+  const storageFull = quota?.storage_limit_mb && Number(quota.storage_bytes) >= quota.storage_limit_mb * 1048576;
+  if (storageFull) {
+    await confirmDialog({
+      title: "Kuota storage penuh",
+      text: `Acara Anda memakai ${fmtBytes(quota.storage_bytes)} dari ${fmtBytes(quota.storage_limit_mb * 1048576)}. Hapus acara lama atau hubungi superadmin.`,
+      ok: "Mengerti", cancel: "Tutup",
+    });
+    return;
+  }
+
   const { box, close } = modal(`
-    <form class="dialog">
-      <h3>Buat acara baru</h3>
-      ${limited ? `<p>Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
-      <label>Nama acara <input name="name" required maxlength="80" autofocus placeholder="Contoh: Pernikahan Rani & Bima" /></label>
-      <div class="row">
-        <label>Jatah foto (maks. ${settings.max_shots_limit}) <input name="max_shots" type="number" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" /></label>
-        <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
+    <form class="dialog wizard" novalidate>
+      <div class="wiz-head">
+        <h3>Buat acara baru</h3>
+        <div class="wiz-steps" aria-hidden="true"><i class="on"></i><i></i><i></i></div>
+        <p class="wiz-count">Langkah 1 dari 3 · Nama dan jadwal</p>
       </div>
-      <label>Efek film bawaan
-        <select name="film">${Object.entries(FILMS).map(([id, f]) => `<option value="${id}" ${id === settings.default_film ? "selected" : ""}>${esc(f.name)} — ${esc(f.desc)}</option>`).join("")}</select>
-      </label>
-      <label class="check"><input type="checkbox" name="invite_only" /> Hanya email yang diundang</label>
-      <p class="hint">Sampul, undangan, dan pengaturan lain bisa diatur di Panel setelah acara dibuat.</p>
+      ${limited ? `<p class="hint">Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
+
+      <fieldset class="wiz-step" data-step="1">
+        <label>Nama acara <input name="name" required maxlength="80" autofocus placeholder="Contoh: Pernikahan Rani & Bima" /></label>
+        <div class="row">
+          <label>Mulai <input type="datetime-local" name="starts_at" /></label>
+          <label>Selesai <input type="datetime-local" name="ends_at" /></label>
+        </div>
+        <p class="hint">Opsional, tapi disarankan: acara tertutup otomatis saat waktu selesai lewat, dan jadwalnya tampil di kartu QR.</p>
+      </fieldset>
+
+      <fieldset class="wiz-step" data-step="2" hidden>
+        <div class="row">
+          <label>Jatah foto (maks. ${settings.max_shots_limit}) <input name="max_shots" type="number" min="1" max="${settings.max_shots_limit}" value="${Math.min(30, settings.max_shots_limit)}" /></label>
+          <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(60, settings.max_members_limit)}" /></label>
+        </div>
+        <label>Efek film bawaan
+          <select name="film">${Object.entries(FILMS).map(([id, f]) => `<option value="${id}" ${id === settings.default_film ? "selected" : ""}>${esc(f.name)} — ${esc(f.desc)}</option>`).join("")}</select>
+        </label>
+        <label class="check"><input type="checkbox" name="allow_film_choice" checked /> Tamu boleh memilih efek film sendiri</label>
+        <label class="check"><input type="checkbox" name="hide_names" /> Sembunyikan nama pengunggah di album</label>
+        <label class="check"><input type="checkbox" name="invite_only" /> Hanya email yang diundang (daftar diisi di Panel)</label>
+      </fieldset>
+
+      <fieldset class="wiz-step" data-step="3" hidden>
+        <div class="wiz-cover">
+          <div class="cover-preview"><span>Belum ada sampul</span></div>
+          <label class="btn small">Pilih sampul<input type="file" accept="image/*" name="cover" hidden /></label>
+        </div>
+        <label>Kalimat sambutan (opsional)
+          <textarea name="welcome_text" rows="2" maxlength="300" placeholder="Contoh: Abadikan momen bahagia kami, ya!"></textarea></label>
+        <label>Kapan foto terbuka untuk semua tamu
+          <select name="reveal">${REVEAL_CHOICES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label>
+        <label>Rencana hapus foto
+          <select name="purge">${PURGE_CHOICES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label>
+        <p class="hint wiz-need-end" hidden>Pilihan berdasarkan waktu selesai butuh jadwal selesai di langkah 1.</p>
+      </fieldset>
+
       <div class="dialog-actions">
-        <button type="button" class="btn ghost" data-act="no">Batal</button>
-        <button class="btn primary">Buat acara</button>
+        <button type="button" class="btn ghost" data-act="back">Batal</button>
+        <button class="btn primary" data-act="next">Lanjut</button>
       </div>
-    </form>`);
+    </form>`, { wide: true });
   const form = box.querySelector("form");
-  box.querySelector('[data-act="no"]').onclick = close;
+  const f = form.elements;
+  const backBtn = box.querySelector('[data-act="back"]');
+  const nextBtn = box.querySelector('[data-act="next"]');
+  const TITLES = ["Nama dan jadwal", "Jatah dan efek film", "Sampul dan pembukaan album"];
+  let step = 1, coverFile = null;
+
+  function show() {
+    form.querySelectorAll(".wiz-step").forEach((x) => { x.hidden = Number(x.dataset.step) !== step; });
+    form.querySelectorAll(".wiz-steps i").forEach((d, i) => d.classList.toggle("on", i < step));
+    box.querySelector(".wiz-count").textContent = `Langkah ${step} dari 3 · ${TITLES[step - 1]}`;
+    backBtn.textContent = step === 1 ? "Batal" : "‹ Kembali";
+    nextBtn.textContent = step === 3 ? "Buat acara" : "Lanjut";
+    const noEnd = !f.ends_at.value;
+    for (const sel of [f.reveal, f.purge]) {
+      [...sel.options].forEach((o) => { o.disabled = noEnd && o.value !== "" && sel === f.reveal; });
+      if (sel === f.reveal && noEnd && sel.value) sel.value = "";
+    }
+    box.querySelector(".wiz-need-end").hidden = !noEnd;
+    form.querySelector(`.wiz-step[data-step="${step}"] input, .wiz-step[data-step="${step}"] select`)?.focus();
+  }
+
+  function valid() {
+    if (step === 1) {
+      if (!f.name.value.trim()) { toast("Isi nama acara."); f.name.focus(); return false; }
+      const a = fromLocalInput(f.starts_at.value), b = fromLocalInput(f.ends_at.value);
+      if (a && b && new Date(b) <= new Date(a)) { toast("Waktu selesai harus setelah waktu mulai."); return false; }
+    }
+    if (step === 2) {
+      const shots = Number(f.max_shots.value), members = Number(f.max_members.value);
+      if (!(shots >= 1 && shots <= settings.max_shots_limit)) { toast(`Jatah foto 1–${settings.max_shots_limit}.`); return false; }
+      if (!(members >= 1 && members <= settings.max_members_limit)) { toast(`Peserta 1–${settings.max_members_limit}.`); return false; }
+    }
+    return true;
+  }
+
+  f.cover.onchange = () => {
+    coverFile = f.cover.files[0] || null;
+    const prev = box.querySelector(".cover-preview");
+    prev.innerHTML = coverFile ? `<img alt="Pratinjau sampul" />` : `<span>Belum ada sampul</span>`;
+    if (coverFile) prev.querySelector("img").src = URL.createObjectURL(coverFile);
+  };
+  backBtn.onclick = () => { if (step === 1) close(); else { step--; show(); } };
   form.onsubmit = async (e) => {
     e.preventDefault();
-    const f = form.elements;
-    const btn = form.querySelector(".btn.primary");
-    btn.disabled = true;
+    if (!valid()) return;
+    if (step < 3) { step++; show(); return; }
+    nextBtn.disabled = true; backBtn.disabled = true;
+    nextBtn.textContent = "Membuat…";
     try {
       const id = await rpc("create_event", {
-        p_name: f.name.value,
+        p_name: f.name.value.trim(),
         p_max_shots: Number(f.max_shots.value),
         p_max_members: Number(f.max_members.value),
         p_invite_only: f.invite_only.checked,
         p_film: f.film.value,
       });
-      close();
-      location.hash = `#/e/${id}/panel`;
-    } catch (err) { toast(friendly(err)); btn.disabled = false; }
+      const starts = fromLocalInput(f.starts_at.value), ends = fromLocalInput(f.ends_at.value);
+      const purgeDays = Number(f.purge.value);
+      const purgeBase = ends || starts || new Date().toISOString();
+      const patch = {
+        starts_at: starts, ends_at: ends,
+        welcome_text: f.welcome_text.value,
+        allow_film_choice: f.allow_film_choice.checked,
+        hide_names: f.hide_names.checked,
+        reveal_at: revealAt(f.reveal.value, ends),
+        purge_at: purgeDays ? new Date(new Date(purgeBase).getTime() + purgeDays * 86400e3).toISOString() : null,
+      };
+      try { await rpc("set_event", { p_event: id, p_patch: patch }); }
+      catch (err) { toast("Acara dibuat, tetapi sebagian pengaturan gagal disimpan: " + friendly(err), 6000); }
+      let coverPath = null;
+      if (coverFile) {
+        try {
+          const blob = await resizeImage(coverFile, 1600, 0.85);
+          coverPath = `${id}/${crypto.randomUUID()}.jpg`;
+          await uploadCover(coverPath, blob);
+          await rpc("set_cover", { p_event: id, p_path: coverPath });
+        } catch { coverPath = null; toast("Sampul gagal diunggah. Pasang lagi dari Panel.", 5000); }
+      }
+      const st = (await rpc("my_status", { p_event: id }))[0];
+      showDone(st || { event_id: id, name: f.name.value, join_code: "", max_shots: Number(f.max_shots.value), cover_path: coverPath, starts_at: starts, ends_at: ends });
+    } catch (err) {
+      toast(friendly(err));
+      nextBtn.disabled = false; backBtn.disabled = false; nextBtn.textContent = "Buat acara";
+    }
   };
+
+  // Layar selesai: QR dan kartu siap cetak
+  function showDone(st) {
+    const link = `${location.origin}/?kode=${st.join_code}`;
+    const when = fmtRange(st.starts_at, st.ends_at);
+    form.replaceWith(el(`
+      <div class="dialog wiz-done">
+        <div class="wiz-done-head">${ICON.check}<h3>Acara siap</h3></div>
+        <p><b>${esc(st.name)}</b>${when ? `<br>${esc(when)}` : ""}</p>
+        <div class="invite">
+          <canvas class="qr" aria-label="Kode QR undangan"></canvas>
+          <div><p class="code">${esc(st.join_code)}</p><p class="link">${esc(link)}</p></div>
+        </div>
+        <p class="hint">Bagikan link ke tamu, atau cetak kartu QR untuk meja tamu.</p>
+        <div class="row">
+          <button class="btn small primary" data-act="card-dl">Unduh kartu QR</button>
+          <button class="btn small" data-act="card-print">${ICON.printer} Cetak</button>
+          <button class="btn small" data-act="copy">${ICON.link} Salin link</button>
+        </div>
+        <div class="dialog-actions"><a class="btn primary" href="#/e/${st.event_id}/panel" data-act="panel">Buka Panel acara</a></div>
+      </div>`));
+    const done = box.querySelector(".wiz-done");
+    QRCode.toCanvas(done.querySelector(".qr"), link, { width: 160, margin: 1 });
+    done.querySelector('[data-act="card-dl"]').onclick = () => downloadQrCard(cardData(st)).catch((e) => toast(friendly(e)));
+    done.querySelector('[data-act="card-print"]').onclick = () => printQrCard(cardData(st)).catch((e) => toast(friendly(e)));
+    done.querySelector('[data-act="copy"]').onclick = () => copyText(link, { done: "Link undangan disalin." });
+    done.querySelector('[data-act="panel"]').onclick = () => close();
+    done.querySelector('[data-act="card-dl"]').focus();
+  }
+  show();
 }
 
 // ---------- Ringkasan: perlu perhatian, berlangsung, angka ----------
@@ -170,9 +333,10 @@ function shortUA(ua = "") {
 }
 
 async function ringkasan(body) {
-  const [o, overdue, errors, live] = await Promise.all([
+  const [o, overdue, errors, live, trends] = await Promise.all([
     rpc("admin_overview"), rpc("admin_overdue_events"),
     rpc("admin_client_errors", { p_limit: 20 }), rpc("admin_live_events"),
+    rpc("admin_trends", { p_days: 30 }).catch(() => []),
   ]);
   const quota = Number(o.storage_quota_mb || 1024) * 1024 * 1024;
   const used = Number(o.photo_bytes) + Number(o.cover_bytes);
@@ -185,6 +349,9 @@ async function ringkasan(body) {
   if (usedPct > 85) items.push([`Storage terpakai ${usedPct.toFixed(0)}%`,
     left !== null ? `Cukup untuk sekitar ${left.toLocaleString("id-ID")} foto lagi. Turunkan resolusi atau hapus acara lama.` : "Turunkan resolusi atau hapus acara lama.",
     `<a class="btn small" href="#/admin/pengaturan">Pengaturan</a>`]);
+  if (o.reports_open > 0) items.push([`${o.reports_open} foto dilaporkan tamu`,
+    "Tinjau dan sembunyikan bila perlu. Foto otomatis disembunyikan setelah tiga laporan.",
+    `<a class="btn small" href="#/admin/moderasi">Moderasi</a>`]);
   if (overdue.length) items.push([`${overdue.length} acara lewat tanggal hapus`,
     overdue.slice(0, 3).map((e) => e.name).join(", ") + (overdue.length > 3 ? ", …" : ""),
     `<button class="btn small danger" data-act="purge">Hapus sekarang</button>`]);
@@ -226,6 +393,30 @@ async function ringkasan(body) {
         ${stat("Gagal kamera", o.camera_errors_24h, "24 jam terakhir")}
       </div>
 
+      ${trends.length ? `
+      <div class="card trends-card">
+        <h3>Tren ${trends.length} hari terakhir</h3>
+        <p class="hint">Dari data yang masih tersimpan; acara yang sudah dihapus tidak terhitung. Arahkan kursor atau ketuk batang untuk angka per hari.</p>
+        <div class="trend-grid"></div>
+        <details class="trend-table"><summary>Lihat sebagai tabel</summary>
+          <div class="table-scroll"><table>
+            <thead><tr><th>Tanggal</th><th class="num">Foto</th><th class="num">Acara aktif</th><th class="num">Pengguna baru</th><th class="num">Storage baru</th></tr></thead>
+            <tbody>${[...trends].reverse().map((r) => `<tr><td>${esc(fmtDay(r.day))}</td><td class="num">${r.photos}</td><td class="num">${r.active_events}</td><td class="num">${r.users}</td><td class="num">${fmtBytes(r.bytes)}</td></tr>`).join("")}</tbody>
+          </table></div>
+        </details>
+      </div>` : ""}
+
+      ${o.members_total !== undefined ? `
+      <div class="card">
+        <h3>Perjalanan peserta, semua acara</h3>
+        <div class="funnel">
+          ${funnelRow("Masuk", o.members_total, Math.max(o.members_total, 1))}
+          ${funnelRow("Memotret", o.shooters_total, Math.max(o.members_total, 1))}
+          ${funnelRow("Film habis", o.rolls_total, Math.max(o.members_total, 1), "mint")}
+          ${funnelRow("Mengunduh", o.downloaders_total, Math.max(o.members_total, 1))}
+        </div>
+      </div>` : ""}
+
       <div class="card">
         <h3>Storage</h3>
         <div class="meter" role="img" aria-label="Storage terpakai ${usedPct.toFixed(0)} persen"><span style="width:${usedPct.toFixed(1)}%" class="${usedPct > 85 ? "hot" : ""}"></span></div>
@@ -250,6 +441,15 @@ async function ringkasan(body) {
       </div>
     </div>`);
   body.replaceChildren(view);
+  const grid = view.querySelector(".trend-grid");
+  if (grid) {
+    grid.append(
+      trendChart("Foto masuk per hari", trends, "photos", (v) => `${v} foto`),
+      trendChart("Acara aktif per hari", trends, "active_events", (v) => `${v} acara`),
+      trendChart("Pengguna baru per hari", trends, "users", (v) => `${v} pengguna`),
+      trendChart("Storage bertambah per hari", trends, "bytes", (v) => fmtBytes(v)),
+    );
+  }
   view.querySelector('[data-act="to-errors"]')?.addEventListener("click", () =>
     view.querySelector(".errors-card").scrollIntoView({ block: "start" }));
   const purge = view.querySelector('[data-act="purge"]');
@@ -271,6 +471,70 @@ async function ringkasan(body) {
   };
 }
 
+// ---------- Grafik tren: batang satu seri per metrik (small multiples) ----------
+const fmtDay = (d) => new Date(`${d}T00:00:00`).toLocaleDateString("id-ID", { day: "numeric", month: "short" });
+
+export function trendChart(title, rows, key, fmt) {
+  const vals = rows.map((r) => Number(r[key]) || 0);
+  const total = vals.reduce((a, b) => a + b, 0);
+  const max = Math.max(...vals, 1);
+  const W = 300, H = 96, top = 6, base = H - 2;
+  const slot = W / vals.length, bw = Math.min(24, Math.max(2, slot - 2)); // 2px celah antarbatang
+  const r = Math.min(4, bw / 2);
+  // Batang dengan ujung atas membulat dan dasar persegi
+  const bar = (i, v) => {
+    const h = v ? Math.max(2, ((base - top) * v) / max) : 0;
+    if (!h) return "";
+    const x = i * slot + (slot - bw) / 2, y = base - h, rr = Math.min(r, h);
+    return `<path class="tc-bar" data-i="${i}" d="M${x},${base}V${y + rr}Q${x},${y} ${x + rr},${y}H${x + bw - rr}Q${x + bw},${y} ${x + bw},${y + rr}V${base}Z"/>`;
+  };
+  const sumText = key === "bytes" ? fmtBytes(total) : total.toLocaleString("id-ID");
+  const n = el(`
+    <figure class="trend">
+      <figcaption><span>${esc(title)}</span><b>${esc(sumText)}</b></figcaption>
+      <div class="tc-plot">
+        <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}: total ${esc(sumText)} dalam ${vals.length} hari, tertinggi ${esc(fmt(max))}">
+          <line class="tc-grid" x1="0" x2="${W}" y1="${top}" y2="${top}"/>
+          <line class="tc-axis" x1="0" x2="${W}" y1="${base}" y2="${base}"/>
+          ${vals.map((v, i) => bar(i, v)).join("")}
+        </svg>
+        <span class="tc-max">${esc(fmt(max))}</span>
+        <div class="tc-tip" hidden></div>
+      </div>
+      <div class="tc-x"><span>${esc(fmtDay(rows[0].day))}</span><span>${esc(fmtDay(rows[rows.length - 1].day))}</span></div>
+    </figure>`);
+  // Hover/ketuk: area sasaran selebar slot (lebih besar dari batangnya)
+  const plot = n.querySelector(".tc-plot"), tip = n.querySelector(".tc-tip"), svgEl = n.querySelector("svg");
+  const showAt = (clientX) => {
+    const rect = svgEl.getBoundingClientRect();
+    const i = Math.max(0, Math.min(vals.length - 1, Math.floor(((clientX - rect.left) / rect.width) * vals.length)));
+    n.querySelectorAll(".tc-bar").forEach((b) => b.classList.toggle("dim", Number(b.dataset.i) !== i));
+    tip.hidden = false;
+    tip.innerHTML = `<b>${esc(fmt(vals[i]))}</b><span>${esc(fmtDay(rows[i].day))}</span>`;
+    const x = ((i + 0.5) / vals.length) * rect.width;
+    tip.style.left = `${Math.max(40, Math.min(rect.width - 40, x))}px`;
+  };
+  plot.addEventListener("pointermove", (e) => showAt(e.clientX));
+  plot.addEventListener("pointerdown", (e) => showAt(e.clientX));
+  plot.addEventListener("pointerleave", () => { tip.hidden = true; n.querySelectorAll(".tc-bar.dim").forEach((b) => b.classList.remove("dim")); });
+  return n;
+}
+
+// ---------- Moderasi: laporan foto dari semua acara ----------
+async function moderasi(body) {
+  const view = el(`
+    <div>
+      <div class="card">
+        <h3 class="with-icon">${ICON.shield}<span>Laporan foto</span></h3>
+        <p class="hint">Laporan dari tamu di semua acara, dikelompokkan per foto. Pemilik acara juga melihat laporan acaranya di Panel → Album. Foto otomatis disembunyikan setelah tiga laporan dari orang berbeda.</p>
+        <div class="report-list"><p class="hint">Memuat…</p></div>
+      </div>
+    </div>`);
+  body.replaceChildren(view);
+  const rows = await rpc("list_reports", { p_event: null });
+  await renderReports(view.querySelector(".report-list"), rows, { showEvent: true });
+}
+
 // ---------- Acara ----------
 async function acara(body, me, role) {
   const admin = role === "superadmin";
@@ -285,6 +549,7 @@ async function acara(body, me, role) {
         <select aria-label="Urutkan">
           <option value="created">Terbaru dibuat</option>
           <option value="activity">Aktivitas terakhir</option>
+          <option value="date">Jadwal acara</option>
           <option value="photos">Foto terbanyak</option>
           <option value="members">Peserta terbanyak</option>
           ${admin ? `<option value="bytes">Ukuran terbesar</option>` : ""}
@@ -303,7 +568,7 @@ async function acara(body, me, role) {
   sortSel.value = st.sort;
   view.querySelector('[data-act="create"]')?.addEventListener("click", () => createEventDialog());
   view.querySelector(".filter-slot").append(chips(
-    [["all", "Semua"], ["open", "Terbuka"], ["closed", "Ditutup"], ...(admin ? [["overdue", "Lewat tanggal hapus"]] : [])],
+    [["all", "Semua"], ["open", "Terbuka"], ["closed", "Ditutup"], ["reported", "Ada laporan"], ...(admin ? [["overdue", "Lewat tanggal hapus"]] : [])],
     st.status, (v) => { st.status = v; st.offset = 0; load(); }, "Saring status"));
   let timer;
   search.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { st.q = search.value.trim(); st.offset = 0; load(); }, 300); };
@@ -339,8 +604,10 @@ async function acara(body, me, role) {
           <tbody>${rows.map((e) => `
             <tr data-id="${e.event_id}" class="${selected.has(e.event_id) ? "selected" : ""}">
               <td class="pick"><input type="checkbox" data-pick="${e.event_id}" ${selected.has(e.event_id) ? "checked" : ""} aria-label="Pilih ${esc(e.name)}" /></td>
-              <td><a href="#/e/${e.event_id}/panel"><b>${esc(e.name)}</b></a><br><small>${esc(e.owner_name)} · ${esc(e.owner_email || "")}</small></td>
+              <td><a href="#/e/${e.event_id}/panel"><b>${esc(e.name)}</b></a><br><small>${esc(e.owner_name)} · ${esc(e.owner_email || "")}</small>
+                ${e.starts_at || e.ends_at ? `<br><small>${esc(fmtRange(e.starts_at, e.ends_at))}</small>` : ""}</td>
               <td><span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
+                ${e.reports ? `<br><span class="tag warn">${e.reports} dilaporkan</span>` : ""}
                 ${e.purge_at && new Date(e.purge_at) <= new Date() ? `<br><span class="tag bad">lewat tanggal hapus</span>` : ""}</td>
               <td class="num">${e.members}/${e.max_members}</td>
               <td class="num">${e.rolls_done}</td>
@@ -374,8 +641,11 @@ async function acara(body, me, role) {
     const n = el(`<div class="event-cards">${rows.map((e) => `
       <article class="card event-card" data-id="${e.event_id}">
         <div class="ec-head">
-          <div><b>${esc(e.name)}</b><small>Kode ${esc(e.join_code)} · ${esc(filmName(e.film))} · dibuat ${esc(fmtDate(e.created_at))}</small></div>
-          <span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
+          <div><b>${esc(e.name)}</b>
+            ${e.starts_at || e.ends_at ? `<small class="when">${ICON.calendar}<span>${esc(fmtRange(e.starts_at, e.ends_at))}</span></small>` : ""}
+            <small>Kode ${esc(e.join_code)} · ${esc(filmName(e.film))} · dibuat ${esc(fmtDate(e.created_at))}</small></div>
+          <span class="ec-tags"><span class="tag ${e.is_open ? "ok" : ""}">${e.is_open ? "Terbuka" : "Ditutup"}</span>
+            ${e.reports ? `<a class="tag warn" href="#/e/${e.event_id}/panel">${e.reports} dilaporkan</a>` : ""}</span>
         </div>
         <div class="funnel">${funnelHtml(e)}</div>
         <p class="hint" style="margin:0">${e.photos} foto masuk${e.pending ? ` · <b>${e.pending} tertahan</b>` : ""} · ${fmtBytes(e.bytes)}${e.last_photo_at ? ` · terakhir ${esc(fmtDate(e.last_photo_at))}` : ""}</p>
@@ -395,6 +665,9 @@ async function acara(body, me, role) {
   function eventMenu(e) {
     actionSheet(e.name, [
       { label: e.is_open ? "Tutup acara" : "Buka acara", run: () => setOpen([e], !e.is_open) },
+      { label: "Kartu QR siap cetak", run: () => downloadQrCard(cardData(e)).catch((err) => toast(friendly(err))) },
+      { label: "Mode layar (proyektor)", run: () => { location.hash = `#/e/${e.event_id}/layar`; } },
+      { label: "Duplikat acara…", run: () => duplicateEvent(e) },
       { label: "Hapus acara…", danger: true, run: async () => {
         const ok = await typeToConfirm({
           title: "Hapus acara dan semua foto?",
@@ -459,9 +732,12 @@ async function acara(body, me, role) {
 // ---------- Pengguna & peran (tab Peran digabung ke sini) ----------
 const roleName = (r) => (r === "superadmin" ? "Superadmin" : r === "creator" ? "Pembuat acara" : "");
 const roleTag = (r) => (r ? `<span class="tag ${r === "superadmin" ? "hot" : ""}">${roleName(r)}</span>` : "");
-const limitText = (r) => r.event_limit === null || r.event_limit === undefined
+const limitText = (r) => (r.event_limit === null || r.event_limit === undefined
   ? `${r.events_created ?? 0} acara dibuat · tanpa batas`
-  : `${r.events_created ?? 0} dari ${r.event_limit} acara${r.events_created >= r.event_limit ? " · habis" : ""}`;
+  : `${r.events_created ?? 0} dari ${r.event_limit} acara${r.events_created >= r.event_limit ? " · habis" : ""}`) +
+  (r.storage_bytes !== undefined || r.storage_limit_mb
+    ? ` · storage ${r.storage_bytes !== undefined ? fmtBytes(r.storage_bytes) : "?"}${r.storage_limit_mb ? ` dari ${fmtBytes(r.storage_limit_mb * 1048576)}` : ""}`
+    : "");
 
 async function pengguna(body, me) {
   const st = { q: "", filter: "all", offset: 0 };
@@ -504,6 +780,7 @@ async function pengguna(body, me) {
           setRole(r.email, "superadmin");
       } }] : []),
       ...(r.role === "creator" ? [{ label: "Atur batas acara…", run: async () => { if (await limitDialog(r)) refresh(); } }] : []),
+      ...(r.role === "creator" ? [{ label: "Atur kuota storage…", run: async () => { if (await storageDialog(r)) refresh(); } }] : []),
       ...(r.role ? [{ label: "Cabut peran", danger: true, run: async () => {
         if (await confirmDialog({ title: `Cabut peran ${r.email}?`, text: "Acara yang sudah dibuatnya tetap ada.", ok: "Cabut peran", danger: true }))
           setRole(r.email, null);
@@ -638,6 +915,37 @@ function limitDialog(r) {
   });
 }
 
+// Dialog kuota storage satu pembuat acara (MB). Resolve true jika tersimpan.
+function storageDialog(r) {
+  return new Promise((resolve) => {
+    let saved = false;
+    const { box, close } = modal(`
+      <form class="dialog">
+        <h3>Kuota storage</h3>
+        <p>${esc(r.email)}${r.storage_bytes !== undefined ? ` · terpakai ${fmtBytes(r.storage_bytes)}` : ""}</p>
+        <label>Maks. storage semua acaranya (MB)
+          <input name="mb" type="number" min="1" max="10000000" placeholder="Tanpa batas" value="${r.storage_limit_mb ?? ""}" autofocus /></label>
+        <p class="hint">Kosongkan untuk tanpa batas. Saat kuota penuh, ia tidak bisa membuat acara baru; acara yang sedang berjalan tetap bisa dipakai memotret. 1024 MB = 1 GB.</p>
+        <div class="dialog-actions">
+          <button type="button" class="btn ghost" data-act="no">Batal</button>
+          <button class="btn primary">Simpan</button>
+        </div>
+      </form>`, { onClose: () => resolve(saved) });
+    const f = box.querySelector("form");
+    box.querySelector('[data-act="no"]').onclick = close;
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const v = f.elements.mb.value.trim();
+      try {
+        await rpc("admin_set_storage_limit", { p_email: r.email, p_mb: v === "" ? null : Number(v) });
+        toast("Kuota storage tersimpan.");
+        saved = true;
+        close();
+      } catch (err) { toast(friendly(err)); }
+    };
+  });
+}
+
 // ---------- Pengaturan global ----------
 async function pengaturan(body) {
   const s = await rpc("get_settings");
@@ -654,6 +962,14 @@ async function pengaturan(body) {
         <label>Kuota storage paket Supabase (MB)
           <input type="number" name="storage_quota_mb" min="100" max="1000000" value="${s.storage_quota_mb}" /></label>
         <p class="hint">Dipakai meter storage di Ringkasan. Paket gratis 1024 MB (1 GB), paket Pro 102400 MB (100 GB).</p>
+      </fieldset>
+
+      <fieldset><legend>Batas bawaan pembuat acara baru</legend>
+        <label>Maks. acara yang boleh dibuat
+          <input type="number" name="creator_event_limit" min="0" max="10000" placeholder="Tanpa batas" value="${s.creator_event_limit ?? ""}" /></label>
+        <label>Kuota storage (MB)
+          <input type="number" name="creator_storage_mb" min="1" max="10000000" placeholder="Tanpa batas" value="${s.creator_storage_mb ?? ""}" /></label>
+        <p class="hint">Diberikan saat seseorang dijadikan pembuat acara. Batas orang yang sudah punya peran tidak berubah; atur satu per satu di Pengguna & peran.</p>
       </fieldset>
 
       <fieldset><legend>Foto</legend>
@@ -674,28 +990,89 @@ async function pengaturan(body) {
       </fieldset>
 
       <p class="hint">Terakhir diubah ${esc(fmtDate(s.updated_at))}</p>
-      <button class="btn primary">Simpan pengaturan</button>
+      <div class="row">
+        <button class="btn primary">Simpan pengaturan</button>
+        <button type="button" class="btn ghost" data-act="defaults">Kembalikan ke bawaan</button>
+      </div>
     </form>`);
   body.replaceChildren(view);
   const f = view.elements;
   f.jpeg_quality.oninput = () => { view.querySelector(".qv").textContent = f.jpeg_quality.value; };
+  const optNum = (v) => (v.trim() === "" ? null : Number(v));
+  const read = () => ({
+    max_shots_limit: Number(f.max_shots_limit.value),
+    max_members_limit: Number(f.max_members_limit.value),
+    storage_quota_mb: Number(f.storage_quota_mb.value),
+    creator_event_limit: optNum(f.creator_event_limit.value),
+    creator_storage_mb: optNum(f.creator_storage_mb.value),
+    photo_max_side: Number(f.photo_max_side.value),
+    jpeg_quality: Number(f.jpeg_quality.value),
+    default_film: f.default_film.value,
+    flash_enabled: f.flash_enabled.checked,
+    mirror_preview: f.mirror_preview.checked,
+    mirror_photo: f.mirror_photo.checked,
+  });
+  // Isi formulir dengan nilai bawaan (belum disimpan sampai tombol Simpan)
+  view.querySelector('[data-act="defaults"]').onclick = () => {
+    for (const [k, v] of Object.entries(SETTING_DEFAULTS)) {
+      const input = f[k];
+      if (input.type === "checkbox") input.checked = v; else input.value = v ?? "";
+    }
+    f.jpeg_quality.oninput();
+    toast("Nilai bawaan diisi. Periksa lalu Simpan.");
+  };
   view.onsubmit = async (e) => {
     e.preventDefault();
+    const next = read();
+    const changed = Object.keys(next).filter((k) => (s[k] ?? null) !== next[k]);
+    if (!changed.length) { toast("Tidak ada perubahan."); return; }
+    if (!(await changesDialog(changed.map((k) => [SETTING_LABELS[k] || k, settingText(k, s[k]), settingText(k, next[k])])))) return;
     try {
-      await rpc("admin_set_settings", { p_patch: {
-        max_shots_limit: Number(f.max_shots_limit.value),
-        max_members_limit: Number(f.max_members_limit.value),
-        storage_quota_mb: Number(f.storage_quota_mb.value),
-        photo_max_side: Number(f.photo_max_side.value),
-        jpeg_quality: Number(f.jpeg_quality.value),
-        default_film: f.default_film.value,
-        flash_enabled: f.flash_enabled.checked,
-        mirror_preview: f.mirror_preview.checked,
-        mirror_photo: f.mirror_photo.checked,
-      } });
+      await rpc("admin_set_settings", { p_patch: Object.fromEntries(changed.map((k) => [k, next[k]])) });
+      Object.assign(s, next);
       toast("Pengaturan tersimpan.");
     } catch (err) { toast(friendly(err)); }
   };
+}
+
+// Nilai bawaan di supabase/v2.sql (app_settings)
+const SETTING_DEFAULTS = {
+  max_shots_limit: 100, max_members_limit: 300, storage_quota_mb: 1024,
+  creator_event_limit: null, creator_storage_mb: null,
+  photo_max_side: 2560, jpeg_quality: 88, default_film: "senja",
+  flash_enabled: true, mirror_preview: true, mirror_photo: false,
+};
+const SETTING_LABELS = {
+  max_shots_limit: "Maks. jepretan per peserta", max_members_limit: "Maks. peserta per acara",
+  storage_quota_mb: "Kuota storage (MB)", creator_event_limit: "Batas acara pembuat baru",
+  creator_storage_mb: "Kuota storage pembuat baru (MB)", photo_max_side: "Resolusi foto",
+  jpeg_quality: "Kualitas JPEG", default_film: "Efek film bawaan", flash_enabled: "Tombol flash",
+  mirror_preview: "Cermin jendela bidik", mirror_photo: "Cermin hasil foto",
+};
+function settingText(k, v) {
+  if (v === null || v === undefined || v === "") return "tanpa batas";
+  if (typeof v === "boolean") return v ? "nyala" : "mati";
+  if (k === "default_film") return filmName(v);
+  if (k === "photo_max_side") return `${v} px`;
+  return String(v);
+}
+// Ringkasan perubahan sebelum disimpan. rows: [label, lama, baru]
+function changesDialog(rows) {
+  return new Promise((resolve) => {
+    let ok = false;
+    const { box, close } = modal(`
+      <div class="dialog">
+        <h3>Simpan ${rows.length} perubahan?</h3>
+        <p>Berlaku untuk semua acara yang tidak punya pengaturan sendiri.</p>
+        <ul class="changes">${rows.map(([l, a, b]) => `<li><span>${esc(l)}</span><span><s>${esc(a)}</s> → <b>${esc(b)}</b></span></li>`).join("")}</ul>
+        <div class="dialog-actions">
+          <button class="btn ghost" data-act="no">Batal</button>
+          <button class="btn primary" data-act="yes" autofocus>Simpan</button>
+        </div>
+      </div>`, { onClose: () => resolve(ok) });
+    box.querySelector('[data-act="no"]').onclick = close;
+    box.querySelector('[data-act="yes"]').onclick = () => { ok = true; close(); };
+  });
 }
 // Perkiraan kasar ukuran per foto (3 ukuran, kualitas ~88)
 const resNote = (r) => ({ 1280: " · ±0,4 MB/foto", 1600: " · ±0,6 MB/foto", 2048: " · ±1 MB/foto",
@@ -707,11 +1084,13 @@ const ACTIONS = {
   ubah_sampul: "Mengubah sampul", blokir_peserta: "Memblokir peserta", pulihkan_peserta: "Memulihkan peserta",
   ubah_peran: "Mengubah peran", ubah_batas_acara: "Mengubah batas acara",
   ubah_pengaturan: "Mengubah pengaturan global", blokir_akun: "Memblokir akun", pulihkan_akun: "Memulihkan akun",
+  ubah_batas_storage: "Mengubah kuota storage", moderasi: "Menindak laporan foto",
 };
+const MODERATION = { hide: "menyembunyikan foto yang dilaporkan", block: "menyembunyikan foto dan memblokir pemotret", dismiss: "mengabaikan laporan foto" };
 const FIELDS = {
   name: "nama", max_shots: "jatah", max_members: "batas peserta",
   max_shots_limit: "batas jepretan", max_members_limit: "batas peserta", storage_quota_mb: "kuota storage (MB)",
-  jpeg_quality: "kualitas JPEG",
+  jpeg_quality: "kualitas JPEG", creator_event_limit: "batas acara bawaan", creator_storage_mb: "kuota storage bawaan (MB)",
 };
 function describeChange(k, v) {
   const onOff = (on, off) => (v ? on : off);
@@ -728,6 +1107,8 @@ function describeChange(k, v) {
     case "purge_at": return v ? `rencana hapus ${fmtDate(v)}` : "tanpa rencana hapus";
     case "photo_max_side": return v ? `resolusi ${v} px` : "resolusi ikut global";
     case "welcome_text": return "mengubah kalimat sambutan";
+    case "starts_at": return v ? `mulai ${fmtDate(v)}` : "tanpa waktu mulai";
+    case "ends_at": return v ? `selesai ${fmtDate(v)}` : "tanpa waktu selesai";
     default: return `${FIELDS[k] || k} ${v ?? "-"}`;
   }
 }
@@ -747,6 +1128,8 @@ function describe(r) {
     case "ubah_pengaturan": return `mengubah pengaturan global: ${patch()}`;
     case "blokir_akun": return `memblokir akun ${t}`;
     case "pulihkan_akun": return `memulihkan akun ${t}`;
+    case "ubah_batas_storage": return `mengatur kuota storage ${r.target}: ${d.mb ? `${d.mb} MB` : "tanpa batas"}`;
+    case "moderasi": return `${MODERATION[d.action] || "menindak laporan foto"} di acara “${t}”${r.user_label && d.action === "block" ? ` (${r.user_label})` : ""}`;
     default: return `${r.action} ${t}`;
   }
 }

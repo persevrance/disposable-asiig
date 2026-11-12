@@ -15,7 +15,7 @@ drop policy if exists "sampul: baca pengelola"   on storage.objects;
 drop policy if exists "sampul: unggah"           on storage.objects;
 drop policy if exists "sampul: hapus"            on storage.objects;
 
-drop table if exists client_errors, downloads, audit_log, user_roles, app_settings,
+drop table if exists photo_reports, favorites, client_errors, downloads, audit_log, user_roles, app_settings,
   photos, event_members, event_invites, events, event_creators, profiles cascade;
 
 drop function if exists
@@ -43,5 +43,11 @@ drop function if exists
   admin_audit(int, int, text, text, timestamptz), event_stats(uuid), album_progress(uuid),
   admin_live_events(),
   log_client_error(uuid, text, text, text),
-  my_event_quota(), admin_set_event_limit(text, int, int)
+  my_event_quota(), admin_set_event_limit(text, int, int),
+  -- fase 3
+  open_now(events), owner_bytes(uuid), reserve_shot(uuid, uuid, text),
+  get_album(uuid, timestamptz, int, text, uuid), album_owners(uuid), toggle_favorite(uuid),
+  duplicate_event(uuid), report_photo(uuid, text, text), list_reports(uuid),
+  resolve_reports(uuid, text), admin_trends(int), slideshow_photos(uuid, int),
+  admin_set_storage_limit(text, int)
 cascade;

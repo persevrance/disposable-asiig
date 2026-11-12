@@ -11,6 +11,8 @@ Supabase (login Google, database, penyimpanan foto) + Cloudflare Pages
 - 7 efek film, flash (lampu kamera belakang / layar untuk kamera depan), resolusi dan mirror dari pengaturan.
 - Tamu bisa mengunduh foto ukuran penuh, maks. sejumlah jatah jepretan (foto sendiri gratis).
 - Peran: superadmin (dashboard `#/admin`), pembuat acara, tamu. Rancangan lengkap: [docs/RANCANGAN.md](docs/RANCANGAN.md).
+- Jadwal acara (tutup otomatis saat selesai), kartu QR siap cetak, mode layar untuk proyektor,
+  album dengan saringan dan favorit, laporan foto + moderasi, duplikat acara, kuota storage per pembuat acara.
 
 ## Susunan
 
@@ -27,9 +29,13 @@ src/
   film.js          preset efek film
   develop.js       olah foto (resolusi, cermin, film, 3 ukuran JPEG) tanpa DOM
   develop-worker.js  Web Worker yang menjalankan develop.js di luar thread utama
-  album.js         tab Album + unduh dengan kuota
+  album.js         tab Album: saringan, favorit, laporan foto, unduh dengan kuota
   owner.js         tab Panel (pemilik acara / superadmin), gulungan per tamu, sampul
-  admin.js         dashboard superadmin
+  admin.js         dashboard: wizard buat acara, tren, moderasi, pengguna, pengaturan
+  slideshow.js     mode layar (#/e/<id>/layar) untuk proyektor/TV
+  qrcard.js        kartu QR siap cetak (PNG A6 / cetak)
+  moderation.js    daftar laporan foto (Panel dan Dashboard)
+  install.js       ajakan pasang aplikasi di layar utama
   storage.js       SATU-SATUNYA file yang berbeda antara P1 dan P2
 supabase/schema.sql  skema v1: tabel, fungsi, aturan akses, bucket
 supabase/v2.sql      perubahan v2 (peran, pengaturan, unduhan, sampul, log); aman diulang
@@ -59,7 +65,15 @@ tests/sql.test.mjs   tes database (PGlite): npm run test:sql
 5. Authentication -> Sign In / Providers -> **Email: matikan**. Aplikasi hanya memakai Google;
    peran dicocokkan dengan email terverifikasi, dan mematikan login email menutup celah pendaftaran palsu.
 
-### 1b. Hapus otomatis acara (disarankan)
+### 1a. Memperbarui database yang sudah terpasang
+
+Setiap kali `supabase/v2.sql` berubah (misalnya Fase 3), jalankan ulang seluruh isinya di SQL Editor
+**sebelum** merilis tampilan baru. File ini aman diulang dan tidak menghapus data.
+Fase 3 menambah jadwal acara, efek film per foto, favorit, laporan foto, kuota storage per pembuat,
+tren 30 hari, dan mode layar. Tampilan baru tetap bisa memotret dan membuka album di database lama,
+tetapi fitur Fase 3 baru berfungsi setelah `v2.sql` dijalankan.
+
+### 1b. Hapus otomatis acara (opsional, saat ini dimatikan)
 
 Acara dengan "Rencana hapus foto" yang sudah lewat dihapus tiap malam beserta semua fotonya.
 
@@ -148,6 +162,16 @@ Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin d
 - [ ] Dashboard pembuat acara: tombol Buat acara dan kartu status per acara. Superadmin: Perlu perhatian, Sedang berlangsung, tabel acara dengan pilih-banyak, Pengguna & peran, Log yang terbaca.
 - [ ] Panel: tutup acara -> gulungan yang belum habis tampil.
 - [ ] Panel: sembunyikan foto, blokir peserta, unduh ZIP, hapus acara.
+- [ ] Buat acara lewat wizard tiga langkah dengan jadwal dan sampul; layar terakhir menampilkan QR dan tombol kartu QR.
+- [ ] Kartu QR: unduh PNG dan Cetak dari Panel -> Undangan; QR di kartu terbaca kamera HP lain.
+- [ ] Jadwal: atur waktu selesai beberapa menit ke depan; setelah lewat, Kamera menampilkan "Acara ditutup" dan semua foto terbuka. Sakelar Terbuka di Panel membuka lagi dan menghapus waktu selesai.
+- [ ] Mode layar: Panel -> Mode layar di laptop yang tersambung proyektor; foto baru muncul dalam 20 detik dengan label "baru"; layar penuh dan jeda berfungsi; layar tidak meredup.
+- [ ] Album: saringan Semua / Foto saya / Favorit / per tamu (per tamu tidak muncul bila nama disembunyikan); ikon hati menyimpan favorit; nama efek film tampil di penampil.
+- [ ] Laporkan foto sebagai tamu -> muncul di Panel -> Album dan Dashboard -> Moderasi; tiga pelapor berbeda menyembunyikan foto otomatis.
+- [ ] Setelah film habis, Album menampilkan kartu "Simpan album ini": link album terbuka di perangkat lain setelah login dengan akun yang sama; tombol "Pasang di layar utama" (Android) atau petunjuknya (iPhone).
+- [ ] Kamera: suara rana saat memotret, bisa dimatikan lewat ikon speaker; angka sisa bergulir.
+- [ ] Duplikat acara dari Panel -> Pengaturan atau menu ⋯ di Dashboard: pengaturan, undangan, dan sampul ikut.
+- [ ] Superadmin: atur kuota storage pembuat acara; saat penuh, ia tidak bisa membuat acara baru. Pengaturan menampilkan ringkasan perubahan sebelum disimpan.
 
 ## Naik ke P2 (nanti)
 

@@ -6,9 +6,10 @@ import { queue } from "./queue.js";
 // Kode error yang berarti jepretan ini tidak akan pernah bisa dikirim
 const FINAL = ["FILM_HABIS", "ACARA_TUTUP", "BUKAN_PESERTA", "AKUN_DIBLOKIR"];
 
-export async function shoot(eventId, { photo, medium, thumb }) {
+// film: efek film yang dipakai (dicatat di server untuk penampil foto)
+export async function shoot(eventId, { photo, medium, thumb }, film = null) {
   const id = crypto.randomUUID(); // client_shot_id
-  await queue.put({ id, eventId, photo, medium, thumb, createdAt: Date.now() });
+  await queue.put({ id, eventId, photo, medium, thumb, film, createdAt: Date.now() });
   return send(id);
 }
 
@@ -18,7 +19,7 @@ export async function send(id) {
   if (!job) return null;
   let r;
   try {
-    const data = await rpc("reserve_shot", { p_event: job.eventId, p_client_shot: id });
+    const data = await reserve(job.eventId, id, job.film);
     r = data[0];
     if (!job.reserved) await queue.put({ ...job, reserved: true }); // jatah sudah terpotong
   } catch (e) {
@@ -32,6 +33,16 @@ export async function send(id) {
   await rpc("confirm_shot", { p_photo: r.o_photo_id });
   await queue.delete(id); // selesai, hapus dari HP
   return r.o_seq;
+}
+
+// Database yang belum diperbarui ke Fase 3 belum mengenal p_film: ulangi tanpa itu
+async function reserve(eventId, clientShot, film) {
+  try {
+    return await rpc("reserve_shot", { p_event: eventId, p_client_shot: clientShot, p_film: film || null });
+  } catch (e) {
+    if (e?.code !== "PGRST202") throw e;
+    return rpc("reserve_shot", { p_event: eventId, p_client_shot: clientShot });
+  }
 }
 
 let flushing = null;
