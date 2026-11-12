@@ -13,6 +13,8 @@ Supabase (login Google, database, penyimpanan foto) + Cloudflare Pages
 - Peran: superadmin (dashboard `#/admin`), pembuat acara, tamu. Rancangan lengkap: [docs/RANCANGAN.md](docs/RANCANGAN.md).
 - Jadwal acara (tutup otomatis saat selesai), kartu QR siap cetak, mode layar untuk proyektor,
   album dengan saringan dan favorit, laporan foto + moderasi, duplikat acara, kuota storage per pembuat acara.
+- Buku tamu (teks + rekaman suara), kolase untuk Instagram, album realtime, notifikasi "album terbuka",
+  tampilan tamu dalam bahasa Inggris, permintaan hapus foto/akun (UU PDP), ekspor CSV, dan foto di Cloudflare R2.
 
 ## Susunan
 
@@ -36,6 +38,14 @@ src/
   qrcard.js        kartu QR siap cetak (PNG A6 / cetak)
   moderation.js    daftar laporan foto (Panel dan Dashboard)
   install.js       ajakan pasang aplikasi di layar utama
+  guestbook.js     tab Ucapan (buku tamu teks + suara)
+  collage.js       kolase 2×2 / 3×3 / Story untuk dibagikan
+  realtime.js      kanal broadcast Supabase: album dimuat ulang saat ada foto baru
+  push.js          langganan notifikasi "album terbuka"
+  privacy.js       Data & privasi: permintaan hapus foto / akun
+  i18n.js, i18n-en.js  bahasa tampilan tamu (Indonesia / Inggris)
+worker/index.js      Worker situs: static assets + API foto R2 (/api/r2/*)
+supabase/functions/notify-album/  Edge Function pengirim notifikasi album
   storage.js       SATU-SATUNYA file yang berbeda antara P1 dan P2
 supabase/schema.sql  skema v1: tabel, fungsi, aturan akses, bucket
 supabase/v2.sql      perubahan v2 (peran, pengaturan, unduhan, sampul, log); aman diulang
@@ -72,6 +82,40 @@ Setiap kali `supabase/v2.sql` berubah (misalnya Fase 3), jalankan ulang seluruh 
 Fase 3 menambah jadwal acara, efek film per foto, favorit, laporan foto, kuota storage per pembuat,
 tren 30 hari, dan mode layar. Tampilan baru tetap bisa memotret dan membuka album di database lama,
 tetapi fitur Fase 3 baru berfungsi setelah `v2.sql` dijalankan.
+
+### 1c. Foto di Cloudflare R2 (Fase 4)
+
+Penting: buat bucket dan rahasia Worker **sebelum** push kode Fase 4. `wrangler.jsonc` sekarang memakai
+binding R2; tanpa bucket, deploy Cloudflare gagal dan situs tetap di versi lama.
+
+1. Cloudflare -> R2 -> aktifkan R2 (gratis 10 GB, perlu metode pembayaran tercatat) -> **Create bucket**
+   bernama `disposable-asiig-photos`. (Atau: `npx wrangler r2 bucket create disposable-asiig-photos`.)
+2. Workers & Pages -> `disposable-asiig` -> Settings -> **Variables and Secrets**, tambah sebagai Secret:
+   - `SUPABASE_URL` (sama dengan `VITE_SUPABASE_URL`)
+   - `SUPABASE_ANON_KEY` (sama dengan `VITE_SUPABASE_ANON_KEY`)
+   - `SUPABASE_SERVICE_KEY` (Supabase -> Project Settings -> API Keys -> secret / service_role)
+   - `SIGN_SECRET` (teks acak panjang, misalnya hasil `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
+3. Jalankan ulang `supabase/v2.sql`, lalu push / deploy kode.
+4. Dashboard -> Pengaturan -> Penyimpanan foto: tunggu tanda **Worker R2 siap**, pilih **Cloudflare R2**, Simpan.
+   Foto baru langsung masuk R2. Foto lama tetap terbaca (Worker menyalinnya ke R2 saat dibuka);
+   tombol **Pindahkan foto lama ke R2** memindahkan semuanya sekaligus dan menghapus salinan di Supabase.
+5. Cek: `https://disposable-asiig.my.id/api/r2/health` harus `{"ok":true,...}`.
+
+Sampul dan rekaman suara tetap di Supabase Storage. Jika kembali memilih Supabase Storage setelah foto
+dipindah, foto yang sudah di R2 tidak terbaca lewat Supabase; pindahkan dulu atau tetap pakai R2.
+
+### 1d. Notifikasi "album terbuka" (Fase 4)
+
+1. Di laptop: `npx web-push generate-vapid-keys`, catat Public Key dan Private Key.
+2. Supabase -> Edge Functions -> Secrets: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
+   `VAPID_SUBJECT` (misalnya `mailto:email-anda@gmail.com`).
+3. Edge Functions -> Deploy a new function -> nama `notify-album`, tempel isi
+   `supabase/functions/notify-album/index.ts` -> Deploy (Verify JWT biarkan aktif).
+4. Dashboard -> Pengaturan -> Notifikasi album -> tempel Public Key -> Simpan.
+
+Tamu mengetuk "Kabari saya" di Album. Kabar terkirim saat acara ditutup (sakelar atau jadwal selesai)
+atau waktu cuci film lewat. Fungsi dipicu aplikasi sendiri (saat acara ditutup dan sesekali saat aplikasi
+dibuka), jadi tidak perlu jadwal pg_cron. iPhone hanya menerima notifikasi jika aplikasi dipasang di layar utama.
 
 ### 1b. Hapus otomatis acara (opsional, saat ini dimatikan)
 
@@ -172,6 +216,14 @@ Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin d
 - [ ] Kamera: suara rana saat memotret, bisa dimatikan lewat ikon speaker; angka sisa bergulir.
 - [ ] Duplikat acara dari Panel -> Pengaturan atau menu ⋯ di Dashboard: pengaturan, undangan, dan sampul ikut.
 - [ ] Superadmin: atur kuota storage pembuat acara; saat penuh, ia tidak bisa membuat acara baru. Pengaturan menampilkan ringkasan perubahan sebelum disimpan.
+- [ ] Ucapan: kirim teks dan rekaman suara (Android Chrome dan iPhone Safari), putar ulang di HP lain; maks. 3 ucapan; pengelola bisa sembunyikan/hapus.
+- [ ] Kolase dari Album: 2×2, 3×3, Story; Bagikan membuka lembar bagikan (Instagram) di HP.
+- [ ] Realtime: dua HP di album yang sama; foto baru dari HP lain muncul dalam beberapa detik tanpa muat ulang.
+- [ ] Notifikasi: "Kabari saya" di Android, lalu tutup acara di Panel -> notifikasi masuk dan membuka album saat diketuk.
+- [ ] Bahasa: HP berbahasa Inggris melihat layar tamu dalam bahasa Inggris; tombol ID/EN di layar login dan beranda.
+- [ ] Data & privasi: kirim permintaan dari beranda; superadmin memprosesnya di Dashboard -> Privasi; status terlihat oleh pengguna.
+- [ ] CSV: Panel -> Peserta -> Laporan; Dashboard -> Acara -> CSV; Dashboard -> Log -> CSV; terbuka rapi di Excel/Sheets.
+- [ ] R2: setelah pindah, foto baru dan lama tampil normal; `/api/r2/health` ok; Ringkasan menampilkan ukuran R2.
 
 ## Naik ke P2 (nanti)
 

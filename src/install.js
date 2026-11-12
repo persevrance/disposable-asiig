@@ -2,6 +2,7 @@
 // Android/Chrome: memakai prompt bawaan (beforeinstallprompt).
 // iPhone/iPad: Safari tidak punya prompt, jadi tampilkan langkahnya.
 import { modal } from "./ui.js";
+import { t } from "./i18n.js";
 
 let deferred = null;
 window.addEventListener("beforeinstallprompt", (e) => {
@@ -28,13 +29,13 @@ export async function promptInstall() {
   }
   const { box, close } = modal(`
     <div class="dialog">
-      <h3>Pasang di layar utama</h3>
+      <h3>${t("Pasang di layar utama")}</h3>
       <ol class="steps">
-        <li>Ketuk tombol <b>Bagikan</b> di Safari (kotak dengan panah ke atas).</li>
-        <li>Gulir lalu pilih <b>Tambah ke Layar Utama</b>.</li>
-        <li>Ketuk <b>Tambah</b>. Ikon Disposable Asiig muncul di layar utama.</li>
+        <li>${t("Ketuk tombol Bagikan di Safari (kotak dengan panah ke atas).")}</li>
+        <li>${t("Gulir lalu pilih Tambah ke Layar Utama.")}</li>
+        <li>${t("Ketuk Tambah. Ikon Disposable Asiig muncul di layar utama.")}</li>
       </ol>
-      <div class="dialog-actions"><button class="btn primary" data-act="ok">Mengerti</button></div>
+      <div class="dialog-actions"><button class="btn primary" data-act="ok">${t("Mengerti")}</button></div>
     </div>`);
   box.querySelector('[data-act="ok"]').onclick = close;
   return false;

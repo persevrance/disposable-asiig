@@ -349,6 +349,97 @@ const tr = await as("admin", `select * from admin_trends(30)`);
 ok(tr.length === 30 && tr.reduce((a, r) => a + r.photos, 0) >= 6 && Number(tr[29].bytes) > 0, "admin_trends");
 await expectErr("host", `select * from admin_trends(30)`, [], "BUKAN_SUPERADMIN");
 
+// ---------- Fase 4 ----------
+// R2: file yang tercatat di r2_objects dianggap ada (confirm_shot) dan ikut dihitung ukurannya
+await db.exec(`update events set max_shots = 6`);
+const r2shot = (await as("d", `select * from reserve_shot($1, gen_random_uuid())`, [ev]))[0];
+await expectErr("d", `select confirm_shot($1)`, [r2shot.o_photo_id], "FILE_BELUM_ADA");
+await db.query(`insert into r2_objects (name, size) select unnest($1::text[]), 5000`, [[r2shot.o_file_path, r2shot.o_medium_path, r2shot.o_thumb_path]]);
+await as("d", `select confirm_shot($1)`, [r2shot.o_photo_id]);
+ok((await db.query(`select status from photos where id = $1`, [r2shot.o_photo_id])).rows[0].status === "ready", "confirm_shot accepts R2 files");
+const ov4 = (await as("admin", `select admin_overview() o`))[0].o;
+ok(Number(ov4.r2_bytes) === 15000 && ov4.r2_files === 3 && ov4.storage_backend === "supabase", `overview r2 ${ov4.r2_bytes}`);
+ok(Number((await as("admin", `select bytes from admin_events('nikah')`))[0].bytes) >= 15000, "admin_events counts R2 bytes");
+await expectErr("c", `select * from stored_objects`, [], "permission denied");
+await expectErr("c", `select * from r2_objects`, [], "permission denied");
+const viewable = (await as("host", `select r2_viewable($1) p`, [[r2shot.o_thumb_path, "lain/x.jpg"]])).map((r) => r.p);
+ok(viewable.length === 1 && viewable[0] === r2shot.o_thumb_path, "r2_viewable filters paths");
+ok((await as("c", `select r2_viewable($1) p`, [[r2shot.o_thumb_path]])).length === 0, "r2_viewable hides unrevealed photo");
+ok((await as("c", `select r2_deletable($1) p`, [[r2shot.o_file_path]])).length === 0, "guest cannot delete");
+ok((await as("host", `select r2_deletable($1) p`, [[r2shot.o_file_path]])).length === 1, "owner can delete");
+await as("admin", `select admin_set_settings('{"storage_backend": "r2", "vapid_public_key": "BKxyz"}')`);
+const s4 = (await as("c", `select get_settings() s`))[0].s;
+ok(s4.storage_backend === "r2" && s4.vapid_public_key === "BKxyz", "settings: backend + vapid key");
+await expectErr("admin", `select admin_set_settings('{"storage_backend": "s3"}')`, [], "check constraint");
+await as("admin", `select admin_set_settings('{"storage_backend": "supabase"}')`);
+
+// Notifikasi album
+await expectErr("c", `select save_push('http://x', 'k', 'a')`, [], "LANGGANAN_TIDAK_VALID");
+await as("c", `select save_push('https://push.example/c1', 'k', 'a', 'UA')`);
+await as("c", `select save_push('https://push.example/c1', 'k2', 'a2')`); // perbarui, bukan ganda
+ok((await db.query(`select count(*)::int n from push_subscriptions where user_id = $1`, [U.c[0]])).rows[0].n === 1, "save_push upserts");
+ok((await as("c", `select watch_album($1, true) v`, [ev]))[0].v === true && (await as("c", `select my_album_watch($1) v`, [ev]))[0].v, "watch_album");
+await expectErr("evil", `select watch_album($1, true)`, [ev], "BUKAN_PESERTA");
+await expectErr("c", `select * from due_album_notifications()`, [], "permission denied");
+ok((await db.query(`select count(*)::int n from due_album_notifications()`)).rows[0].n === 0, "not due while event open");
+await as("host", `select set_event($1, '{"is_open": false}')`, [ev]);
+const due = (await db.query(`select * from due_album_notifications()`)).rows;
+ok(due.length === 1 && due[0].endpoint === "https://push.example/c1" && due[0].event_name === "Nikahan", "due after event closed");
+await db.query(`select mark_album_notified($1)`, [[ev]]);
+ok((await db.query(`select count(*)::int n from due_album_notifications()`)).rows[0].n === 0, "notified only once");
+await db.query(`select drop_push($1)`, [["https://push.example/c1"]]);
+await as("host", `select set_event($1, '{"is_open": true}')`, [ev]);
+
+// Buku tamu
+await expectErr("evil", `select * from add_message($1, 'hai')`, [ev], "BUKAN_PESERTA");
+await expectErr("c", `select * from add_message($1, '   ')`, [ev], "UCAPAN_KOSONG");
+await expectErr("c", `select * from add_message($1, null, 'exe', 5)`, [ev], "FORMAT_SUARA");
+const m1 = (await as("c", `select * from add_message($1, 'Selamat ya!')`, [ev]))[0];
+ok(m1.o_audio_path === null, "text message needs no upload");
+const m2 = (await as("c", `select * from add_message($1, null, 'webm', 12)`, [ev]))[0];
+ok(m2.o_audio_path.startsWith(ev + "/") && m2.o_audio_path.endsWith(".webm"), "voice path in event folder");
+ok((await as("d", `select count(*)::int n from list_messages($1)`, [ev]))[0].n === 1, "pending voice not listed");
+await expectErr("c", `select confirm_message($1)`, [m2.o_id], "FILE_BELUM_ADA");
+await expectErr("d", `insert into storage.objects (bucket_id, name) values ('voices', $1)`, [m2.o_audio_path], "row-level security");
+await as("c", `insert into storage.objects (bucket_id, name) values ('voices', $1)`, [m2.o_audio_path]);
+await as("c", `select confirm_message($1)`, [m2.o_id]);
+const msgs = await as("d", `select * from list_messages($1)`, [ev]);
+ok(msgs.length === 2 && msgs.some((m) => m.audio_path === m2.o_audio_path && m.audio_secs === 12) && msgs[0].name === "Cici", "messages listed with name");
+ok((await as("d", `select count(*)::int n from storage.objects where bucket_id = 'voices' and name = $1`, [m2.o_audio_path]))[0].n === 1, "member can hear voice");
+ok((await as("evil", `select count(*)::int n from storage.objects where bucket_id = 'voices' and name = $1`, [m2.o_audio_path]))[0].n === 0, "outsider cannot hear voice");
+await as("c", `select * from add_message($1, 'tiga')`, [ev]);
+await expectErr("c", `select * from add_message($1, 'empat')`, [ev], "UCAPAN_PENUH");
+await expectErr("d", `select hide_message($1, true)`, [m1.o_id], "BUKAN_PEMILIK");
+await as("host", `select hide_message($1, true)`, [m1.o_id]);
+ok((await as("d", `select count(*)::int n from list_messages($1)`, [ev]))[0].n === 2, "hidden message not shown to guests");
+ok((await as("host", `select count(*)::int n from list_messages($1)`, [ev]))[0].n === 3, "manager sees hidden message");
+await expectErr("d", `select delete_message($1)`, [m2.o_id], "BUKAN_PEMILIK");
+ok((await as("c", `select delete_message($1) p`, [m2.o_id]))[0].p === m2.o_audio_path, "delete own message returns audio path");
+ok((await as("c", `select can_delete_voice($1) v`, [m2.o_audio_path]))[0].v === true, "author may delete orphan voice file");
+ok((await as("host", `select count(*)::int n from owner_voice_paths($1)`, [ev]))[0].n === 0, "owner_voice_paths");
+
+// Permintaan hapus data
+await expectErr("evil", `select request_data_deletion('photos', $1)`, [ev], "BUKAN_PESERTA");
+const rq = (await as("d", `select request_data_deletion('photos', $1, 'hapus foto saya') id`, [ev]))[0].id;
+await expectErr("d", `select request_data_deletion('photos', $1)`, [ev], "PERMINTAAN_SUDAH_ADA");
+ok((await as("d", `select * from my_data_requests()`)).length === 1, "my_data_requests");
+await expectErr("host", `select * from admin_data_requests()`, [], "BUKAN_SUPERADMIN");
+const reqs = await as("admin", `select * from admin_data_requests()`);
+ok(reqs.length === 1 && reqs[0].photos >= 1 && reqs[0].user_name === "Dodi", "admin_data_requests");
+const dPaths = await as("admin", `select * from admin_request_paths($1)`, [rq]);
+ok(dPaths.length >= 3 && dPaths.every((r) => r.bucket === "photos"), `admin_request_paths (${dPaths.length})`);
+await as("admin", `select admin_process_request($1, 'done', 'Sudah dihapus')`, [rq]);
+ok((await db.query(`select count(*)::int n from photos where user_id = $1 and event_id = $2`, [U.d[0], ev])).rows[0].n === 0, "photos request deletes user's photos");
+await expectErr("admin", `select admin_process_request($1, 'done')`, [rq], "PERMINTAAN_SELESAI");
+const rqHost = (await as("host", `select request_data_deletion('account') id`))[0].id;
+await expectErr("admin", `select admin_process_request($1, 'done')`, [rqHost], "MASIH_PUNYA_ACARA");
+await as("admin", `select admin_process_request($1, 'reject', 'Hapus acara Anda dulu')`, [rqHost]);
+const rqC = (await as("c", `select request_data_deletion('account') id`))[0].id;
+await as("admin", `select admin_process_request($1, 'done')`, [rqC]);
+ok((await db.query(`select count(*)::int n from auth.users where id = $1`, [U.c[0]])).rows[0].n === 0, "account request deletes auth user");
+ok((await db.query(`select count(*)::int n from photos where user_id = $1`, [U.c[0]])).rows[0].n === 0, "account deletion cascades photos");
+ok((await as("admin", `select count(*)::int n from admin_audit(50, 0, 'permintaan_data')`))[0].n === 3, "data requests logged");
+
 await as("host", `select delete_event($1)`, [ev]);
 ok((await db.query(`select count(*)::int n from photos`)).rows[0].n === 0, "delete_event cascades");
 

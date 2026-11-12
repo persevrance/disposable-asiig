@@ -14,8 +14,13 @@ drop policy if exists "pemilik hapus foto acara" on storage.objects;
 drop policy if exists "sampul: baca pengelola"   on storage.objects;
 drop policy if exists "sampul: unggah"           on storage.objects;
 drop policy if exists "sampul: hapus"            on storage.objects;
+drop policy if exists "suara: unggah"            on storage.objects;
+drop policy if exists "suara: dengar"            on storage.objects;
+drop policy if exists "suara: hapus"             on storage.objects;
 
-drop table if exists photo_reports, favorites, client_errors, downloads, audit_log, user_roles, app_settings,
+drop view if exists stored_objects;
+drop table if exists data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
+  photo_reports, favorites, client_errors, downloads, audit_log, user_roles, app_settings,
   photos, event_members, event_invites, events, event_creators, profiles cascade;
 
 drop function if exists
@@ -49,5 +54,14 @@ drop function if exists
   get_album(uuid, timestamptz, int, text, uuid), album_owners(uuid), toggle_favorite(uuid),
   duplicate_event(uuid), report_photo(uuid, text, text), list_reports(uuid),
   resolve_reports(uuid, text), admin_trends(int), slideshow_photos(uuid, int),
-  admin_set_storage_limit(text, int)
+  admin_set_storage_limit(text, int),
+  -- fase 4
+  r2_viewable(text[]), r2_deletable(text[]), save_push(text, text, text, text),
+  watch_album(uuid, boolean), my_album_watch(uuid), due_album_notifications(),
+  mark_album_notified(uuid[]), drop_push(text[]), r2_migration_batch(int),
+  add_message(uuid, text, text, int), confirm_message(uuid), list_messages(uuid),
+  hide_message(uuid, boolean), delete_message(uuid), owner_voice_paths(uuid),
+  can_upload_voice(text), can_hear_voice(text), can_delete_voice(text),
+  request_data_deletion(text, uuid, text), my_data_requests(), admin_data_requests(text),
+  admin_request_paths(bigint), admin_process_request(bigint, text, text)
 cascade;

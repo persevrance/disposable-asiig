@@ -4,12 +4,14 @@ import QRCode from "qrcode";
 import { rpc, friendly } from "./supabase.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData, resizeImage } from "./owner.js";
-import { uploadCover } from "./storage.js";
+import { uploadCover, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
+import { pingAlbum } from "./realtime.js";
+import { kickNotify, setVapidKey } from "./push.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
-  fmtRange, fromLocalInput,
+  fmtRange, fromLocalInput, downloadCsv,
 } from "./ui.js";
 
 const TABS = [
@@ -17,6 +19,7 @@ const TABS = [
   ["acara", "Acara"],
   ["pengguna", "Pengguna & peran"],
   ["moderasi", "Moderasi"],
+  ["privasi", "Privasi"],
   ["pengaturan", "Pengaturan"],
   ["log", "Log"],
 ];
@@ -49,7 +52,7 @@ export async function renderAdmin(app, tab, { setView, me }) {
     </main>`);
   setView(view);
   const body = view.querySelector(".admin-body");
-  const render = { ringkasan, acara, pengguna, moderasi, pengaturan, log }[tab];
+  const render = { ringkasan, acara, pengguna, moderasi, privasi, pengaturan, log }[tab];
   try { await render(body, me, role); }
   catch (e) { body.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); }
 }
@@ -352,6 +355,9 @@ async function ringkasan(body) {
   if (o.reports_open > 0) items.push([`${o.reports_open} foto dilaporkan tamu`,
     "Tinjau dan sembunyikan bila perlu. Foto otomatis disembunyikan setelah tiga laporan.",
     `<a class="btn small" href="#/admin/moderasi">Moderasi</a>`]);
+  if (o.data_requests_open > 0) items.push([`${o.data_requests_open} permintaan hapus data`,
+    "Permintaan dari pengguna (UU PDP). Proses atau tolak dengan alasan.",
+    `<a class="btn small" href="#/admin/privasi">Privasi</a>`]);
   if (overdue.length) items.push([`${overdue.length} acara lewat tanggal hapus`,
     overdue.slice(0, 3).map((e) => e.name).join(", ") + (overdue.length > 3 ? ", …" : ""),
     `<button class="btn small danger" data-act="purge">Hapus sekarang</button>`]);
@@ -420,7 +426,8 @@ async function ringkasan(body) {
       <div class="card">
         <h3>Storage</h3>
         <div class="meter" role="img" aria-label="Storage terpakai ${usedPct.toFixed(0)} persen"><span style="width:${usedPct.toFixed(1)}%" class="${usedPct > 85 ? "hot" : ""}"></span></div>
-        <p class="hint">${fmtBytes(used)} dari ${fmtBytes(quota)} (${usedPct.toFixed(1)}%) · foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}</p>
+        <p class="hint">Supabase: ${fmtBytes(used)} dari ${fmtBytes(quota)} (${usedPct.toFixed(1)}%) · foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}</p>
+        ${o.r2_files ? `<p class="hint">Cloudflare R2: ${fmtBytes(o.r2_bytes)} · ${Number(o.r2_files).toLocaleString("id-ID")} file${o.storage_backend === "r2" ? " · foto baru disimpan di R2" : ""}</p>` : ""}
         ${left !== null ? `<p class="hint">Rata-rata ${fmtBytes(avg)} per foto (3 ukuran). Sisa cukup untuk sekitar <b>${left.toLocaleString("id-ID")}</b> foto lagi.</p>` : ""}
       </div>
 
@@ -535,6 +542,91 @@ async function moderasi(body) {
   await renderReports(view.querySelector(".report-list"), rows, { showEvent: true });
 }
 
+// ---------- Privasi: permintaan hapus data (UU PDP) ----------
+const KIND = { photos: "Hapus foto di satu acara", account: "Hapus akun" };
+async function privasi(body) {
+  const st = { status: "open" };
+  const view = el(`
+    <div>
+      <div class="card">
+        <h3 class="with-icon">${ICON.shield}<span>Permintaan hapus data</span></h3>
+        <p class="hint">Dikirim pengguna dari beranda (Data & privasi). Proses menghapus file dan data terkait secara permanen; tolak bila perlu dengan alasan yang terlihat oleh pengguna.</p>
+        <div class="filter-slot"></div>
+        <div class="req-list" style="margin-top:.75rem"><p class="hint">Memuat…</p></div>
+      </div>
+    </div>`);
+  body.replaceChildren(view);
+  const list = view.querySelector(".req-list");
+  view.querySelector(".filter-slot").append(chips([["open", "Menunggu"], ["done", "Selesai"], ["rejected", "Ditolak"], ["all", "Semua"]],
+    st.status, (v) => { st.status = v; load(); }, "Saring permintaan"));
+
+  async function process(r) {
+    const account = r.kind === "account";
+    if (account && r.owned_events) {
+      await confirmDialog({ title: "Akun ini masih memiliki acara", text: `${r.user_name || r.email} memiliki ${r.owned_events} acara. Hapus acaranya dulu dari tab Acara, atau tolak permintaan dengan alasan.`, ok: "Mengerti", cancel: "Tutup" });
+      return;
+    }
+    const ok = await typeToConfirm({
+      title: account ? `Hapus akun ${r.email}?` : `Hapus foto ${r.user_name || r.email}?`,
+      text: account ? `Akun, ${r.photos} foto, unduhan, favorit, dan ucapannya dihapus permanen.`
+                    : `${r.photos} foto dan ucapannya di acara “${r.event_name}” dihapus permanen.`,
+      expect: "HAPUS", ok: "Hapus permanen",
+    });
+    if (!ok) return;
+    try {
+      const paths = await rpc("admin_request_paths", { p_request: r.id });
+      const photos = paths.filter((x) => x.bucket === "photos").map((x) => x.path);
+      const voices = paths.filter((x) => x.bucket === "voices").map((x) => x.path);
+      if (photos.length) await removeFiles(photos);
+      if (voices.length) await removeVoices(voices).catch(() => {});
+      await rpc("admin_process_request", { p_request: r.id, p_action: "done", p_reply: account ? "Akun dan data Anda sudah dihapus." : "Foto Anda sudah dihapus." });
+      toast("Permintaan selesai diproses.");
+      load();
+    } catch (e) { toast(friendly(e)); }
+  }
+  async function reject(r) {
+    const { box, close } = modal(`
+      <form class="dialog">
+        <h3>Tolak permintaan</h3>
+        <p>${esc(r.email || "")} · ${esc(KIND[r.kind])}</p>
+        <label>Alasan (terlihat oleh pengguna) <textarea name="reply" rows="3" maxlength="300" required></textarea></label>
+        <div class="dialog-actions"><button type="button" class="btn ghost" data-act="no">Batal</button><button class="btn primary">Tolak</button></div>
+      </form>`);
+    box.querySelector('[data-act="no"]').onclick = close;
+    box.querySelector("form").onsubmit = async (e) => {
+      e.preventDefault();
+      try { await rpc("admin_process_request", { p_request: r.id, p_action: "reject", p_reply: e.target.elements.reply.value }); close(); load(); }
+      catch (err) { toast(friendly(err)); }
+    };
+  }
+  async function load() {
+    let rows;
+    try { rows = await rpc("admin_data_requests", { p_status: st.status }); }
+    catch (e) { list.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); return; }
+    if (!rows.length) { list.replaceChildren(el(`<p class="hint">Tidak ada permintaan.</p>`)); return; }
+    list.replaceChildren(...rows.map((r) => {
+      const n = el(`
+        <article class="report-item">
+          <div class="report-main">
+            <b>${esc(KIND[r.kind])}${r.event_name ? ` · ${esc(r.event_name)}` : ""}</b>
+            <small>${esc(r.user_name || "akun terhapus")} · ${esc(r.email || "")} · ${esc(fmtDate(r.created_at))}</small>
+            <small>${r.photos} foto${r.kind === "account" ? ` · memiliki ${r.owned_events} acara` : ""}</small>
+            ${r.note ? `<p class="report-notes">“${esc(r.note)}”</p>` : ""}
+            ${r.status !== "open" ? `<small><span class="tag ${r.status === "done" ? "ok" : "bad"}">${r.status === "done" ? "Selesai" : "Ditolak"}</span> ${esc(fmtDate(r.done_at))}${r.reply ? ` · ${esc(r.reply)}` : ""}</small>` : `
+            <div class="row tight wrap">
+              <button class="btn small danger" data-a="done">Proses (hapus permanen)</button>
+              <button class="btn small ghost" data-a="reject">Tolak…</button>
+            </div>`}
+          </div>
+        </article>`);
+      n.querySelector('[data-a="done"]')?.addEventListener("click", () => process(r));
+      n.querySelector('[data-a="reject"]')?.addEventListener("click", () => reject(r));
+      return n;
+    }));
+  }
+  await load();
+}
+
 // ---------- Acara ----------
 async function acara(body, me, role) {
   const admin = role === "superadmin";
@@ -555,6 +647,7 @@ async function acara(body, me, role) {
           ${admin ? `<option value="bytes">Ukuran terbesar</option>` : ""}
           <option value="name">Nama (A–Z)</option>
         </select>
+        <button class="btn small" data-act="csv">${ICON.download} CSV</button>
         ${canCreate ? `<button class="btn small primary" data-act="create">${ICON.plus} Buat acara</button>` : ""}
       </div>
       <div class="filter-slot"></div>
@@ -567,6 +660,26 @@ async function acara(body, me, role) {
   const sortSel = view.querySelector("select");
   sortSel.value = st.sort;
   view.querySelector('[data-act="create"]')?.addEventListener("click", () => createEventDialog());
+  // Ekspor semua acara sesuai saringan sekarang (maks. 2.000 baris)
+  view.querySelector('[data-act="csv"]').onclick = async (ev) => {
+    const b = ev.currentTarget; b.disabled = true;
+    try {
+      const all = [];
+      for (let off = 0; off < 2000; off += 200) {
+        const part = await rpc("admin_events", { p_search: st.q || null, p_status: st.status, p_sort: st.sort, p_limit: 200, p_offset: off });
+        all.push(...part);
+        if (part.length < 200) break;
+      }
+      downloadCsv(`acara-${new Date().toISOString().slice(0, 10)}`, [
+        ["name", "Acara"], ["owner_name", "Pemilik"], ["owner_email", "Email pemilik"], ["join_code", "Kode"],
+        [(e) => (e.is_open ? "terbuka" : "ditutup"), "Status"], [(e) => fmtDate(e.starts_at), "Mulai"], [(e) => fmtDate(e.ends_at), "Selesai"],
+        ["members", "Peserta"], ["max_members", "Maks. peserta"], ["shooters", "Memotret"], ["rolls_done", "Film habis"],
+        ["downloaders", "Mengunduh"], ["photos", "Foto"], ["pending", "Tertahan"], [(e) => Math.round(Number(e.bytes) / 1048576), "Ukuran (MB)"],
+        ["reports", "Laporan"], [(e) => fmtDate(e.created_at), "Dibuat"], [(e) => fmtDate(e.last_photo_at), "Foto terakhir"],
+      ], all);
+    } catch (e) { toast(friendly(e)); }
+    finally { b.disabled = false; }
+  };
   view.querySelector(".filter-slot").append(chips(
     [["all", "Semua"], ["open", "Terbuka"], ["closed", "Ditutup"], ["reported", "Ada laporan"], ...(admin ? [["overdue", "Lewat tanggal hapus"]] : [])],
     st.status, (v) => { st.status = v; st.offset = 0; load(); }, "Saring status"));
@@ -682,10 +795,14 @@ async function acara(body, me, role) {
   async function setOpen(list, open) {
     let n = 0;
     for (const e of list) {
-      try { await rpc("set_event", { p_event: e.event_id, p_patch: { is_open: open } }); n++; }
+      try {
+        await rpc("set_event", { p_event: e.event_id, p_patch: { is_open: open } }); n++;
+        if (!open) pingAlbum(e.event_id, "closed");
+      }
       catch (err) { toast(friendly(err)); }
     }
     toast(`${n} acara ${open ? "dibuka" : "ditutup"}.`);
+    if (!open) kickNotify(true);
     load();
   }
   async function removeEvents(list) {
@@ -982,6 +1099,25 @@ async function pengaturan(body) {
           <select name="default_film">${Object.entries(FILMS).map(([id, f]) => `<option value="${id}" ${id === s.default_film ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select></label>
       </fieldset>
 
+      <fieldset><legend>Penyimpanan foto</legend>
+        <label>Lokasi foto baru
+          <select name="storage_backend">
+            <option value="supabase" ${s.storage_backend !== "r2" ? "selected" : ""}>Supabase Storage</option>
+            <option value="r2" ${s.storage_backend === "r2" ? "selected" : ""}>Cloudflare R2</option>
+          </select></label>
+        <p class="hint r2-status">Memeriksa Worker R2…</p>
+        <div class="row tight wrap">
+          <button type="button" class="btn small" data-act="migrate" disabled>Pindahkan foto lama ke R2</button>
+        </div>
+        <p class="hint migrate-progress" hidden></p>
+      </fieldset>
+
+      <fieldset><legend>Notifikasi album</legend>
+        <label>Kunci publik VAPID
+          <input name="vapid_public_key" maxlength="200" placeholder="Kosong = notifikasi mati" value="${esc(s.vapid_public_key || "")}" autocomplete="off" spellcheck="false" /></label>
+        <p class="hint">Dari <code>npx web-push generate-vapid-keys</code>. Kunci privat disimpan di Secrets Edge Function <code>notify-album</code>, bukan di sini.</p>
+      </fieldset>
+
       <fieldset><legend>Kamera</legend>
         <label class="check"><input type="checkbox" name="flash_enabled" ${s.flash_enabled ? "checked" : ""}/> Tampilkan tombol flash</label>
         <label class="check"><input type="checkbox" name="mirror_preview" ${s.mirror_preview ? "checked" : ""}/> Cerminkan jendela bidik kamera depan (seperti cermin)</label>
@@ -1011,7 +1147,36 @@ async function pengaturan(body) {
     flash_enabled: f.flash_enabled.checked,
     mirror_preview: f.mirror_preview.checked,
     mirror_photo: f.mirror_photo.checked,
+    storage_backend: f.storage_backend.value,
+    vapid_public_key: f.vapid_public_key.value.trim() || null,
   });
+  // R2: status Worker dan pemindahan foto lama
+  const statusEl = view.querySelector(".r2-status");
+  const migrateBtn = view.querySelector('[data-act="migrate"]');
+  let r2ok = false;
+  r2Health().then((h) => {
+    r2ok = Boolean(h.ok);
+    statusEl.innerHTML = h.ok
+      ? `<span class="tag ok">Worker R2 siap</span> Foto lama tetap terbaca dan disalin ke R2 saat dibuka; tombol di bawah memindahkan semuanya sekaligus.`
+      : `<span class="tag bad">Worker R2 belum siap</span> ${h.r2 === false ? "Bucket R2 belum terpasang di Worker. " : ""}${h.service === false || h.sign === false || h.supabase === false ? "Rahasia Worker belum lengkap (SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_KEY, SIGN_SECRET). " : ""}Lihat README bagian R2.`;
+    migrateBtn.disabled = !h.ok;
+    if (!h.ok) [...f.storage_backend.options].find((o) => o.value === "r2").disabled = s.storage_backend !== "r2";
+  });
+  migrateBtn.onclick = async () => {
+    const prog = view.querySelector(".migrate-progress");
+    migrateBtn.disabled = true; prog.hidden = false;
+    let total = 0;
+    try {
+      for (;;) {
+        const r = await migrateToR2(20);
+        total += r.moved;
+        prog.textContent = `Dipindahkan ${total} file, sisa ${r.remaining}…`;
+        if (!r.remaining || !r.moved) break;
+      }
+      prog.textContent = `Selesai: ${total} file dipindahkan ke R2.`;
+    } catch (e) { prog.textContent = `Berhenti: ${friendly(e)}. Ketuk lagi untuk melanjutkan.`; }
+    migrateBtn.disabled = false;
+  };
   // Isi formulir dengan nilai bawaan (belum disimpan sampai tombol Simpan)
   view.querySelector('[data-act="defaults"]').onclick = () => {
     for (const [k, v] of Object.entries(SETTING_DEFAULTS)) {
@@ -1026,10 +1191,13 @@ async function pengaturan(body) {
     const next = read();
     const changed = Object.keys(next).filter((k) => (s[k] ?? null) !== next[k]);
     if (!changed.length) { toast("Tidak ada perubahan."); return; }
+    if (next.storage_backend === "r2" && s.storage_backend !== "r2" && !r2ok) { toast("Worker R2 belum siap. Lengkapi pemasangan dulu (README bagian R2)."); return; }
     if (!(await changesDialog(changed.map((k) => [SETTING_LABELS[k] || k, settingText(k, s[k]), settingText(k, next[k])])))) return;
     try {
       await rpc("admin_set_settings", { p_patch: Object.fromEntries(changed.map((k) => [k, next[k]])) });
       Object.assign(s, next);
+      setStorageBackend(s.storage_backend);
+      setVapidKey(s.vapid_public_key);
       toast("Pengaturan tersimpan.");
     } catch (err) { toast(friendly(err)); }
   };
@@ -1041,6 +1209,7 @@ const SETTING_DEFAULTS = {
   creator_event_limit: null, creator_storage_mb: null,
   photo_max_side: 2560, jpeg_quality: 88, default_film: "senja",
   flash_enabled: true, mirror_preview: true, mirror_photo: false,
+  storage_backend: "supabase", vapid_public_key: null,
 };
 const SETTING_LABELS = {
   max_shots_limit: "Maks. jepretan per peserta", max_members_limit: "Maks. peserta per acara",
@@ -1048,8 +1217,11 @@ const SETTING_LABELS = {
   creator_storage_mb: "Kuota storage pembuat baru (MB)", photo_max_side: "Resolusi foto",
   jpeg_quality: "Kualitas JPEG", default_film: "Efek film bawaan", flash_enabled: "Tombol flash",
   mirror_preview: "Cermin jendela bidik", mirror_photo: "Cermin hasil foto",
+  storage_backend: "Lokasi foto baru", vapid_public_key: "Kunci VAPID",
 };
 function settingText(k, v) {
+  if (k === "storage_backend") return v === "r2" ? "Cloudflare R2" : "Supabase Storage";
+  if (k === "vapid_public_key") return v ? `${String(v).slice(0, 10)}…` : "kosong (notifikasi mati)";
   if (v === null || v === undefined || v === "") return "tanpa batas";
   if (typeof v === "boolean") return v ? "nyala" : "mati";
   if (k === "default_film") return filmName(v);
@@ -1085,6 +1257,7 @@ const ACTIONS = {
   ubah_peran: "Mengubah peran", ubah_batas_acara: "Mengubah batas acara",
   ubah_pengaturan: "Mengubah pengaturan global", blokir_akun: "Memblokir akun", pulihkan_akun: "Memulihkan akun",
   ubah_batas_storage: "Mengubah kuota storage", moderasi: "Menindak laporan foto",
+  permintaan_data: "Memproses permintaan data",
 };
 const MODERATION = { hide: "menyembunyikan foto yang dilaporkan", block: "menyembunyikan foto dan memblokir pemotret", dismiss: "mengabaikan laporan foto" };
 const FIELDS = {
@@ -1128,6 +1301,7 @@ function describe(r) {
     case "ubah_pengaturan": return `mengubah pengaturan global: ${patch()}`;
     case "blokir_akun": return `memblokir akun ${t}`;
     case "pulihkan_akun": return `memulihkan akun ${t}`;
+    case "permintaan_data": return `${d.action === "reject" ? "menolak" : "memproses"} permintaan ${d.kind === "account" ? "hapus akun" : "hapus foto"} ${d.email || ""}`;
     case "ubah_batas_storage": return `mengatur kuota storage ${r.target}: ${d.mb ? `${d.mb} MB` : "tanpa batas"}`;
     case "moderasi": return `${MODERATION[d.action] || "menindak laporan foto"} di acara “${t}”${r.user_label && d.action === "block" ? ` (${r.user_label})` : ""}`;
     default: return `${r.action} ${t}`;
@@ -1150,6 +1324,7 @@ async function log(body) {
           <option value="">Semua waktu</option>
         </select>
         <input type="search" placeholder="Cari email pelaku" aria-label="Cari email pelaku" />
+        <button class="btn small" data-act="csv">${ICON.download} CSV</button>
       </div>
       <div class="card">
         <ul class="audit"></ul>
@@ -1187,5 +1362,23 @@ async function log(body) {
     timer = setTimeout(() => { st.actor = e.target.value.trim(); load(); }, 300);
   };
   more.onclick = () => load(true);
+  // Ekspor log sesuai saringan (maks. 5.000 baris)
+  view.querySelector('[data-act="csv"]').onclick = async (ev) => {
+    const b = ev.currentTarget; b.disabled = true;
+    try {
+      const since = st.since ? new Date(Date.now() - Number(st.since) * 86400000).toISOString() : null;
+      const all = [];
+      for (let off = 0; off < 5000; off += 200) {
+        const part = await rpc("admin_audit", { p_limit: 200, p_offset: off, p_action: st.action || null, p_actor: st.actor || null, p_since: since });
+        all.push(...part);
+        if (part.length < 200) break;
+      }
+      downloadCsv(`log-${new Date().toISOString().slice(0, 10)}`, [
+        [(r) => new Date(r.at).toISOString(), "Waktu (UTC)"], ["actor_email", "Pelaku"], [(r) => ACTIONS[r.action] || r.action, "Aktivitas"],
+        [(r) => describe(r), "Keterangan"], ["target", "Target"], [(r) => JSON.stringify(r.detail || {}), "Detail"],
+      ], all);
+    } catch (e) { toast(friendly(e)); }
+    finally { b.disabled = false; }
+  };
   await load();
 }

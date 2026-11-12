@@ -2,6 +2,7 @@
 import { rpc, errorCode } from "./supabase.js";
 import { uploadPhoto } from "./storage.js";
 import { queue } from "./queue.js";
+import { pingAlbum } from "./realtime.js";
 
 // Kode error yang berarti jepretan ini tidak akan pernah bisa dikirim
 const FINAL = ["FILM_HABIS", "ACARA_TUTUP", "BUKAN_PESERTA", "AKUN_DIBLOKIR"];
@@ -32,6 +33,7 @@ export async function send(id) {
   await uploadPhoto(r.o_file_path, job.photo);
   await rpc("confirm_shot", { p_photo: r.o_photo_id });
   await queue.delete(id); // selesai, hapus dari HP
+  pingAlbum(job.eventId); // album yang sedang terbuka memuat ulang
   return r.o_seq;
 }
 

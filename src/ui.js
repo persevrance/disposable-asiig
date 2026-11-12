@@ -1,4 +1,6 @@
 // Pembantu kecil untuk membuat tampilan tanpa framework
+import { t, locale } from "./i18n.js";
+
 export const $ = (sel, root = document) => root.querySelector(sel);
 
 export function esc(s) {
@@ -24,7 +26,7 @@ export function toast(msg, ms = 3500) {
 
 export function fmtDate(iso) {
   if (!iso) return "";
-  return new Date(iso).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" });
+  return new Date(iso).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
 }
 
 // ISO -> nilai <input type="datetime-local"> (jam lokal)
@@ -82,7 +84,7 @@ export function modal(inner, { wide = false, onClose } = {}) {
 
 // Pengganti confirm(): mengembalikan Promise<boolean>.
 // Untuk aksi berbahaya, fokus awal ada di Batal.
-export function confirmDialog({ title, text = "", ok = "Lanjutkan", cancel = "Batal", danger = false }) {
+export function confirmDialog({ title, text = "", ok = t("Lanjutkan"), cancel = t("Batal"), danger = false }) {
   return new Promise((resolve) => {
     let result = false;
     const { box, close } = modal(`
@@ -100,17 +102,17 @@ export function confirmDialog({ title, text = "", ok = "Lanjutkan", cancel = "Ba
 }
 
 // Konfirmasi dengan mengetik teks tertentu (untuk hapus permanen)
-export function typeToConfirm({ title, text, expect, ok = "Hapus" }) {
+export function typeToConfirm({ title, text, expect, ok = t("Hapus") }) {
   return new Promise((resolve) => {
     let result = false;
     const { box, close } = modal(`
       <form class="dialog">
         <h3>${esc(title)}</h3>
         <p>${esc(text)}</p>
-        <label for="ttc-input">Ketik <b>${esc(expect)}</b> untuk melanjutkan</label>
+        <label for="ttc-input">${t("Ketik {x} untuk melanjutkan", { x: `<b>${esc(expect)}</b>` })}</label>
         <input id="ttc-input" autocomplete="off" autocapitalize="off" spellcheck="false" autofocus />
         <div class="dialog-actions">
-          <button type="button" class="btn ghost" data-act="no">Batal</button>
+          <button type="button" class="btn ghost" data-act="no">${t("Batal")}</button>
           <button class="btn danger-fill" data-act="yes" disabled>${esc(ok)}</button>
         </div>
       </form>`, { onClose: () => resolve(result) });
@@ -131,8 +133,8 @@ export function showCopy({ title, text = "", value }) {
     <div class="dialog">
       <h3>${esc(title)}</h3>
       ${text ? `<p>${esc(text)}</p>` : ""}
-      <input readonly value="${esc(value)}" aria-label="Teks untuk disalin" />
-      <div class="dialog-actions"><button class="btn primary" data-act="ok">Selesai</button></div>
+      <input readonly value="${esc(value)}" aria-label="${t("Teks untuk disalin")}" />
+      <div class="dialog-actions"><button class="btn primary" data-act="ok">${t("Selesai")}</button></div>
     </div>`);
   const input = box.querySelector("input");
   input.onfocus = () => input.select();
@@ -140,13 +142,13 @@ export function showCopy({ title, text = "", value }) {
   box.querySelector('[data-act="ok"]').onclick = close;
 }
 
-export async function copyText(value, { done = "Link disalin.", title = "Salin link" } = {}) {
+export async function copyText(value, { done = t("Link disalin."), title = t("Salin link") } = {}) {
   try {
     await navigator.clipboard.writeText(value);
     toast(done);
     return true;
   } catch {
-    showCopy({ title, text: "Tekan lama teks di bawah lalu pilih Salin.", value });
+    showCopy({ title, text: t("Tekan lama teks di bawah lalu pilih Salin."), value });
     return false;
   }
 }
@@ -157,7 +159,7 @@ export function actionSheet(title, actions) {
     <div class="dialog">
       <h3>${esc(title)}</h3>
       <div class="sheet-actions"></div>
-      <div class="dialog-actions"><button class="btn ghost" data-act="no">Batal</button></div>
+      <div class="dialog-actions"><button class="btn ghost" data-act="no">${t("Batal")}</button></div>
     </div>`);
   const list = box.querySelector(".sheet-actions");
   for (const a of actions) {
@@ -213,18 +215,37 @@ Object.assign(ICON, {
   copy: svg('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/>', 18),
   shield: svg('<path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z"/>', 18),
   expand: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', 18),
+  chat: svg('<path d="M4 5h16v11H9l-5 4z"/>'),
+  mic: svg('<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>', 18),
+  stop: svg('<rect x="6" y="6" width="12" height="12" rx="2"/>', 18),
+  bell: svg('<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0"/>', 18),
+  grid: svg('<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>', 18),
+  download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', 18),
+  trash: svg('<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>', 18),
 });
+
+// CSV untuk Excel/Sheets: pemisah koma, UTF-8 dengan BOM. rows: array objek, cols: [[kunci, judul]]
+export function downloadCsv(name, cols, rows) {
+  const cell = (v) => {
+    const x = v === null || v === undefined ? "" : String(v);
+    return /[",\n\r]/.test(x) ? `"${x.replace(/"/g, '""')}"` : x;
+  };
+  const text = [cols.map(([, h]) => cell(h)).join(","), ...rows.map((r) => cols.map(([k]) => cell(typeof k === "function" ? k(r) : r[k])).join(","))].join("\r\n");
+  const url = URL.createObjectURL(new Blob(["\ufeff" + text], { type: "text/csv;charset=utf-8" }));
+  download(url, name.endsWith(".csv") ? name : `${name}.csv`);
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
 
 // Waktu acara singkat: "Sab, 14 Des 2026 · 19.00–22.00"
 export function fmtRange(start, end) {
   if (!start && !end) return "";
-  const d = (x) => new Date(x).toLocaleDateString("id-ID", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
-  const t = (x) => new Date(x).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+  const d = (x) => new Date(x).toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  const tm = (x) => new Date(x).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   if (start && end) {
     const same = new Date(start).toDateString() === new Date(end).toDateString();
-    return same ? `${d(start)} · ${t(start)}–${t(end)}` : `${d(start)} ${t(start)} – ${d(end)} ${t(end)}`;
+    return same ? `${d(start)} · ${tm(start)}–${tm(end)}` : `${d(start)} ${tm(start)} – ${d(end)} ${tm(end)}`;
   }
-  return start ? `${d(start)} · mulai ${t(start)}` : `selesai ${d(end)} ${t(end)}`;
+  return start ? `${d(start)} · ${t("mulai")} ${tm(start)}` : `${t("selesai")} ${d(end)} ${tm(end)}`;
 }
 
 // Ikon dalam lingkaran berwarna lembut. tone: coral | sun | mint | grape; size: "" | lg | xl

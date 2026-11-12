@@ -175,6 +175,92 @@ create index if not exists photo_reports_open on photo_reports (event_id) where 
 alter table favorites     enable row level security;
 alter table photo_reports enable row level security;
 
+-- ---------- Fase 4: kolom dan tabel ---------------------------------
+
+-- Penyimpanan foto: 'supabase' (Storage) atau 'r2' (Cloudflare R2 lewat Worker situs)
+alter table app_settings
+  add column if not exists storage_backend text not null default 'supabase'
+    check (storage_backend in ('supabase', 'r2')),
+  add column if not exists vapid_public_key text check (vapid_public_key is null or length(vapid_public_key) <= 200);
+
+-- File foto yang tersimpan di R2 (dicatat Worker dengan service key setelah unggah/pindah)
+create table if not exists r2_objects (
+  name text primary key,
+  size bigint not null default 0,
+  at   timestamptz not null default now()
+);
+alter table r2_objects enable row level security;
+
+-- Semua file aplikasi di Supabase Storage dan R2 (untuk ukuran dan cek unggahan).
+-- File yang masih ada di kedua tempat (sedang dipindah) dihitung sekali.
+create or replace view stored_objects as
+  select o.bucket_id, o.name, coalesce((o.metadata->>'size')::bigint, 0) as size, o.created_at
+    from storage.objects o where o.bucket_id in ('photos', 'covers')
+  union all
+  select 'photos', r.name, r.size, r.at
+    from r2_objects r
+   where not exists (select 1 from storage.objects o where o.bucket_id = 'photos' and o.name = r.name);
+revoke all on stored_objects from public, anon, authenticated;
+
+-- Notifikasi album terbuka
+alter table events add column if not exists album_notified_at timestamptz;
+create table if not exists push_subscriptions (
+  endpoint   text primary key check (length(endpoint) <= 1000),
+  user_id    uuid not null references profiles(id) on delete cascade,
+  p256dh     text not null,
+  auth       text not null,
+  ua         text,
+  created_at timestamptz not null default now()
+);
+create table if not exists album_watch (
+  event_id   uuid not null references events(id) on delete cascade,
+  user_id    uuid not null references profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (event_id, user_id)
+);
+
+-- Buku tamu: ucapan teks dan/atau suara
+create table if not exists guestbook (
+  id         uuid primary key default gen_random_uuid(),
+  event_id   uuid not null references events(id) on delete cascade,
+  user_id    uuid not null references profiles(id) on delete cascade,
+  body       text check (body is null or length(body) <= 500),
+  audio_path text unique,
+  audio_secs int check (audio_secs is null or audio_secs between 1 and 60),
+  status     text not null default 'ready' check (status in ('pending', 'ready')),
+  hidden     boolean not null default false,
+  created_at timestamptz not null default now(),
+  check (body is not null or audio_path is not null)
+);
+create index if not exists guestbook_event on guestbook (event_id, created_at desc);
+
+-- Permintaan hapus data (UU PDP)
+create table if not exists data_requests (
+  id         bigserial primary key,
+  user_id    uuid references profiles(id) on delete set null,
+  email      text,
+  kind       text not null check (kind in ('photos', 'account')),
+  event_id   uuid references events(id) on delete set null,
+  note       text check (note is null or length(note) <= 500),
+  status     text not null default 'open' check (status in ('open', 'done', 'rejected')),
+  created_at timestamptz not null default now(),
+  done_at    timestamptz,
+  done_by    uuid references profiles(id) on delete set null,
+  reply      text
+);
+
+alter table push_subscriptions enable row level security;
+alter table album_watch        enable row level security;
+alter table guestbook          enable row level security;
+alter table data_requests      enable row level security;
+
+-- Rekaman suara buku tamu (privat, kecil)
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('voices', 'voices', false, 2097152, array['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac'])
+on conflict (id) do update
+  set public = false, file_size_limit = 2097152,
+      allowed_mime_types = array['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac'];
+
 -- Acara terbuka untuk memotret saat ini: sakelar terbuka DAN waktu selesai belum lewat
 create or replace function open_now(e events) returns boolean
 language sql stable as $$
@@ -360,11 +446,11 @@ language plpgsql security definer set search_path = public as $$
 begin
   update photos p set status = 'ready', taken_at = now()
    where p.id = p_photo and p.user_id = auth.uid() and p.status = 'pending'
-     and exists (select 1 from storage.objects o
+     and exists (select 1 from stored_objects o
                   where o.bucket_id = 'photos' and o.name = p.file_path)
-     and exists (select 1 from storage.objects o
+     and exists (select 1 from stored_objects o
                   where o.bucket_id = 'photos' and o.name = p.thumb_path)
-     and (p.medium_path is null or exists (select 1 from storage.objects o
+     and (p.medium_path is null or exists (select 1 from stored_objects o
                   where o.bucket_id = 'photos' and o.name = p.medium_path));
   if found then return; end if;
   if exists (select 1 from photos where id = p_photo and user_id = auth.uid()
@@ -605,10 +691,10 @@ create policy "sampul: hapus" on storage.objects for delete to authenticated
 -- Total ukuran file (foto + sampul) semua acara milik satu pengguna, dalam byte
 create or replace function owner_bytes(p_owner uuid) returns bigint
 language sql stable security definer set search_path = public as $$
-  select coalesce(sum((o.metadata->>'size')::bigint), 0)::bigint
-    from storage.objects o
+  select coalesce(sum(o.size), 0)::bigint
+    from stored_objects o
     join events e on e.id::text = split_part(o.name, '/', 1)
-   where o.bucket_id in ('photos', 'covers') and e.owner_id = p_owner;
+   where e.owner_id = p_owner;
 $$;
 
 drop function if exists create_event(text, int, int, boolean);
@@ -875,6 +961,10 @@ begin
                         from storage.objects where bucket_id = 'photos'),
     'cover_bytes',   (select coalesce(sum((metadata->>'size')::bigint), 0)
                         from storage.objects where bucket_id = 'covers'),
+    'r2_bytes',      (select coalesce(sum(size), 0) from r2_objects),
+    'r2_files',      (select count(*) from r2_objects),
+    'storage_backend', (select storage_backend from app_settings),
+    'data_requests_open', (select count(*) from data_requests where status = 'open'),
     'storage_quota_mb', (select storage_quota_mb from app_settings),
     'camera_errors_24h', (select count(*) from client_errors where at > now() - interval '24 hours'),
     'overdue_events', (select count(*) from events where purge_at <= now()),
@@ -974,6 +1064,9 @@ begin
                                then (p_patch->>'creator_event_limit')::int else creator_event_limit end,
     creator_storage_mb  = case when p_patch ? 'creator_storage_mb'
                                then (p_patch->>'creator_storage_mb')::int else creator_storage_mb end,
+    storage_backend   = coalesce(p_patch->>'storage_backend', storage_backend),
+    vapid_public_key  = case when p_patch ? 'vapid_public_key'
+                             then nullif(trim(p_patch->>'vapid_public_key'), '') else vapid_public_key end,
     updated_at = now(), updated_by = auth.uid()
   where id;
   perform log_audit('ubah_pengaturan', null, p_patch);
@@ -1002,8 +1095,8 @@ begin
   if not v_admin and not can_create_event() then raise exception 'TIDAK_BOLEH_MEMBUAT'; end if;
   return query
     with sz as (
-      select split_part(o.name, '/', 1) as ev, sum((o.metadata->>'size')::bigint) as b
-        from storage.objects o where o.bucket_id = 'photos' group by 1),
+      select split_part(o.name, '/', 1) as ev, sum(o.size) as b
+        from stored_objects o where o.bucket_id = 'photos' group by 1),
     base as (
       select e.id as b_id, e.name as b_name, pr.name as b_owner, u.email::text as b_email,
              e.join_code as b_code, open_now(e) as b_open, e.max_shots as b_shots,
@@ -1322,8 +1415,8 @@ begin
     ev as (select (e.created_at at time zone 'Asia/Jakarta')::date as dd, count(*)::int as n
              from events e group by 1),
     st as (select (o.created_at at time zone 'Asia/Jakarta')::date as dd,
-                  sum((o.metadata->>'size')::bigint)::bigint as b
-             from storage.objects o where o.bucket_id in ('photos', 'covers') group by 1)
+                  sum(o.size)::bigint as b
+             from stored_objects o group by 1)
     select d.dd, coalesce(ph.n, 0), coalesce(us.n, 0), coalesce(ev.n, 0), coalesce(ph.ev, 0),
            coalesce(st.b, 0)::bigint
       from d
@@ -1356,6 +1449,326 @@ begin
      limit least(greatest(coalesce(p_limit, 300), 1), 500);
 end $$;
 
+-- ---------- Fase 4: R2, notifikasi, buku tamu, data pribadi --------
+
+-- R2: file yang boleh dibaca / dihapus pemanggil (dipanggil Worker dengan JWT pengguna)
+create or replace function r2_viewable(p_paths text[]) returns setof text
+language sql stable security definer set search_path = public as $$
+  select x from unnest(p_paths[1:200]) x where can_view(x) or owns_path(x);
+$$;
+create or replace function r2_deletable(p_paths text[]) returns setof text
+language sql stable security definer set search_path = public as $$
+  select x from unnest(p_paths[1:500]) x where owns_path(x);
+$$;
+
+-- R2 (service role): foto yang masih di Supabase Storage dan belum ada di R2, untuk dipindah
+create or replace function r2_migration_batch(p_limit int default 20)
+returns table (name text, size bigint, remaining bigint)
+language sql stable security definer set search_path = public as $$
+  select o.name, coalesce((o.metadata->>'size')::bigint, 0), count(*) over ()
+    from storage.objects o
+   where o.bucket_id = 'photos'
+     and not exists (select 1 from r2_objects r where r.name = o.name)
+   order by o.name
+   limit least(greatest(coalesce(p_limit, 20), 1), 50);
+$$;
+
+-- Langganan notifikasi browser milik pemanggil
+create or replace function save_push(p_endpoint text, p_p256dh text, p_auth text, p_ua text default null)
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform assert_not_banned();
+  if p_endpoint !~ '^https://' then raise exception 'LANGGANAN_TIDAK_VALID'; end if;
+  insert into push_subscriptions (endpoint, user_id, p256dh, auth, ua)
+  values (p_endpoint, auth.uid(), p_p256dh, p_auth, left(p_ua, 300))
+  on conflict (endpoint) do update set user_id = excluded.user_id, p256dh = excluded.p256dh,
+                                       auth = excluded.auth, ua = excluded.ua;
+  -- Paling banyak 10 perangkat per akun
+  delete from push_subscriptions where endpoint in (
+    select endpoint from push_subscriptions where user_id = auth.uid()
+     order by created_at desc offset 10);
+end $$;
+
+-- Minta / batalkan kabar saat album acara terbuka penuh. Mengembalikan keadaan baru.
+create or replace function watch_album(p_event uuid, p_on boolean) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if not exists (select 1 from event_members where event_id = p_event and user_id = auth.uid() and not blocked)
+     and not can_manage(p_event) then
+    raise exception 'BUKAN_PESERTA';
+  end if;
+  if p_on then
+    insert into album_watch (event_id, user_id) values (p_event, auth.uid()) on conflict do nothing;
+  else
+    delete from album_watch where event_id = p_event and user_id = auth.uid();
+  end if;
+  return p_on;
+end $$;
+
+create or replace function my_album_watch(p_event uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from album_watch where event_id = p_event and user_id = auth.uid());
+$$;
+
+-- Untuk Edge Function notify-album (service role): kabar yang jatuh tempo.
+-- Album dianggap terbuka penuh saat acara tertutup (sakelar / jadwal) atau waktu cuci film lewat.
+create or replace function due_album_notifications()
+returns table (event_id uuid, event_name text, endpoint text, p256dh text, auth text)
+language sql stable security definer set search_path = public as $$
+  select e.id, e.name, s.endpoint, s.p256dh, s.auth
+    from events e
+    join album_watch w on w.event_id = e.id
+    join push_subscriptions s on s.user_id = w.user_id
+   where e.album_notified_at is null
+     and (not open_now(e) or (e.reveal_at is not null and now() >= e.reveal_at));
+$$;
+create or replace function mark_album_notified(p_events uuid[]) returns void
+language sql security definer set search_path = public as $$
+  update events set album_notified_at = now() where id = any(p_events);
+$$;
+create or replace function drop_push(p_endpoints text[]) returns void
+language sql security definer set search_path = public as $$
+  delete from push_subscriptions where endpoint = any(p_endpoints);
+$$;
+
+-- Buku tamu: tulis ucapan (maks. 3 per tamu per acara). Bila ada suara, kembalikan
+-- path tujuan unggah; ucapan baru tampil setelah confirm_message.
+create or replace function add_message(p_event uuid, p_body text, p_audio_ext text default null,
+                                       p_audio_secs int default null)
+returns table (o_id uuid, o_audio_path text)
+language plpgsql security definer set search_path = public as $$
+declare v_id uuid := gen_random_uuid(); v_path text; v_body text := nullif(trim(coalesce(p_body, '')), '');
+begin
+  perform assert_not_banned();
+  if not exists (select 1 from event_members where event_id = p_event and user_id = auth.uid() and not blocked)
+     and not can_manage(p_event) then
+    raise exception 'BUKAN_PESERTA';
+  end if;
+  if (select count(*) from guestbook where event_id = p_event and user_id = auth.uid()) >= 3 then
+    raise exception 'UCAPAN_PENUH';
+  end if;
+  if p_audio_ext is not null then
+    if p_audio_ext not in ('webm', 'm4a', 'ogg', 'mp3', 'aac') then raise exception 'FORMAT_SUARA'; end if;
+    v_path := p_event || '/' || v_id || '.' || p_audio_ext;
+  end if;
+  if v_body is null and v_path is null then raise exception 'UCAPAN_KOSONG'; end if;
+  insert into guestbook (id, event_id, user_id, body, audio_path, audio_secs, status)
+  values (v_id, p_event, auth.uid(), left(v_body, 500), v_path,
+          case when v_path is not null then least(greatest(coalesce(p_audio_secs, 1), 1), 60) end,
+          case when v_path is null then 'ready' else 'pending' end);
+  return query select v_id, v_path;
+end $$;
+
+create or replace function confirm_message(p_id uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update guestbook g set status = 'ready'
+   where g.id = p_id and g.user_id = auth.uid() and g.status = 'pending'
+     and exists (select 1 from storage.objects o where o.bucket_id = 'voices' and o.name = g.audio_path);
+  if found or exists (select 1 from guestbook where id = p_id and user_id = auth.uid() and status = 'ready') then
+    return;
+  end if;
+  raise exception 'FILE_BELUM_ADA';
+end $$;
+
+-- Ucapan yang terlihat: peserta melihat yang tidak disembunyikan; pengelola melihat semua.
+create or replace function list_messages(p_event uuid)
+returns table (id uuid, name text, body text, audio_path text, audio_secs int,
+               created_at timestamptz, is_mine boolean, hidden boolean)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+declare v_manage boolean := can_manage(p_event);
+begin
+  if not v_manage and not exists (select 1 from event_members m join profiles pr on pr.id = m.user_id
+                                   where m.event_id = p_event and m.user_id = auth.uid()
+                                     and not m.blocked and not pr.banned) then
+    raise exception 'BUKAN_PESERTA';
+  end if;
+  return query
+    select g.id,
+           case when e.hide_names and not v_manage and g.user_id <> auth.uid() then null else pr.name end,
+           g.body, g.audio_path, g.audio_secs, g.created_at, g.user_id = auth.uid(), g.hidden
+      from guestbook g
+      join events e    on e.id = g.event_id
+      join profiles pr on pr.id = g.user_id
+     where g.event_id = p_event and g.status = 'ready' and (v_manage or not g.hidden or g.user_id = auth.uid())
+     order by g.created_at desc
+     limit 500;
+end $$;
+
+create or replace function hide_message(p_id uuid, p_hidden boolean) returns void
+language plpgsql security definer set search_path = public as $$
+declare v_event uuid;
+begin
+  select event_id into v_event from guestbook where id = p_id;
+  perform assert_owner(v_event);
+  update guestbook set hidden = p_hidden where id = p_id;
+end $$;
+
+-- Hapus ucapan sendiri atau (pengelola) ucapan siapa pun. Mengembalikan path suara untuk dihapus.
+create or replace function delete_message(p_id uuid) returns text
+language plpgsql security definer set search_path = public as $$
+declare g guestbook%rowtype;
+begin
+  select * into g from guestbook where id = p_id;
+  if not found then raise exception 'UCAPAN_TIDAK_ADA'; end if;
+  if g.user_id <> auth.uid() then perform assert_owner(g.event_id); end if;
+  delete from guestbook where id = p_id;
+  return g.audio_path;
+end $$;
+
+create or replace function can_upload_voice(p_name text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from guestbook g where g.audio_path = p_name
+                  and g.user_id = auth.uid() and g.status = 'pending');
+$$;
+create or replace function can_hear_voice(p_name text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from guestbook g
+     where g.audio_path = p_name
+       and (g.user_id = auth.uid() or can_manage(g.event_id)
+            or (not g.hidden and exists (select 1 from event_members m join profiles pr on pr.id = m.user_id
+                                          where m.event_id = g.event_id and m.user_id = auth.uid()
+                                            and not m.blocked and not pr.banned))));
+$$;
+-- Hapus file suara: pengelola acara (owns_path) atau pemilik ucapan yang sudah dihapus barisnya
+create or replace function can_delete_voice(p_name text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select owns_path(p_name)
+      or not exists (select 1 from guestbook g where g.audio_path = p_name)
+         and exists (select 1 from event_members m where m.event_id::text = split_part(p_name, '/', 1)
+                                                     and m.user_id = auth.uid());
+$$;
+
+drop policy if exists "suara: unggah" on storage.objects;
+drop policy if exists "suara: dengar" on storage.objects;
+drop policy if exists "suara: hapus"  on storage.objects;
+create policy "suara: unggah" on storage.objects for insert to authenticated
+  with check (bucket_id = 'voices' and public.can_upload_voice(name));
+create policy "suara: dengar" on storage.objects for select to authenticated
+  using (bucket_id = 'voices' and public.can_hear_voice(name));
+create policy "suara: hapus" on storage.objects for delete to authenticated
+  using (bucket_id = 'voices' and public.can_delete_voice(name));
+
+-- Semua file suara acara (untuk hapus acara)
+create or replace function owner_voice_paths(p_event uuid) returns setof text
+language plpgsql stable security definer set search_path = public as $$
+begin
+  perform assert_owner(p_event);
+  return query select audio_path from guestbook where event_id = p_event and audio_path is not null;
+end $$;
+
+-- ---------- Data pribadi (UU PDP) ----------
+
+create or replace function request_data_deletion(p_kind text, p_event uuid default null, p_note text default null)
+returns bigint
+language plpgsql security definer set search_path = public as $$
+declare v_id bigint;
+begin
+  if auth.uid() is null then raise exception 'BELUM_LOGIN'; end if;
+  if p_kind not in ('photos', 'account') then raise exception 'AKSI_TIDAK_VALID'; end if;
+  if p_kind = 'photos' and (p_event is null or not exists (
+       select 1 from event_members where event_id = p_event and user_id = auth.uid())) then
+    raise exception 'BUKAN_PESERTA';
+  end if;
+  if exists (select 1 from data_requests where user_id = auth.uid() and status = 'open'
+               and kind = p_kind and event_id is not distinct from p_event) then
+    raise exception 'PERMINTAAN_SUDAH_ADA';
+  end if;
+  insert into data_requests (user_id, email, kind, event_id, note)
+  values (auth.uid(), lower(auth.jwt()->>'email'), p_kind, case when p_kind = 'photos' then p_event end,
+          nullif(left(trim(coalesce(p_note, '')), 500), ''))
+  returning id into v_id;
+  return v_id;
+end $$;
+
+create or replace function my_data_requests()
+returns table (id bigint, kind text, event_name text, status text, created_at timestamptz,
+               done_at timestamptz, reply text)
+language sql stable security definer set search_path = public as $$
+  select r.id, r.kind, e.name, r.status, r.created_at, r.done_at, r.reply
+    from data_requests r left join events e on e.id = r.event_id
+   where r.user_id = auth.uid()
+   order by r.created_at desc;
+$$;
+
+create or replace function admin_data_requests(p_status text default 'open')
+returns table (id bigint, user_id uuid, user_name text, email text, kind text, event_id uuid,
+               event_name text, note text, status text, created_at timestamptz, done_at timestamptz,
+               reply text, photos int, owned_events int)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+begin
+  perform assert_superadmin();
+  return query
+    select r.id, r.user_id, pr.name, r.email, r.kind, r.event_id, e.name, r.note, r.status,
+           r.created_at, r.done_at, r.reply,
+           (select count(*)::int from photos p where p.user_id = r.user_id
+              and (r.kind = 'account' or p.event_id = r.event_id)),
+           (select count(*)::int from events x where x.owner_id = r.user_id)
+      from data_requests r
+      left join profiles pr on pr.id = r.user_id
+      left join events e on e.id = r.event_id
+     where coalesce(p_status, 'all') = 'all' or r.status = p_status
+     order by r.created_at desc
+     limit 200;
+end $$;
+
+-- File milik satu permintaan (foto 3 ukuran + suara), dihapus aplikasi sebelum barisnya
+create or replace function admin_request_paths(p_request bigint)
+returns table (bucket text, path text)
+language plpgsql stable security definer set search_path = public as $$
+declare r data_requests%rowtype;
+begin
+  perform assert_superadmin();
+  select * into r from data_requests where id = p_request;
+  if not found then raise exception 'PERMINTAAN_TIDAK_ADA'; end if;
+  return query
+    select 'photos'::text, x from photos p,
+           unnest(array_remove(array[p.file_path, p.medium_path, p.thumb_path], null)) x
+     where p.user_id = r.user_id and (r.kind = 'account' or p.event_id = r.event_id)
+    union all
+    select 'voices', g.audio_path from guestbook g
+     where g.user_id = r.user_id and g.audio_path is not null
+       and (r.kind = 'account' or g.event_id = r.event_id);
+end $$;
+
+-- Jalankan permintaan: hapus foto (dan ucapan) di acara itu, atau hapus akun seluruhnya.
+-- Akun yang masih memiliki acara tidak bisa dihapus sebelum acaranya dihapus.
+create or replace function admin_process_request(p_request bigint, p_action text, p_reply text default null)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare r data_requests%rowtype; v_email text;
+begin
+  perform assert_superadmin();
+  select * into r from data_requests where id = p_request for update;
+  if not found then raise exception 'PERMINTAAN_TIDAK_ADA'; end if;
+  if r.status <> 'open' then raise exception 'PERMINTAAN_SELESAI'; end if;
+  if p_action = 'reject' then
+    update data_requests set status = 'rejected', done_at = now(), done_by = auth.uid(),
+                             reply = nullif(trim(coalesce(p_reply, '')), '') where id = p_request;
+  elsif p_action = 'done' then
+    if r.kind = 'photos' then
+      delete from photos where user_id = r.user_id and event_id = r.event_id;
+      delete from guestbook where user_id = r.user_id and event_id = r.event_id;
+    else
+      if r.user_id = auth.uid() then raise exception 'TIDAK_BISA_DIRI_SENDIRI'; end if;
+      if exists (select 1 from events where owner_id = r.user_id) then raise exception 'MASIH_PUNYA_ACARA'; end if;
+      select lower(email) into v_email from auth.users where id = r.user_id;
+      delete from user_roles where email = v_email;
+      delete from auth.users where id = r.user_id;      -- profil dan semua data ikut terhapus (cascade)
+    end if;
+    update data_requests set status = 'done', done_at = now(), done_by = auth.uid(),
+                             reply = nullif(trim(coalesce(p_reply, '')), '') where id = p_request;
+  else
+    raise exception 'AKSI_TIDAK_VALID';
+  end if;
+  perform log_audit('permintaan_data', r.user_id::text,
+                    jsonb_build_object('kind', r.kind, 'action', p_action, 'event', r.event_id, 'email', r.email));
+end $$;
+
 -- ---------- Hak eksekusi --------------------------------------------
 
 revoke execute on all functions in schema public from public, anon;
@@ -1364,7 +1777,8 @@ revoke execute on all functions in schema public from public, anon;
 revoke execute on function
   log_audit(text, text, jsonb), assert_owner(uuid), assert_superadmin(), assert_not_banned(),
   gen_code(), handle_new_user(), visible_photos(uuid), my_verified_email(),
-  open_now(events), owner_bytes(uuid)
+  open_now(events), owner_bytes(uuid),
+  due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]), r2_migration_batch(int)
 from authenticated;
 
 grant execute on function
@@ -1375,6 +1789,13 @@ grant execute on function
   album_owners(uuid), toggle_favorite(uuid), duplicate_event(uuid),
   report_photo(uuid, text, text), list_reports(uuid), resolve_reports(uuid, text),
   admin_trends(int), slideshow_photos(uuid, int), admin_set_storage_limit(text, int),
+  r2_viewable(text[]), r2_deletable(text[]), save_push(text, text, text, text),
+  watch_album(uuid, boolean), my_album_watch(uuid),
+  add_message(uuid, text, text, int), confirm_message(uuid), list_messages(uuid),
+  hide_message(uuid, boolean), delete_message(uuid), owner_voice_paths(uuid),
+  can_upload_voice(text), can_hear_voice(text), can_delete_voice(text),
+  request_data_deletion(text, uuid, text), my_data_requests(), admin_data_requests(text),
+  admin_request_paths(bigint), admin_process_request(bigint, text, text),
   claim_downloads(uuid, uuid[]),
   can_upload(text), can_view(text), owns_path(text),
   create_event(text, int, int, boolean, text), set_event(uuid, jsonb), set_cover(uuid, text),
@@ -1388,6 +1809,14 @@ grant execute on function
   event_stats(uuid), album_progress(uuid), admin_live_events(),
   admin_overdue_events(), admin_client_errors(int), log_client_error(uuid, text, text, text)
 to authenticated;
+
+-- Fungsi untuk Edge Function notify-album: hanya service_role
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]),
+      r2_migration_batch(int) to service_role;
+  end if;
+end $$;
 
 -- =====================================================================
 -- Setelah Run berhasil, jadikan email Anda superadmin (sekali saja):

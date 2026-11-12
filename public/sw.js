@@ -49,6 +49,26 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
+// Notifikasi "album sudah terbuka" (dikirim Edge Function notify-album)
+self.addEventListener("push", (event) => {
+  let d = {};
+  try { d = event.data?.json() || {}; } catch { d = { title: "Disposable Asiig", body: event.data?.text() }; }
+  event.waitUntil(self.registration.showNotification(d.title || "Disposable Asiig", {
+    body: d.body || "", icon: "/icon.svg", badge: "/icon.svg", tag: d.tag, data: { url: d.url || "/" },
+  }));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = new URL(event.notification.data?.url || "/", self.location.origin).href;
+  event.waitUntil((async () => {
+    const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const win = wins.find((w) => new URL(w.url).origin === self.location.origin);
+    if (win) { await win.focus(); return win.navigate(url); }
+    return self.clients.openWindow(url);
+  })());
+});
+
 async function networkFirstPage(req) {
   const cache = await caches.open(SHELL);
   const url = new URL(req.url);

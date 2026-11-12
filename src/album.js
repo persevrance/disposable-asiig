@@ -6,14 +6,18 @@ import { getUrls } from "./storage.js";
 import { attachZoom } from "./zoom.js";
 import { filmName } from "./film.js";
 import { canInstall, promptInstall } from "./install.js";
+import { onAlbumPing, albumLive } from "./realtime.js";
+import { pushSupport, enableAlbumNotify, disableAlbumNotify, albumNotifyOn, kickNotify } from "./push.js";
+import { openCollage } from "./collage.js";
 import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, copyText, ICON } from "./ui.js";
+import { t } from "./i18n.js";
 
 const PAGE = 60;
 
-const REASONS = [
-  ["tidak_pantas", "Tidak pantas", "Konten tidak sopan atau menyinggung"],
-  ["privasi", "Privasi", "Saya ada di foto ini dan tidak ingin dibagikan"],
-  ["lainnya", "Lainnya", "Alasan lain"],
+const REASONS = () => [
+  ["tidak_pantas", t("Tidak pantas"), t("Konten tidak sopan atau menyinggung")],
+  ["privasi", t("Privasi"), t("Saya ada di foto ini dan tidak ingin dibagikan")],
+  ["lainnya", t("Lainnya"), t("Alasan lain")],
 ];
 
 export async function renderAlbum(root, status) {
@@ -29,27 +33,32 @@ export async function renderAlbum(root, status) {
   const view = el(`
     <section class="album">
       <div class="keep-slot"></div>
+      <div class="notify-slot"></div>
       <div class="album-progress" hidden></div>
       <button class="new-pill" hidden></button>
       <div class="album-filter" hidden>
-        <div class="chips" role="group" aria-label="Saring album">
-          <button type="button" class="chip" data-f="all" aria-pressed="true">Semua</button>
-          ${status.is_member ? `<button type="button" class="chip" data-f="mine" aria-pressed="false">Foto saya</button>` : ""}
-          <button type="button" class="chip" data-f="fav" aria-pressed="false">${ICON.heart}<span>Favorit</span></button>
+        <div class="chips" role="group" aria-label="${t("Saring album")}">
+          <button type="button" class="chip" data-f="all" aria-pressed="true">${t("Semua")}</button>
+          ${status.is_member ? `<button type="button" class="chip" data-f="mine" aria-pressed="false">${t("Foto saya")}</button>` : ""}
+          <button type="button" class="chip" data-f="fav" aria-pressed="false">${ICON.heart}<span>${t("Favorit")}</span></button>
         </div>
-        <select class="owner-filter" aria-label="Foto dari tamu" hidden></select>
+        <select class="owner-filter" aria-label="${t("Foto dari tamu")}" hidden></select>
       </div>
       <div class="album-bar">
         <span class="dl-quota"></span>
-        <button class="btn small" data-act="select">Pilih untuk unduh</button>
+        <span class="row tight">
+          <button class="btn small" data-act="collage">${ICON.grid}<span>${t("Kolase")}</span></button>
+          <button class="btn small" data-act="select">${t("Pilih untuk unduh")}</button>
+        </span>
       </div>
       <div class="grid"></div>
       <div class="sentinel"></div>
       <div class="empty" hidden></div>
       <div class="select-bar" hidden>
         <span class="sel-info"></span>
-        <button class="btn small ghost" data-act="cancel">Batal</button>
-        <button class="btn small primary" data-act="get">Unduh</button>
+        <button class="btn small ghost" data-act="cancel">${t("Batal")}</button>
+        <button class="btn small" data-act="sel-collage">${t("Kolase")}</button>
+        <button class="btn small primary" data-act="get">${t("Unduh")}</button>
       </div>
     </section>`);
   root.replaceChildren(view);
@@ -76,13 +85,14 @@ export async function renderAlbum(root, status) {
     progressEl.hidden = false;
     progressEl.innerHTML = `
       ${mine ? `
-      <div class="ap-row"><b>Gulungan Anda</b><span>${progress.my_used} dari ${progress.max_shots} jepretan</span></div>
+      <div class="ap-row"><b>${t("Gulungan Anda")}</b><span>${t("{a} dari {b} jepretan", { a: progress.my_used, b: progress.max_shots })}</span></div>
       <div class="bar"><span style="width:${pct(progress.my_used, progress.max_shots)}%"></span></div>` : ""}
-      <div class="ap-row"><b>Tamu yang filmnya habis</b><span>${progress.rolls_done} dari ${progress.members}</span></div>
+      <div class="ap-row"><b>${t("Tamu yang filmnya habis")}</b><span>${t("{a} dari {b}", { a: progress.rolls_done, b: progress.members })}</span></div>
       <div class="bar mint"><span style="width:${pct(progress.rolls_done, progress.members)}%"></span></div>
-      <small>${reveal ? `Semua foto terbuka ${esc(fmtDate(status.reveal_at))}.`
-        : "Foto setiap tamu muncul di sini setelah filmnya habis atau acara ditutup."}</small>`;
+      <small>${reveal ? esc(t("Semua foto terbuka {d}.", { d: fmtDate(status.reveal_at) }))
+        : t("Foto setiap tamu muncul di sini setelah filmnya habis atau acara ditutup.")}</small>`;
     renderKeepCard();
+    renderNotify();
   }
 
   // ---- simpan album: link permanen + pasang di layar utama ----
@@ -99,24 +109,53 @@ export async function renderAlbum(root, status) {
     const card = el(`
       <div class="card keep-card">
         <div>
-          <b>Simpan album ini</b>
-          <p>Foto tamu lain terus bertambah sampai acara selesai. Buka lagi kapan saja lewat link ini atau dari layar utama HP.</p>
+          <b>${t("Simpan album ini")}</b>
+          <p>${t("Foto tamu lain terus bertambah sampai acara selesai. Buka lagi kapan saja lewat link ini atau dari layar utama HP.")}</p>
         </div>
         <div class="row tight wrap">
-          <button class="btn small" data-act="link">${ICON.link} Salin link album</button>
-          ${canInstall() ? `<button class="btn small primary" data-act="install">${ICON.phone} Pasang di layar utama</button>` : ""}
-          <button class="btn small ghost" data-act="hide">Tutup</button>
+          <button class="btn small" data-act="link">${ICON.link} ${t("Salin link album")}</button>
+          ${canInstall() ? `<button class="btn small primary" data-act="install">${ICON.phone} ${t("Pasang di layar utama")}</button>` : ""}
+          <button class="btn small ghost" data-act="hide">${t("Tutup")}</button>
         </div>
       </div>`);
     card.querySelector('[data-act="link"]').onclick = () =>
-      copyText(link, { done: "Link album disalin. Buka dengan akun Google yang sama.", title: "Link album" });
+      copyText(link, { done: t("Link album disalin. Buka dengan akun Google yang sama."), title: t("Link album") });
     card.querySelector('[data-act="install"]')?.addEventListener("click", async () => {
-      if (await promptInstall()) toast("Aplikasi terpasang di layar utama.");
+      if (await promptInstall()) toast(t("Aplikasi terpasang di layar utama."));
     });
     card.querySelector('[data-act="hide"]').onclick = () => {
       try { localStorage.setItem(keepKey, "1"); } catch { /* abaikan */ }
       card.remove();
     };
+    slot.replaceChildren(card);
+  }
+
+  // ---- kabari saya saat album terbuka penuh (notifikasi browser) ----
+  // Tampil selama acara masih terbuka dan belum ada waktu cuci film yang lewat.
+  let notifyOn = null;
+  async function renderNotify() {
+    const slot = view.querySelector(".notify-slot");
+    const revealed = status.reveal_at && new Date(status.reveal_at) <= new Date();
+    const sup = pushSupport();
+    if (!status.is_open || revealed || sup === "off" || sup === "unsupported") { slot.replaceChildren(); return; }
+    if (notifyOn === null) notifyOn = await albumNotifyOn(status.event_id);
+    const card = el(`
+      <div class="notify-card">
+        ${ICON.bell}
+        <span>${notifyOn ? t("Anda akan dikabari saat semua foto terbuka.")
+          : sup === "ios-install" ? t("Di iPhone, pasang aplikasi di layar utama dulu untuk menerima kabar saat album terbuka.")
+          : sup === "denied" ? t("Notifikasi diblokir di browser ini. Izinkan di pengaturan situs untuk menerima kabar.")
+          : t("Ingin dikabari saat semua foto terbuka?")}</span>
+        ${sup === "ok" ? `<button class="btn small ${notifyOn ? "ghost" : "primary"}" data-act="notify">${notifyOn ? t("Batalkan") : t("Kabari saya")}</button>` : ""}
+      </div>`);
+    card.querySelector('[data-act="notify"]')?.addEventListener("click", async (e) => {
+      e.currentTarget.disabled = true;
+      try {
+        if (notifyOn) { await disableAlbumNotify(status.event_id); notifyOn = false; toast(t("Kabar album dibatalkan.")); }
+        else { await enableAlbumNotify(status.event_id); notifyOn = true; toast(t("Siap. Anda akan dikabari saat album terbuka.")); }
+      } catch (err) { toast(err?.message?.length < 120 ? err.message : friendly(err)); }
+      renderNotify();
+    });
     slot.replaceChildren(card);
   }
 
@@ -160,7 +199,7 @@ export async function renderAlbum(root, status) {
     try { owners = await rpc("album_owners", { p_event: status.event_id }); } catch { /* database lama: tanpa saringan tamu */ }
     ownerSel.hidden = owners.length < 2;
     if (ownerSel.hidden) return;
-    ownerSel.innerHTML = `<option value="">Semua tamu</option>` + owners.map((o) =>
+    ownerSel.innerHTML = `<option value="">${t("Semua tamu")}</option>` + owners.map((o) =>
       `<option value="${o.user_id}" ${o.user_id === filter.owner ? "selected" : ""}>${esc(o.name)} (${o.photos})</option>`).join("");
   }
   function reload() {
@@ -182,18 +221,19 @@ export async function renderAlbum(root, status) {
 
   function updateQuota() {
     quotaEl.textContent = unlimited()
-      ? "Unduh ukuran penuh tanpa batas (pengelola acara)."
-      : `Sisa unduhan: ${quotaLeft()} dari ${status.max_shots} · foto Anda sendiri gratis`;
+      ? t("Unduh ukuran penuh tanpa batas (pengelola acara).")
+      : t("Sisa unduhan: {a} dari {b} · foto Anda sendiri gratis", { a: quotaLeft(), b: status.max_shots });
   }
 
   function updateSelBar() {
     const c = cost(selected);
     selInfo.textContent = unlimited() || !c
-      ? `${selected.size} dipilih`
-      : `${selected.size} dipilih · memakai ${c} kuota`;
+      ? t("{n} dipilih", { n: selected.size })
+      : t("{n} dipilih · memakai {c} kuota", { n: selected.size, c });
     const over = !unlimited() && c > quotaLeft();
     selInfo.classList.toggle("warn", over);
     view.querySelector('[data-act="get"]').disabled = !selected.size || over;
+    view.querySelector('[data-act="sel-collage"]').disabled = selected.size < 2;
   }
 
   function setSelecting(on) {
@@ -213,21 +253,36 @@ export async function renderAlbum(root, status) {
     if (ok) setSelecting(false); else updateSelBar();
   };
 
+  // ---- kolase: dari foto terpilih, atau favorit lalu foto terbaru ----
+  async function collageFrom(ids) {
+    const rows = ids.map((id) => items.get(id)).filter(Boolean).slice(0, 9);
+    try {
+      const urls = await getUrls(rows.map((r) => r.medium_path));
+      openCollage(status, rows.map((r) => ({ url: urls[r.medium_path], owner_name: r.owner_name })).filter((p) => p.url));
+    } catch (e) { toast(friendly(e)); }
+  }
+  view.querySelector('[data-act="collage"]').onclick = () => {
+    const all = [...items.values()].filter((r) => !r.hidden);
+    const pick = [...all.filter((r) => r.is_fav), ...all.filter((r) => !r.is_fav)].slice(0, 9).map((r) => r.photo_id);
+    collageFrom(pick);
+  };
+  view.querySelector('[data-act="sel-collage"]').onclick = () => { collageFrom([...selected]); setSelecting(false); };
+
   function emptyText() {
-    if (filter.kind === "fav") return "Belum ada favorit. Ketuk ikon hati saat melihat foto untuk menyimpannya di sini.";
-    if (filter.kind === "mine") return "Foto Anda muncul di sini setelah film Anda habis atau acara ditutup.";
-    if (filter.owner) return "Belum ada foto dari tamu ini.";
+    if (filter.kind === "fav") return t("Belum ada favorit. Ketuk ikon hati saat melihat foto untuk menyimpannya di sini.");
+    if (filter.kind === "mine") return t("Foto Anda muncul di sini setelah film Anda habis atau acara ditutup.");
+    if (filter.owner) return t("Belum ada foto dari tamu ini.");
     if (status.reveal_at && new Date(status.reveal_at) > new Date())
-      return `Mode cuci film: semua foto tampil pada ${fmtDate(status.reveal_at)}.`;
-    return `Foto tampil setelah pemotretnya menghabiskan ${status.max_shots} jepretan atau saat acara ditutup.`;
+      return t("Mode cuci film: semua foto tampil pada {d}.", { d: fmtDate(status.reveal_at) });
+    return t("Foto tampil setelah pemotretnya menghabiskan {n} jepretan atau saat acara ditutup.", { n: status.max_shots });
   }
 
-  const label = (r) => (r.owner_name ? `#${r.seq} · ${r.owner_name}` : "Tamu");
+  const label = (r) => (r.owner_name ? `#${r.seq} · ${r.owner_name}` : t("Tamu"));
 
   function tileBadges(r) {
-    return `${r.hidden ? `<span class="badge">disembunyikan</span>` : ""}
-      ${r.is_mine ? `<span class="badge mine">milik Anda</span>` : ""}
-      ${r.is_fav ? `<span class="badge fav" aria-label="Favorit">${ICON.heart}</span>` : ""}`;
+    return `${r.hidden ? `<span class="badge">${t("disembunyikan")}</span>` : ""}
+      ${r.is_mine ? `<span class="badge mine">${t("milik Anda")}</span>` : ""}
+      ${r.is_fav ? `<span class="badge fav" aria-label="${t("Favorit")}">${ICON.heart}</span>` : ""}`;
   }
 
   // Sisipkan ubin sesuai urutan taken_at (terbaru di atas)
@@ -241,7 +296,7 @@ export async function renderAlbum(root, status) {
       items.set(r.photo_id, r);
       const n = el(`
         <button class="tile${r.hidden ? " is-hidden" : ""}" data-id="${r.photo_id}" data-t="${esc(r.taken_at)}">
-          <img loading="lazy" alt="Foto ${esc(label(r))}" src="${esc(urls[r.thumb_path] || "")}" />
+          <img loading="lazy" alt="${esc(t("Foto {x}", { x: label(r) }))}" src="${esc(urls[r.thumb_path] || "")}" />
           <span class="tile-badges">${tileBadges(r)}</span>
           <span class="check" aria-hidden="true">${ICON.check}</span>
         </button>`);
@@ -251,8 +306,8 @@ export async function renderAlbum(root, status) {
         n.classList.toggle("selected", selected.has(r.photo_id));
         updateSelBar();
       };
-      const t = new Date(r.taken_at);
-      const after = [...grid.children].find((c) => new Date(c.dataset.t) < t);
+      const takenAt = new Date(r.taken_at);
+      const after = [...grid.children].find((c) => new Date(c.dataset.t) < takenAt);
       grid.insertBefore(n, after || null);
     }
   }
@@ -303,7 +358,7 @@ export async function renderAlbum(root, status) {
         endReached = false;
         if (window.scrollY > 300) {
           freshCount += fresh.length;
-          pill.textContent = `↑ ${freshCount} foto baru`;
+          pill.textContent = `↑ ${t("{n} foto baru", { n: freshCount })}`;
           pill.hidden = false;
         }
         loadOwners();
@@ -318,14 +373,14 @@ export async function renderAlbum(root, status) {
   async function getPhotos(ids) {
     if (!ids.length) return false;
     const c = cost(ids);
-    if (!unlimited() && c > quotaLeft()) { toast("Kuota unduhan tidak cukup."); return false; }
+    if (!unlimited() && c > quotaLeft()) { toast(t("Kuota unduhan tidak cukup.")); return false; }
     if (!unlimited() && c > 0 && !(await confirmDialog({
-      title: `Unduh ${ids.length} foto ukuran penuh?`,
-      text: `${c} foto memakai kuota unduhan (sisa ${quotaLeft()}). Kuota yang terpakai tidak kembali.`,
-      ok: "Unduh",
+      title: t("Unduh {n} foto ukuran penuh?", { n: ids.length }),
+      text: t("{c} foto memakai kuota unduhan (sisa {left}). Kuota yang terpakai tidak kembali.", { c, left: quotaLeft() }),
+      ok: t("Unduh"),
     }))) return false;
 
-    const prog = toastProgress(`Menyiapkan ${ids.length} foto…`);
+    const prog = toastProgress(t("Menyiapkan {n} foto…", { n: ids.length }));
     try {
       const rows = await rpc("claim_downloads", { p_event: status.event_id, p_photos: ids });
       status.downloads_used = (status.downloads_used || 0) + c;
@@ -337,11 +392,11 @@ export async function renderAlbum(root, status) {
       let done = 0;
       await Promise.all(rows.map(async (r, i) => {
         const res = await fetch(urls[r.file_path]);
-        if (!res.ok) throw new Error("Gagal mengambil foto");
+        if (!res.ok) throw new Error(t("Gagal mengambil foto"));
         const it = items.get(r.photo_id);
         const who = it?.owner_name ? `${safeName(it.owner_name)}-${String(it.seq).padStart(2, "0")}` : `foto-${i + 1}`;
         files.push({ name: `${safeName(status.name, "album")}-${who}.jpg`, blob: await res.blob() });
-        prog(`Mengambil ${++done} / ${rows.length} foto…`);
+        prog(t("Mengambil {a} / {b} foto…", { a: ++done, b: rows.length }));
       }));
       prog(null);
       await deliver(files);
@@ -361,10 +416,10 @@ export async function renderAlbum(root, status) {
     if (touch && files.length <= 10 && navigator.canShare?.({ files: asFiles })) {
       const { box, close } = modal(`
         <div class="ready">
-          <h3>${files.length} foto siap</h3>
-          <p class="hint">Ketuk Simpan, lalu pilih "Simpan Gambar" / "Simpan ke galeri".</p>
-          <div class="row"><button class="btn ghost" data-act="file">Unduh sebagai file</button>
-          <button class="btn primary" data-act="share">Simpan</button></div>
+          <h3>${t("{n} foto siap", { n: files.length })}</h3>
+          <p class="hint">${t("Ketuk Simpan, lalu pilih \"Simpan Gambar\" / \"Simpan ke galeri\".")}</p>
+          <div class="row"><button class="btn ghost" data-act="file">${t("Unduh sebagai file")}</button>
+          <button class="btn primary" data-act="share">${t("Simpan")}</button></div>
         </div>`);
       box.querySelector('[data-act="share"]').onclick = async () => {
         try { await navigator.share({ files: asFiles }); close(); }
@@ -398,16 +453,16 @@ export async function renderAlbum(root, status) {
       let sent = false;
       const { box, close } = modal(`
         <form class="dialog">
-          <h3>Laporkan foto</h3>
-          <p>Laporan dikirim ke pengelola acara. Nama Anda tidak ditampilkan ke pemotret.</p>
-          <div class="radio-list">${REASONS.map(([v, t, d], i) => `
+          <h3>${t("Laporkan foto")}</h3>
+          <p>${t("Laporan dikirim ke pengelola acara. Nama Anda tidak ditampilkan ke pemotret.")}</p>
+          <div class="radio-list">${REASONS().map(([v, title, d], i) => `
             <label class="radio"><input type="radio" name="reason" value="${v}" ${i === 0 ? "checked" : ""}/>
-              <span><b>${t}</b><small>${d}</small></span></label>`).join("")}
+              <span><b>${title}</b><small>${d}</small></span></label>`).join("")}
           </div>
-          <label>Catatan (opsional) <textarea name="note" rows="2" maxlength="300"></textarea></label>
+          <label>${t("Catatan (opsional)")} <textarea name="note" rows="2" maxlength="300"></textarea></label>
           <div class="dialog-actions">
-            <button type="button" class="btn ghost" data-act="no">Batal</button>
-            <button class="btn primary">Kirim laporan</button>
+            <button type="button" class="btn ghost" data-act="no">${t("Batal")}</button>
+            <button class="btn primary">${t("Kirim laporan")}</button>
           </div>
         </form>`, { onClose: () => resolve(sent) });
       const f = box.querySelector("form");
@@ -419,7 +474,7 @@ export async function renderAlbum(root, status) {
         try {
           await rpc("report_photo", { p_photo: r.photo_id, p_reason: f.elements.reason.value, p_note: f.elements.note.value });
           sent = true;
-          toast("Terima kasih. Laporan dikirim ke pengelola acara.");
+          toast(t("Terima kasih. Laporan dikirim ke pengelola acara."));
           close();
         } catch (err) { toast(friendly(err)); btn.disabled = false; }
       };
@@ -440,21 +495,21 @@ export async function renderAlbum(root, status) {
   function openViewer(startId) {
     let id = startId;
     const box = el(`
-      <div class="lightbox" role="dialog" aria-modal="true" aria-label="Penampil foto">
+      <div class="lightbox" role="dialog" aria-modal="true" aria-label="${t("Penampil foto")}">
         <div class="lb-top">
           <span class="lb-count"></span>
-          <button class="lb-icon" data-act="close" aria-label="Tutup">×</button>
+          <button class="lb-icon" data-act="close" aria-label="${t("Tutup")}">×</button>
         </div>
         <div class="lb-stage"><img class="lb-img" alt="" draggable="false" /></div>
-        <button class="lb-nav prev" data-act="prev" aria-label="Foto sebelumnya">‹</button>
-        <button class="lb-nav next" data-act="next" aria-label="Foto berikutnya">›</button>
+        <button class="lb-nav prev" data-act="prev" aria-label="${t("Foto sebelumnya")}">‹</button>
+        <button class="lb-nav next" data-act="next" aria-label="${t("Foto berikutnya")}">›</button>
         <div class="lb-bar">
           <span class="lb-info"><span class="lb-who"></span><small class="lb-film"></small></span>
           <span class="lb-actions">
-            <button class="btn small icon-btn lb-fav" data-act="fav" aria-pressed="false" aria-label="Favorit">${ICON.heart}</button>
+            <button class="btn small icon-btn lb-fav" data-act="fav" aria-pressed="false" aria-label="${t("Favorit")}">${ICON.heart}</button>
             <button class="btn small" data-act="dl"></button>
             ${status.can_manage ? `<button class="btn small" data-act="hide"></button>` : ""}
-            ${status.can_manage ? "" : `<button class="btn small icon-btn" data-act="report" aria-label="Laporkan foto" title="Laporkan foto">${ICON.flag}</button>`}
+            ${status.can_manage ? "" : `<button class="btn small icon-btn" data-act="report" aria-label="${t("Laporkan foto")}" title="${t("Laporkan foto")}">${ICON.flag}</button>`}
           </span>
         </div>
       </div>`);
@@ -473,19 +528,19 @@ export async function renderAlbum(root, status) {
       const idx = list.indexOf(id);
       box.querySelector(".lb-count").textContent = `${idx + 1} / ${list.length}${endReached ? "" : "+"}`;
       box.querySelector(".lb-who").textContent = `${label(r)} · ${fmtDate(r.taken_at)}`;
-      box.querySelector(".lb-film").textContent = r.film ? `Film ${filmName(r.film)}` : "";
+      box.querySelector(".lb-film").textContent = r.film ? t("Film {f}", { f: t(filmName(r.film)) }) : "";
       box.querySelector('[data-act="prev"]').disabled = idx <= 0;
       box.querySelector('[data-act="next"]').disabled = idx >= list.length - 1 && endReached;
-      box.querySelector('[data-act="dl"]').textContent = r.is_mine || r.downloaded || unlimited() ? "Unduh" : "Unduh (1 kuota)";
+      box.querySelector('[data-act="dl"]').textContent = r.is_mine || r.downloaded || unlimited() ? t("Unduh") : t("Unduh (1 kuota)");
       favBtn.setAttribute("aria-pressed", String(Boolean(r.is_fav)));
-      favBtn.setAttribute("aria-label", r.is_fav ? "Hapus dari favorit" : "Tambah ke favorit");
+      favBtn.setAttribute("aria-label", r.is_fav ? t("Hapus dari favorit") : t("Tambah ke favorit"));
       favBtn.classList.toggle("on", Boolean(r.is_fav));
       if (reportBtn) reportBtn.hidden = r.is_mine;
       const hideBtn = box.querySelector('[data-act="hide"]');
-      if (hideBtn) hideBtn.textContent = r.hidden ? "Tampilkan" : "Sembunyikan";
+      if (hideBtn) hideBtn.textContent = r.hidden ? t("Tampilkan") : t("Sembunyikan");
       setZoom(false);
       img.classList.add("loading");
-      img.alt = `Foto ${label(r)}`;
+      img.alt = t("Foto {x}", { x: label(r) });
       try {
         const url = await mediumUrl(r);
         if (id === r.photo_id) { img.src = url; }
@@ -536,7 +591,7 @@ export async function renderAlbum(root, status) {
       try {
         r.is_fav = await rpc("toggle_favorite", { p_photo: r.photo_id });
         refreshTile(r);
-        toast(r.is_fav ? "Disimpan di Favorit." : "Dihapus dari Favorit.", 1500);
+        toast(r.is_fav ? t("Disimpan di Favorit.") : t("Dihapus dari Favorit."), 1500);
         show();
       } catch (e) { toast(friendly(e)); }
       finally { favBtn.disabled = false; }
@@ -561,13 +616,24 @@ export async function renderAlbum(root, status) {
   const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) loadMore(); }, { rootMargin: "600px" });
   io.observe(view.querySelector(".sentinel"));
   await loadMore();
-  const timer = setInterval(poll, 15000);
+  kickNotify();
+  // Realtime: muat ulang segera saat ada foto baru; polling jarang sebagai cadangan
+  let wait = 0;
+  const off = onAlbumPing(status.event_id, (m) => {
+    if (m.state) return;
+    if (m.kind === "message") return;
+    clearTimeout(wait);
+    wait = setTimeout(() => { poll(); if (m.kind === "closed") kickNotify(true); }, 1200);
+  });
+  // Tanpa realtime: tiap 15 detik seperti dulu. Dengan realtime: cadangan tiap 60 detik.
+  const timer = setInterval(() => { if (!albumLive(status.event_id)) poll(); }, 15000);
+  const slow = setInterval(poll, 60000);
 
-  return () => { clearInterval(timer); io.disconnect(); window.removeEventListener("scroll", onScroll); };
+  return () => { clearInterval(timer); clearInterval(slow); clearTimeout(wait); off(); io.disconnect(); window.removeEventListener("scroll", onScroll); };
 }
 
 // Toast yang bisa diperbarui; panggil dengan null untuk menutup
 function toastProgress(first) {
   toast(first, 60000);
-  return (msg) => (msg ? toast(msg, 60000) : toast("Selesai.", 1200));
+  return (msg) => (msg ? toast(msg, 60000) : toast(t("Selesai."), 1200));
 }

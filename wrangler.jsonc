@@ -1,10 +1,18 @@
 {
-  // Cloudflare Workers dengan static assets: menyajikan hasil build Vite di folder dist.
+  // Cloudflare Workers dengan static assets: menyajikan hasil build Vite di folder dist,
+  // ditambah API foto di R2 (/api/r2/*, lihat worker/index.js).
   // "name" harus sama dengan nama proyek Worker di dasbor Cloudflare.
+  // Bucket R2 harus dibuat lebih dulu (README, bagian R2), kalau tidak deploy gagal.
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "disposable-asiig",
+  "main": "worker/index.js",
   "compatibility_date": "2025-10-01",
   "assets": {
-    "directory": "./dist"
-  }
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "r2_buckets": [
+    { "binding": "PHOTOS", "bucket_name": "disposable-asiig-photos" }
+  ]
 }

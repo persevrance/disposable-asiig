@@ -2,14 +2,16 @@
 import QRCode from "qrcode";
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
-import { getUrls, removeFiles, uploadCover, coverUrl, removeCover, copyCover } from "./storage.js";
+import { getUrls, removeFiles, uploadCover, coverUrl, removeCover, copyCover, removeVoices } from "./storage.js";
+import { pingAlbum } from "./realtime.js";
+import { kickNotify } from "./push.js";
 import { FILMS } from "./film.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
 import { attachZoom } from "./zoom.js";
 import {
   el, esc, toast, fmtDate, toLocalInput, fromLocalInput, download, safeName, modal,
-  confirmDialog, typeToConfirm, copyText, actionSheet, ICON, fmtRange,
+  confirmDialog, typeToConfirm, copyText, actionSheet, ICON, fmtRange, downloadCsv,
 } from "./ui.js";
 
 export const RESOLUTIONS = [1280, 1600, 2048, 2560, 3264, 4096];
@@ -135,6 +137,7 @@ export async function renderPanel(root, status, { reload, home }) {
       <div class="subpanel" data-tab="peserta" role="tabpanel" hidden>
         <div class="member-tools">
           <input type="search" placeholder="Cari nama atau email" aria-label="Cari peserta" data-act="member-search" />
+          <button class="btn small" data-act="member-csv">${ICON.download} Laporan (CSV)</button>
           <select aria-label="Urutkan peserta" data-act="member-sort">
             <option value="joined">Urut waktu masuk</option>
             <option value="shots">Jepretan terbanyak</option>
@@ -239,6 +242,7 @@ export async function renderPanel(root, status, { reload, home }) {
     b.disabled = true;
     try {
       await rpc("set_event", { p_event: status.event_id, p_patch: { is_open: open } });
+      if (!open) { pingAlbum(status.event_id, "closed"); kickNotify(true); }
       toast(open ? "Acara dibuka." : "Acara ditutup.");
       reload();
     } catch (err) { toast(friendly(err)); b.disabled = false; }
@@ -401,6 +405,11 @@ export async function renderPanel(root, status, { reload, home }) {
       return n;
     }));
   }
+  view.querySelector('[data-act="member-csv"]').onclick = () => downloadCsv(`laporan-${safeName(status.name, "acara")}`, [
+    ["name", "Nama"], ["email", "Email"], ["shots_used", "Jepretan"], [() => status.max_shots, "Jatah"],
+    [(m) => (m.shots_used >= status.max_shots ? "ya" : "tidak"), "Film habis"], ["pending", "Belum terunggah"],
+    [(m) => (m.blocked ? "ya" : "tidak"), "Diblokir"], [(m) => fmtDate(m.joined_at), "Masuk"],
+  ], members);
   searchBox.oninput = renderMembers;
   sortBox.onchange = renderMembers;
 
@@ -516,6 +525,10 @@ export async function deleteEventFiles(eventId, coverPath) {
   const rows = await rpc("owner_paths", { p_event: eventId });
   await removeFiles(rows.flatMap((r) => [r.file_path, r.thumb_path, r.medium_path].filter(Boolean)));
   await removeCover(coverPath).catch(() => {});
+  // Rekaman suara buku tamu (database lama belum punya fungsinya: lewati)
+  const voices = await rpc("owner_voice_paths", { p_event: eventId }).catch(() => []);
+  const vp = voices.map((v) => (typeof v === "string" ? v : v.owner_voice_paths)).filter(Boolean);
+  if (vp.length) await removeVoices(vp).catch(() => {});
 }
 
 // Gulungan satu tamu: semua jepretannya, termasuk yang belum tampil di album

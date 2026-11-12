@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { t } from "./i18n.js";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -47,6 +48,18 @@ const MESSAGES = {
   FOTO_TIDAK_ADA: "Foto tidak ditemukan atau belum bisa dilihat.",
   ALASAN_TIDAK_VALID: "Pilih alasan laporan.",
   AKSI_TIDAK_VALID: "Aksi tidak dikenal.",
+  LANGGANAN_TIDAK_VALID: "Langganan notifikasi tidak valid.",
+  UCAPAN_PENUH: "Anda sudah mengirim 3 ucapan di acara ini.",
+  UCAPAN_KOSONG: "Tulis ucapan atau rekam suara dulu.",
+  UCAPAN_TIDAK_ADA: "Ucapan tidak ditemukan.",
+  FORMAT_SUARA: "Format rekaman tidak didukung.",
+  PERMINTAAN_SUDAH_ADA: "Permintaan yang sama masih diproses.",
+  PERMINTAAN_TIDAK_ADA: "Permintaan tidak ditemukan.",
+  PERMINTAAN_SELESAI: "Permintaan ini sudah diproses.",
+  MASIH_PUNYA_ACARA: "Akun ini masih memiliki acara. Hapus atau pindahkan acaranya dulu.",
+  R2_BELUM_SIAP: "Penyimpanan R2 belum siap. Periksa pengaturan Worker.",
+  TIDAK_BOLEH_UNGGAH: "Unggahan ditolak.",
+  URL_KEDALUWARSA: "Link foto kedaluwarsa. Muat ulang halaman.",
 };
 
 export function errorCode(e) {
@@ -56,7 +69,7 @@ export function errorCode(e) {
 
 export function friendly(e) {
   const c = errorCode(e);
-  if (c) return MESSAGES[c];
-  if (!navigator.onLine) return "Tidak ada koneksi internet.";
-  return "Terjadi kesalahan: " + (e?.message || e);
+  if (c) return t(MESSAGES[c]);
+  if (!navigator.onLine) return t("Tidak ada koneksi internet.");
+  return t("Terjadi kesalahan: ") + (e?.message || e);
 }

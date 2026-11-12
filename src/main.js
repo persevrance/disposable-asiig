@@ -7,9 +7,13 @@ import { renderSlideshow } from "./slideshow.js";
 import "./install.js"; // tangkap prompt pasang aplikasi sedini mungkin
 import { renderPanel } from "./owner.js";
 import { renderAdmin, createEventDialog } from "./admin.js";
-import { coverUrl } from "./storage.js";
+import { renderGuestbook } from "./guestbook.js";
+import { openPrivacy } from "./privacy.js";
+import { coverUrl, setStorageBackend } from "./storage.js";
+import { setVapidKey } from "./push.js";
 import { inAppBrowser, isAndroid, chromeIntentUrl } from "./camera.js";
 import { el, esc, toast, copyText, ICON, badge, BRAND, fmtRange } from "./ui.js";
+import { t, langSwitch, bindLangSwitch } from "./i18n.js";
 
 const app = document.getElementById("app");
 let cleanup = () => {};
@@ -72,23 +76,25 @@ function renderLogin() {
   const shareLink = code ? `${location.origin}/?kode=${code}` : location.origin;
   setView(el(`
     <main class="center">
+      ${langSwitch()}
       <div class="logo">${BRAND}</div>
       <h1 class="brand">Disposable Asiig</h1>
-      <p class="lead">Kamera sekali pakai untuk acara bersama. Jepretan terbatas, tanpa hapus dan tanpa ulang. Semua foto terbuka bersamaan setelah film habis.</p>
-      ${code ? `<p class="pill">Undangan acara: <b>${esc(code)}</b></p>` : ""}
+      <p class="lead">${t("Kamera sekali pakai untuk acara bersama. Jepretan terbatas, tanpa hapus dan tanpa ulang. Semua foto terbuka bersamaan setelah film habis.")}</p>
+      ${code ? `<p class="pill">${t("Undangan acara:")} <b>${esc(code)}</b></p>` : ""}
       ${inAppBrowser() ? `
         <div class="card warn-card">
-          <b>Buka di Chrome atau Safari dulu</b>
-          <p>Link ini terbuka di dalam aplikasi (WhatsApp/Instagram/dll.). Google menolak login dari sini dan kamera bisa terblokir.
-          Ketuk menu <b>⋮</b> atau <b>⋯</b> lalu pilih <b>"Buka di browser"</b> / <b>"Buka di Safari"</b>.</p>
+          <b>${t("Buka di Chrome atau Safari dulu")}</b>
+          <p>${t("Link ini terbuka di dalam aplikasi (WhatsApp/Instagram/dll.). Google menolak login dari sini dan kamera bisa terblokir.")}
+          ${t("Ketuk menu ⋮ atau ⋯ lalu pilih \"Buka di browser\" / \"Buka di Safari\".")}</p>
           <div class="row">
-            ${isAndroid() ? `<a class="btn small primary" href="${esc(chromeIntentUrl(shareLink))}">Buka di Chrome</a>` : ""}
-            <button class="btn small" data-act="copy">Salin link</button>
+            ${isAndroid() ? `<a class="btn small primary" href="${esc(chromeIntentUrl(shareLink))}">${t("Buka di Chrome")}</a>` : ""}
+            <button class="btn small" data-act="copy">${t("Salin link")}</button>
           </div>
         </div>` : ""}
-      <button class="btn primary big" data-act="google">Masuk dengan Google</button>
-      <p class="fine"><a href="/privacy.html">Kebijakan privasi</a></p>
+      <button class="btn primary big" data-act="google">${t("Masuk dengan Google")}</button>
+      <p class="fine"><a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
     </main>`));
+  bindLangSwitch(app);
   app.querySelector('[data-act="google"]').onclick = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
@@ -98,8 +104,8 @@ function renderLogin() {
   };
   const copy = app.querySelector('[data-act="copy"]');
   if (copy) copy.onclick = () => copyText(shareLink, {
-    done: "Link disalin. Tempel di Chrome/Safari.",
-    title: "Salin link lalu buka di Chrome/Safari",
+    done: t("Link disalin. Tempel di Chrome/Safari."),
+    title: t("Salin link lalu buka di Chrome/Safari"),
   });
 }
 
@@ -109,21 +115,23 @@ async function renderJoin(code) {
   try { ev = (await rpc("event_preview", { p_code: code }))[0] || null; } catch { /* tampilkan tanpa pratinjau */ }
   setView(el(`
     <main class="center">
-      ${ev?.cover_path ? `<img class="join-cover" alt="Sampul acara" src="${esc(coverUrl(ev.cover_path))}" />` : `<div class="logo">${badge("sparkle", "sun", "xl")}</div>`}
-      <h1>${ev ? esc(ev.name) : "Masuk acara"}</h1>
+      ${langSwitch()}
+      ${ev?.cover_path ? `<img class="join-cover" alt="${t("Sampul acara")}" src="${esc(coverUrl(ev.cover_path))}" />` : `<div class="logo">${badge("sparkle", "sun", "xl")}</div>`}
+      <h1>${ev ? esc(ev.name) : t("Masuk acara")}</h1>
       ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
-      <p class="pill">Kode: <b>${esc(code)}</b>${ev ? ` · ${ev.max_shots} jepretan` : ""}</p>
+      <p class="pill">${t("Kode:")} <b>${esc(code)}</b>${ev ? ` · ${t("{n} jepretan", { n: ev.max_shots })}` : ""}</p>
       ${ev?.starts_at || ev?.ends_at ? `<p class="join-when">${ICON.calendar}<span>${esc(fmtRange(ev.starts_at, ev.ends_at))}</span></p>` : ""}
-      ${ev && !ev.is_open ? `<p class="hint">Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.</p>` : ""}
+      ${ev && !ev.is_open ? `<p class="hint">${t("Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.")}</p>` : ""}
       <ul class="rules">
-        <li>${badge("film", "coral")}<div><b>${ev ? `${ev.max_shots} jepretan` : "Jepretan terbatas"}</b><span>Seperti satu gulungan film. Pilih momen terbaik.</span></div></li>
-        <li>${badge("lock", "grape")}<div><b>Tanpa hapus, tanpa ulang</b><span>Setiap jepretan langsung tercetak dan tidak bisa dilihat dulu.</span></div></li>
-        <li>${badge("sparkle", "mint")}<div><b>Terbuka bersama</b><span>Foto Anda tampil untuk semua peserta setelah film Anda habis atau acara ditutup.</span></div></li>
+        <li>${badge("film", "coral")}<div><b>${ev ? t("{n} jepretan", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Seperti satu gulungan film. Pilih momen terbaik.")}</span></div></li>
+        <li>${badge("lock", "grape")}<div><b>${t("Tanpa hapus, tanpa ulang")}</b><span>${t("Setiap jepretan langsung tercetak dan tidak bisa dilihat dulu.")}</span></div></li>
+        <li>${badge("sparkle", "mint")}<div><b>${t("Terbuka bersama")}</b><span>${t("Foto Anda tampil untuk semua peserta setelah film Anda habis atau acara ditutup.")}</span></div></li>
       </ul>
-      <button class="btn primary big" data-act="yes">Setuju dan masuk</button>
-      <button class="btn ghost" data-act="no">Batal</button>
-      <p class="fine"><a href="/privacy.html">Kebijakan privasi</a></p>
+      <button class="btn primary big" data-act="yes">${t("Setuju dan masuk")}</button>
+      <button class="btn ghost" data-act="no">${t("Batal")}</button>
+      <p class="fine"><a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
     </main>`));
+  bindLangSwitch(app);
   app.querySelector('[data-act="no"]').onclick = () => {
     localStorage.removeItem("pendingCode");
     location.hash = "#/";
@@ -153,25 +161,28 @@ async function renderHome() {
         <h1 class="brand">Disposable Asiig</h1>
         <div class="row tight">
           <a class="btn small" href="#/admin" data-admin hidden>Dashboard</a>
-          <button class="btn small ghost" data-act="logout">Keluar</button>
+          <button class="btn small ghost" data-act="logout">${t("Keluar")}</button>
         </div>
       </header>
       <form class="card join-hero">
-        <h2>Masuk ke acara</h2>
-        <label class="join-label" for="join-code">Kode acara</label>
+        <h2>${t("Masuk ke acara")}</h2>
+        <label class="join-label" for="join-code">${t("Kode acara")}</label>
         <div class="code-row">
           <input id="join-code" class="code-input" name="code" placeholder="ABC123" maxlength="12"
                  autocapitalize="characters" autocomplete="off" spellcheck="false" required />
-          <button class="btn primary">Masuk</button>
+          <button class="btn primary">${t("Masuk")}</button>
         </div>
-        <p class="hint">Kode 6 huruf ada di undangan. Atau scan QR undangan dengan kamera HP; linknya langsung membuka acara.</p>
+        <p class="hint">${t("Kode 6 huruf ada di undangan. Atau scan QR undangan dengan kamera HP; linknya langsung membuka acara.")}</p>
       </form>
       <div class="creator-slot"></div>
-      <h2 class="section-title" hidden>Acara di perangkat ini</h2>
-      <div class="events"><p class="hint">Memuat…</p></div>
-      <p class="fine">Masuk sebagai ${esc(session.user.email)} · <a href="/privacy.html">Privasi</a></p>
+      <h2 class="section-title" hidden>${t("Acara di perangkat ini")}</h2>
+      <div class="events"><p class="hint">${t("Memuat…")}</p></div>
+      <p class="fine">${t("Masuk sebagai")} ${esc(session.user.email)} · <button class="linklike fine-link" data-act="privacy">${t("Data & privasi")}</button> · <a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
+      <div class="home-lang">${langSwitch()}</div>
     </main>`);
   setView(view);
+  bindLangSwitch(view);
+  view.querySelector('[data-act="privacy"]').onclick = () => openPrivacy();
 
   view.querySelector('[data-act="logout"]').onclick = async () => {
     forgetJoined();
@@ -197,11 +208,11 @@ async function renderHome() {
           <a class="card event-item" href="#/e/${ev.event_id}">
             <div>
               <b>${esc(ev.name)}</b>
-              <small>${ev.is_owner ? "Pemilik · " : ""}${ev.is_open ? "Terbuka" : "Ditutup"}</small>
+              <small>${ev.is_owner ? `${t("Pemilik")} · ` : ""}${ev.is_open ? t("Terbuka") : t("Ditutup")}</small>
             </div>
-            <span class="mini-counter" aria-label="Sisa ${Math.max(0, ev.max_shots - ev.shots_used)} dari ${ev.max_shots} jepretan">${Math.max(0, ev.max_shots - ev.shots_used)}<small>/${ev.max_shots}</small></span>
+            <span class="mini-counter" aria-label="${t("Sisa {n} dari {max} jepretan", { n: Math.max(0, ev.max_shots - ev.shots_used), max: ev.max_shots })}">${Math.max(0, ev.max_shots - ev.shots_used)}<small>/${ev.max_shots}</small></span>
           </a>`))
-      : [el(`<div class="empty-home"><div class="logo">${badge("film", "coral", "lg")}</div><p>Belum ada acara di perangkat ini.<br>Masukkan kode di atas untuk mulai memotret.</p></div>`)]));
+      : [el(`<div class="empty-home"><div class="logo">${badge("film", "coral", "lg")}</div><p>${t("Belum ada acara di perangkat ini.")}<br>${t("Masukkan kode di atas untuk mulai memotret.")}</p></div>`)]));
 
     // Pembuat acara: buat dan kelola acara dari Dashboard
     if (canCreate) {
@@ -230,7 +241,7 @@ async function renderEvent(eventId, tab) {
     toast(friendly(e));
   }
   if (!status) {
-    toast("Acara tidak ditemukan atau Anda bukan peserta.");
+    toast(t("Acara tidak ditemukan atau Anda bukan peserta."));
     location.hash = "#/";
     return;
   }
@@ -245,18 +256,20 @@ async function renderEvent(eventId, tab) {
     return;
   }
   if (tab === "panel" && !status.can_manage) tab = "kamera";
+  if (tab === "ucapan" && !status.is_member && !status.can_manage) tab = "album";
   if (tab === "kamera" && !status.is_member) tab = status.can_manage ? "panel" : "album"; // superadmin bukan peserta
 
   const view = el(`
     <main class="event${tab === "kamera" ? " cam-mode" : " wide"}">
       ${status.cover_path ? `<div class="event-cover" style="background-image:url('${esc(coverUrl(status.cover_path))}')"></div>` : ""}
       <header class="top">
-        <a class="back" href="${status.is_admin && !status.is_member ? "#/admin/acara" : "#/"}" aria-label="Kembali">‹</a>
+        <a class="back" href="${status.is_admin && !status.is_member ? "#/admin/acara" : "#/"}" aria-label="${t("Kembali")}">‹</a>
         <h1>${esc(status.name)}</h1>
       </header>
       <nav class="tabs">
-        ${status.is_member ? `<a href="#/e/${eventId}" class="${tab === "kamera" ? "on" : ""}" ${tab === "kamera" ? 'aria-current="page"' : ""}>${ICON.camera}<span>Kamera</span></a>` : ""}
-        <a href="#/e/${eventId}/album" class="${tab === "album" ? "on" : ""}" ${tab === "album" ? 'aria-current="page"' : ""}>${ICON.album}<span>Album</span></a>
+        ${status.is_member ? `<a href="#/e/${eventId}" class="${tab === "kamera" ? "on" : ""}" ${tab === "kamera" ? 'aria-current="page"' : ""}>${ICON.camera}<span>${t("Kamera")}</span></a>` : ""}
+        <a href="#/e/${eventId}/album" class="${tab === "album" ? "on" : ""}" ${tab === "album" ? 'aria-current="page"' : ""}>${ICON.album}<span>${t("Album")}</span></a>
+        <a href="#/e/${eventId}/ucapan" class="${tab === "ucapan" ? "on" : ""}" ${tab === "ucapan" ? 'aria-current="page"' : ""}>${ICON.chat}<span>${t("Ucapan")}</span></a>
         ${status.can_manage ? `<a href="#/e/${eventId}/panel" class="${tab === "panel" ? "on" : ""}" ${tab === "panel" ? 'aria-current="page"' : ""}>${ICON.panel}<span>Panel</span></a>` : ""}
       </nav>
       <div class="tab-body"></div>
@@ -265,23 +278,37 @@ async function renderEvent(eventId, tab) {
   document.body.classList.add("has-bottom-nav");
   document.body.classList.toggle("cam-page", tab === "kamera");
   const body = view.querySelector(".tab-body");
-  const go = (t) => { location.hash = `#/e/${eventId}${t === "kamera" ? "" : "/" + t}`; };
+  const go = (to) => { location.hash = `#/e/${eventId}${to === "kamera" ? "" : "/" + to}`; };
 
   if (tab === "album") cleanup = await renderAlbum(body, status);
+  else if (tab === "ucapan") cleanup = await renderGuestbook(body, status);
   else if (tab === "panel") cleanup = await renderPanel(body, status, { reload: route, home: () => (location.hash = "#/") });
   else cleanup = await renderCamera(body, status, go);
+}
+
+// Pengaturan global yang dipakai seluruh aplikasi: lokasi foto (Supabase/R2) dan kunci notifikasi
+let settingsFor = null;
+async function loadSettings() {
+  if (!session || settingsFor === session.user.id) return;
+  try {
+    const s = await rpc("get_settings");
+    setStorageBackend(s?.storage_backend);
+    setVapidKey(s?.vapid_public_key);
+    settingsFor = session.user.id;
+  } catch { /* tetap pakai bawaan: Supabase Storage, tanpa notifikasi */ }
 }
 
 // ---------- Router ----------
 async function route() {
   if (!session) return renderLogin();
+  await loadSettings();
   const pending = localStorage.getItem("pendingCode");
   if (pending) return renderJoin(pending);
   const back = takePendingHash();
   if (back && back !== location.hash) { location.hash = back; return; } // hashchange memanggil route lagi
   const a = location.hash.match(/^#\/admin(?:\/(\w+))?/);
   if (a) return renderAdmin(app, a[1] || "ringkasan", { setView, me: session.user });
-  const m = location.hash.match(/^#\/e\/([0-9a-f-]{36})(?:\/(album|panel|layar))?/);
+  const m = location.hash.match(/^#\/e\/([0-9a-f-]{36})(?:\/(album|panel|layar|ucapan))?/);
   if (m) return renderEvent(m[1], m[2] || "kamera");
   return renderHome();
 }
@@ -306,7 +333,7 @@ async function boot() {
     if (document.visibilityState === "visible" && session) flushQueue();
   });
   await route();
-  if (session) flushQueue();
+  if (session) { await loadSettings(); flushQueue(); }
 }
 
 // Kerangka aplikasi disimpan di HP supaya tetap terbuka saat sinyal hilang

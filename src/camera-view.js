@@ -8,6 +8,7 @@ import { shoot, flushQueue } from "./shoot.js";
 import { queue } from "./queue.js";
 import { rpc, friendly, errorCode } from "./supabase.js";
 import { el, esc, toast, confetti, modal, fmtDate, ICON, badge } from "./ui.js";
+import { t } from "./i18n.js";
 
 const ICON_FLIP = `<svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><path d="M9.5 13.5a3 3 0 0 1 5-2.2M14.5 11.3V9.5h-1.8M14.5 12.5a3 3 0 0 1-5 2.2M9.5 14.7v1.8h1.8"/></svg>`;
 const ICON_FLASH = `<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>`;
@@ -73,26 +74,26 @@ export async function renderCamera(root, status, go) {
         <div class="vf-top">
           <button class="film-badge" data-act="film"></button>
           <span class="vf-right">
-            <button class="vf-btn icon-only" data-act="sound" aria-pressed="true" aria-label="Suara rana">${ICON_SOUND}</button>
-            <button class="vf-btn" data-act="flash" aria-pressed="false" hidden>${ICON_FLASH}<span>Mati</span></button>
+            <button class="vf-btn icon-only" data-act="sound" aria-pressed="true" aria-label="${t("Suara rana")}">${ICON_SOUND}</button>
+            <button class="vf-btn" data-act="flash" aria-pressed="false" hidden>${ICON_FLASH}<span>${t("Mati")}</span></button>
           </span>
         </div>
         <div class="vf-diag" hidden></div>
         <div class="vf-placeholder">
-          <p>Kamera belum dibuka.</p>
-          <button class="btn primary" data-act="open">Buka kamera</button>
+          <p>${t("Kamera belum dibuka.")}</p>
+          <button class="btn primary" data-act="open">${t("Buka kamera")}</button>
           <label class="btn ghost file-fallback" hidden>
-            Ambil foto dengan aplikasi kamera
+            ${t("Ambil foto dengan aplikasi kamera")}
             <input type="file" accept="image/*" capture="environment" hidden />
           </label>
         </div>
-        <div class="developing" hidden>Mencuci foto…</div>
+        <div class="developing" hidden>${t("Mencuci foto…")}</div>
         <div class="flash"></div>
       </div>
       <div class="controls">
-        <button class="ctl" data-act="flip" aria-label="Balik kamera" disabled>${ICON_FLIP}</button>
-        <button class="shutter" data-act="shoot" aria-label="Jepret" disabled></button>
-        <div class="ctl counter" aria-live="polite"><b>--</b><small>sisa</small></div>
+        <button class="ctl" data-act="flip" aria-label="${t("Balik kamera")}" disabled>${ICON_FLIP}</button>
+        <button class="shutter" data-act="shoot" aria-label="${t("Jepret")}" disabled></button>
+        <div class="ctl counter" aria-live="polite"><b>--</b><small>${t("sisa")}</small></div>
       </div>
       <p class="cam-hint" aria-live="polite"></p>
       <p class="queue-note" hidden></p>
@@ -128,9 +129,9 @@ export async function renderCamera(root, status, go) {
   function updateSoundBtn() {
     soundBtn.setAttribute("aria-pressed", String(soundOn));
     soundBtn.classList.toggle("muted", !soundOn);
-    soundBtn.title = soundOn ? "Suara rana nyala" : "Suara rana mati";
+    soundBtn.title = soundOn ? t("Suara rana nyala") : t("Suara rana mati");
   }
-  soundBtn.onclick = () => { soundOn = !soundOn; saveSound(soundOn); updateSoundBtn(); toast(soundOn ? "Suara rana nyala" : "Suara rana mati", 1500); };
+  soundBtn.onclick = () => { soundOn = !soundOn; saveSound(soundOn); updateSoundBtn(); toast(soundOn ? t("Suara rana nyala") : t("Suara rana mati"), 1500); };
 
   // ---- Efek film: bawaan acara, atau pilihan tamu jika diizinkan ----
   function currentFilm() {
@@ -139,9 +140,9 @@ export async function renderCamera(root, status, go) {
     return FILMS[mine] ? mine : status.film || "asli";
   }
   function updateFilmBtn() {
-    filmBtn.innerHTML = `${ICON.film}<span>${esc(filmName(currentFilm()))}</span>${status.allow_film_choice ? ICON.chevronDown : ""}`;
+    filmBtn.innerHTML = `${ICON.film}<span>${esc(t(filmName(currentFilm())))}</span>${status.allow_film_choice ? ICON.chevronDown : ""}`;
     filmBtn.disabled = !status.allow_film_choice;
-    filmBtn.setAttribute("aria-label", status.allow_film_choice ? `Efek film: ${filmName(currentFilm())}. Ketuk untuk mengganti` : `Efek film: ${filmName(currentFilm())}`);
+    filmBtn.setAttribute("aria-label", status.allow_film_choice ? t("Efek film: {f}. Ketuk untuk mengganti", { f: t(filmName(currentFilm())) }) : t("Efek film: {f}", { f: t(filmName(currentFilm())) }));
   }
   filmBtn.onclick = () => { if (status.allow_film_choice) openFilmPicker(); };
 
@@ -149,10 +150,10 @@ export async function renderCamera(root, status, go) {
   function openFilmPicker() {
     const sample = grabSmall(video);
     const sheet = el(`
-      <div class="sheet" role="dialog" aria-modal="true" aria-label="Pilih efek film">
+      <div class="sheet" role="dialog" aria-modal="true" aria-label="${t("Pilih efek film")}">
         <div class="sheet-card">
-          <div class="sheet-head"><h3>Pilih efek film</h3><button class="btn small" data-act="close">Tutup</button></div>
-          <p class="hint">Efek langsung tercetak di foto dan tidak bisa diubah setelah dijepret. Boleh ganti kapan saja untuk jepretan berikutnya.</p>
+          <div class="sheet-head"><h3>${t("Pilih efek film")}</h3><button class="btn small" data-act="close">${t("Tutup")}</button></div>
+          <p class="hint">${t("Efek langsung tercetak di foto dan tidak bisa diubah setelah dijepret. Boleh ganti kapan saja untuk jepretan berikutnya.")}</p>
           <div class="film-list"></div>
         </div>
       </div>`);
@@ -162,9 +163,9 @@ export async function renderCamera(root, status, go) {
       const item = el(`
         <button class="film-item${id === now ? " on" : ""}" data-id="${id}" aria-pressed="${id === now}">
           <span class="film-thumb"></span>
-          <b>${esc(f.name)}</b>
-          <small>${esc(f.desc)}</small>
-          ${id === status.film ? `<span class="tag">bawaan acara</span>` : ""}
+          <b>${esc(t(f.name))}</b>
+          <small>${esc(t(f.desc))}</small>
+          ${id === status.film ? `<span class="tag">${t("bawaan acara")}</span>` : ""}
         </button>`);
       const thumb = item.querySelector(".film-thumb");
       if (sample) {
@@ -180,7 +181,7 @@ export async function renderCamera(root, status, go) {
         saveFilm(status.event_id, id);
         updateFilmBtn();
         close();
-        toast(`Efek film: ${f.name}`);
+        toast(t("Efek film: {f}", { f: t(f.name) }));
       };
       list.append(item);
     }
@@ -229,15 +230,15 @@ export async function renderCamera(root, status, go) {
     const waiting = (await queue.forEvent(status.event_id)).length;
     setCounter(left);
     hint.textContent = status.reveal_at && new Date(status.reveal_at) > new Date()
-      ? `Semua foto terbuka ${fmtDate(status.reveal_at)}.`
-      : left > 0 ? `Foto Anda terbuka di album setelah ${left} jepretan lagi.` : "";
+      ? t("Semua foto terbuka {d}.", { d: fmtDate(status.reveal_at) })
+      : left > 0 ? t("Foto Anda terbuka di album setelah {n} jepretan lagi.", { n: left }) : "";
     note.hidden = waiting === 0;
-    note.textContent = `${waiting} foto tersimpan di HP dan akan terkirim otomatis saat ada sinyal.`;
+    note.textContent = t("{n} foto tersimpan di HP dan akan terkirim otomatis saat ada sinyal.", { n: waiting });
     const blocked = status.blocked || !status.is_open || left <= 0;
     shutter.disabled = busy || blocked || (!stream && fileLabel.hidden);
-    if (left <= 0 && !status.blocked) showDone("Film habis", "Gulungan Anda selesai. Foto Anda akan tampil di album bersama peserta lain.", true);
-    else if (!status.is_open) showDone("Acara ditutup", "Pemotretan sudah selesai.");
-    else if (status.blocked) showDone("Akses dihentikan", "Pemilik acara menghentikan akses Anda.");
+    if (left <= 0 && !status.blocked) showDone(t("Film habis"), t("Gulungan Anda selesai. Foto Anda akan tampil di album bersama peserta lain."), true);
+    else if (!status.is_open) showDone(t("Acara ditutup"), t("Pemotretan sudah selesai."));
+    else if (status.blocked) showDone(t("Akses dihentikan"), t("Pemilik acara menghentikan akses Anda."));
   }
 
   let done = false;
@@ -252,7 +253,7 @@ export async function renderCamera(root, status, go) {
         <div class="film-icon">${badge(party ? "sparkle" : "film", party ? "sun" : "coral", "xl")}</div>
         <h2>${esc(title)}</h2>
         <p>${esc(text)}</p>
-        <button class="btn primary">Lihat album</button>
+        <button class="btn primary">${t("Lihat album")}</button>
       </div>`));
     view.querySelector("button").onclick = () => go("album");
     if (party) confetti();
@@ -269,8 +270,8 @@ export async function renderCamera(root, status, go) {
     flashBtn.hidden = !avail;
     flashBtn.setAttribute("aria-pressed", String(flashOn));
     flashBtn.classList.toggle("on", flashOn);
-    flashBtn.querySelector("span").textContent = flashOn ? "Nyala" : "Mati";
-    flashBtn.title = facing === "user" ? "Flash layar" : "Flash";
+    flashBtn.querySelector("span").textContent = flashOn ? t("Nyala") : t("Mati");
+    flashBtn.title = facing === "user" ? t("Flash layar") : "Flash";
   }
   flashBtn.onclick = () => {
     flashOn = !flashOn;
@@ -355,7 +356,7 @@ export async function renderCamera(root, status, go) {
     if (dark && !reportedDark) { reportedDark = true; report("DARK_FRAMES", `luma=${luma} ${diag()}`); }
     diagBox.hidden = !(dark || debug);
     if (!diagBox.hidden) {
-      diagBox.textContent = (dark ? "Gambar dari kamera hitam. Tutup lensa? Coba balik kamera. " : "") +
+      diagBox.textContent = (dark ? t("Gambar dari kamera hitam. Tutup lensa? Coba balik kamera.") + " " : "") +
         `frames=${frames} luma=${luma} ` + diag();
     }
   }
@@ -378,8 +379,7 @@ export async function renderCamera(root, status, go) {
       placeholder.hidden = true;
     } else {
       report("BLACK_VIEWFINDER", diag());
-      msg.textContent = "Jendela bidik tetap hitam. Matikan Mode Daya Rendah (Pengaturan -> Baterai) lalu coba lagi, " +
-        "atau gunakan tombol aplikasi kamera di bawah. " + diag();
+      msg.textContent = t("Jendela bidik tetap hitam. Matikan Mode Daya Rendah (Pengaturan -> Baterai) lalu coba lagi, atau gunakan tombol aplikasi kamera di bawah.") + " " + diag();
       fileLabel.hidden = false;
     }
     refresh();
@@ -394,7 +394,7 @@ export async function renderCamera(root, status, go) {
       updateFlashBtn();
       placeholder.hidden = false;
       openBtn.disabled = true;
-      msg.textContent = "Membuka kamera…";
+      msg.textContent = t("Membuka kamera…");
       stream = await openCamera(video, facing, status.photo_max_side || 2560);
       flip.disabled = (await cameraCount()) < 2;
       updateFlashBtn();
@@ -403,16 +403,16 @@ export async function renderCamera(root, status, go) {
         placeholder.hidden = true;
       } else {
         // iOS menahan pemutaran otomatis: minta satu ketukan lagi
-        msg.textContent = "Kamera siap. Ketuk Mulai untuk menyalakan jendela bidik.";
-        openBtn.textContent = "Mulai";
+        msg.textContent = t("Kamera siap. Ketuk Mulai untuk menyalakan jendela bidik.");
+        openBtn.textContent = t("Mulai");
         openBtn.disabled = false;
         openBtn.onclick = kick;
       }
     } catch (e) {
-      const help = CAMERA_HELP[e.code] || CAMERA_HELP.OTHER;
+      const help = t(CAMERA_HELP[e.code] || CAMERA_HELP.OTHER);
       report(e.code || "OTHER", `${e.detail || e.message || ""} ${diag()}`);
-      msg.textContent = help + (e.detail ? ` (${e.detail})` : "") + " Sementara itu, foto bisa diambil dengan tombol di bawah.";
-      openBtn.textContent = "Coba lagi";
+      msg.textContent = help + (e.detail ? ` (${e.detail})` : "") + " " + t("Sementara itu, foto bisa diambil dengan tombol di bawah.");
+      openBtn.textContent = t("Coba lagi");
       openBtn.disabled = false;
       fileLabel.hidden = false;
     }
@@ -433,10 +433,10 @@ export async function renderCamera(root, status, go) {
       await refresh(); // penghitung turun segera (foto sudah di antrean)
       await p;
     } catch (e) {
-      if (e.code === "FILE_LAMA") toast("Foto itu bukan jepretan baru. Ambil foto langsung dengan kamera.", 5000);
+      if (e.code === "FILE_LAMA") toast(t("Foto itu bukan jepretan baru. Ambil foto langsung dengan kamera."), 5000);
       else {
         if (!errorCode(e) && navigator.onLine) report("SHOT_FAILED", e?.message || e);
-        toast(errorCode(e) ? friendly(e) : "Foto tersimpan di HP, akan dikirim saat koneksi kembali.");
+        toast(errorCode(e) ? friendly(e) : t("Foto tersimpan di HP, akan dikirim saat koneksi kembali."));
       }
     } finally {
       developing.hidden = true;
@@ -450,7 +450,7 @@ export async function renderCamera(root, status, go) {
   flip.onclick = () => { facing = facing === "user" ? "environment" : "user"; start(); };
   shutter.onclick = () => {
     if (!stream) return;
-    if (!video.videoWidth || video.paused) return toast("Jendela bidik belum menyala. Ketuk Mulai dulu.");
+    if (!video.videoWidth || video.paused) return toast(t("Jendela bidik belum menyala. Ketuk Mulai dulu."));
     if (soundOn) primeAudio();
     take(async () => {
       // Ambil bingkai saat flash menyala, lalu olah setelah flash padam
@@ -488,11 +488,11 @@ export async function renderCamera(root, status, go) {
   function showIntro() {
     const reveal = status.reveal_at && new Date(status.reveal_at) > new Date();
     const steps = [
-      [badge("film", "coral", "lg"), `${status.max_shots} jepretan`, `Anda punya satu gulungan berisi ${status.max_shots} jepretan. Pilih momen terbaik.`],
-      [badge("lock", "grape", "lg"), "Tanpa hapus, tanpa ulang", "Seperti kamera film: setiap jepretan langsung tercetak dan tidak bisa dilihat dulu."],
-      [badge("sparkle", "mint", "lg"), reveal ? "Terbuka bersamaan" : "Terbuka setelah film habis",
-        reveal ? `Semua foto tamu muncul di album ${fmtDate(status.reveal_at)}.`
-               : "Foto Anda muncul di album setelah jepretan terakhir, bersama foto tamu lain."],
+      [badge("film", "coral", "lg"), t("{n} jepretan", { n: status.max_shots }), t("Anda punya satu gulungan berisi {n} jepretan. Pilih momen terbaik.", { n: status.max_shots })],
+      [badge("lock", "grape", "lg"), t("Tanpa hapus, tanpa ulang"), t("Seperti kamera film: setiap jepretan langsung tercetak dan tidak bisa dilihat dulu.")],
+      [badge("sparkle", "mint", "lg"), reveal ? t("Terbuka bersamaan") : t("Terbuka setelah film habis"),
+        reveal ? t("Semua foto tamu muncul di album {d}.", { d: fmtDate(status.reveal_at) })
+               : t("Foto Anda muncul di album setelah jepretan terakhir, bersama foto tamu lain.")],
     ];
     return new Promise((resolve) => {
       let i = 0, go = false;
@@ -503,8 +503,8 @@ export async function renderCamera(root, status, go) {
           <p></p>
           <div class="intro-dots" aria-hidden="true">${steps.map(() => "<i></i>").join("")}</div>
           <div class="dialog-actions">
-            <button class="btn ghost" data-act="skip">Lewati</button>
-            <button class="btn primary" data-act="next" autofocus>Lanjut</button>
+            <button class="btn ghost" data-act="skip">${t("Lewati")}</button>
+            <button class="btn primary" data-act="next" autofocus>${t("Lanjut")}</button>
           </div>
         </div>`, { onClose: () => resolve(go) });
       const show = () => {
@@ -513,7 +513,7 @@ export async function renderCamera(root, status, go) {
         box.querySelector("h3").textContent = title;
         box.querySelector("p").textContent = text;
         box.querySelectorAll(".intro-dots i").forEach((d, n) => d.classList.toggle("on", n === i));
-        box.querySelector('[data-act="next"]').textContent = i === steps.length - 1 ? "Mulai memotret" : "Lanjut";
+        box.querySelector('[data-act="next"]').textContent = i === steps.length - 1 ? t("Mulai memotret") : t("Lanjut");
       };
       box.querySelector('[data-act="next"]').onclick = () => {
         if (i < steps.length - 1) { i++; show(); } else { go = true; close(); }

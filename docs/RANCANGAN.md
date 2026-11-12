@@ -96,6 +96,20 @@ Jalankan ulang `supabase/v2.sql` sebelum merilis tampilan Fase 3.
 - [x] Laporkan foto dan tab Moderasi (`photo_reports`, `report_photo`, `list_reports`, `resolve_reports`); tiga pelapor menyembunyikan foto otomatis
 - [x] Ringkasan perubahan pengaturan sebelum simpan, tombol kembalikan ke bawaan
 
+## Fase 4 pertumbuhan
+
+Jalankan ulang `supabase/v2.sql`; untuk R2 dan notifikasi ikuti README bagian 1c dan 1d.
+
+- [x] Notifikasi browser "album terbuka" (`push_subscriptions`, `album_watch`, Edge Function `notify-album`, dipicu aplikasi tanpa pg_cron)
+- [x] Buku tamu teks + suara maks. 60 detik, 3 per tamu (`guestbook`, bucket `voices`, tab Ucapan)
+- [x] Kolase 2×2 / 3×3 / Story dibuat di HP, dibagikan lewat lembar bagikan (`src/collage.js`)
+- [x] Foto di Cloudflare R2 lewat Worker situs (`worker/index.js`); hak akses tetap dari fungsi database; foto lama dipindah otomatis saat dibaca atau sekaligus dari Pengaturan (`r2_objects`, `stored_objects`)
+- [x] Album realtime: broadcast Supabase per acara, polling jadi cadangan 60 detik
+- [x] Bahasa Inggris untuk layar tamu (`src/i18n.js`), deteksi otomatis + tombol ID/EN
+- [x] Permintaan hapus foto / akun (UU PDP): `data_requests`, tab Privasi superadmin
+- [x] Ekspor CSV: log, daftar acara, laporan peserta per acara
+- Email ditunda (notifikasi cukup lewat push)
+
 ## Catatan storage
 
 Kuota gratis Supabase sekitar 1 GB storage. Pada 2560px satu foto (3 file) kira-kira 1,2–2 MB, jadi sekitar 500–800 foto.
