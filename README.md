@@ -11,13 +11,6 @@ Supabase (login Google, database, penyimpanan foto) + Cloudflare Pages
 - 7 efek film, flash (lampu kamera belakang / layar untuk kamera depan), resolusi dan mirror dari pengaturan.
 - Tamu bisa mengunduh foto ukuran penuh, maks. sejumlah jatah jepretan (foto sendiri gratis).
 - Peran: superadmin (dashboard `#/admin`), pembuat acara, tamu. Rancangan lengkap: [docs/RANCANGAN.md](docs/RANCANGAN.md).
-- Jadwal acara (tutup otomatis saat selesai), kartu QR siap cetak, mode layar untuk proyektor,
-  album dengan saringan dan favorit, laporan foto + moderasi, duplikat acara, kuota storage per pembuat acara.
-- Buku tamu (teks + rekaman suara), kolase untuk Instagram, album realtime, notifikasi "album terbuka",
-  tampilan tamu dalam bahasa Inggris, permintaan hapus foto/akun (UU PDP), ekspor CSV, dan foto di Cloudflare R2.
-- Pengajuan menjadi pembuat acara (dengan nomor WhatsApp) yang disetujui superadmin, kolase 2–9 foto pilihan
-  dengan logo dan nama acara, dan pratinjau efek film langsung di jendela bidik.
-  Setelah memperbarui aplikasi, jalankan ulang `supabase/v2.sql` di SQL Editor (aman diulang).
 
 ## Susunan
 
@@ -32,31 +25,13 @@ src/
   shoot.js         pesan jatah -> unggah -> konfirmasi, antrean kirim ulang
   queue.js         antrean IndexedDB
   film.js          preset efek film
-  develop.js       olah foto (resolusi, cermin, film, 3 ukuran JPEG) tanpa DOM
-  develop-worker.js  Web Worker yang menjalankan develop.js di luar thread utama
-  album.js         tab Album: saringan, favorit, laporan foto, unduh dengan kuota
+  album.js         tab Album + unduh dengan kuota
   owner.js         tab Panel (pemilik acara / superadmin), gulungan per tamu, sampul
-  admin.js         dashboard: wizard buat acara, tren, moderasi, pengguna, pengaturan
-  slideshow.js     mode layar (#/e/<id>/layar) untuk proyektor/TV
-  qrcard.js        kartu QR siap cetak (PNG A6 / cetak)
-  moderation.js    daftar laporan foto (Panel dan Dashboard)
-  install.js       ajakan pasang aplikasi di layar utama
-  guestbook.js     tab Ucapan (buku tamu teks + suara)
-  collage.js       kolase 2×2 / 3×3 / Story untuk dibagikan
-  realtime.js      kanal broadcast Supabase: album dimuat ulang saat ada foto baru
-  push.js          langganan notifikasi "album terbuka"
-  privacy.js       Data & privasi: permintaan hapus foto / akun
-  i18n.js, i18n-en.js  bahasa tampilan tamu (Indonesia / Inggris)
-worker/index.js      Worker situs: static assets + API foto R2 (/api/r2/*)
-supabase/functions/notify-album/  Edge Function pengirim notifikasi album
+  admin.js         dashboard superadmin
   storage.js       SATU-SATUNYA file yang berbeda antara P1 dan P2
 supabase/schema.sql  skema v1: tabel, fungsi, aturan akses, bucket
 supabase/v2.sql      perubahan v2 (peran, pengaturan, unduhan, sampul, log); aman diulang
 supabase/reset.sql   menghapus semua objek v1 + v2 (data hilang)
-supabase/cron.sql    jadwal hapus otomatis harian (pg_cron -> Edge Function)
-supabase/functions/purge-events/  Edge Function penghapus acara kedaluwarsa
-public/sw.js         service worker: aplikasi tetap terbuka tanpa sinyal
-tests/sql.test.mjs   tes database (PGlite): npm run test:sql
 ```
 
 ## Pemasangan
@@ -74,83 +49,12 @@ tests/sql.test.mjs   tes database (PGlite): npm run test:sql
    on conflict (email) do update set role = 'superadmin';
    ```
 4. Login, buka **Dashboard** di beranda: tambahkan pembuat acara di tab Peran, atur batas jepretan,
-   resolusi, mirror, dan kuota storage di tab Pengaturan.
-5. Authentication -> Sign In / Providers -> **Email: matikan**. Aplikasi hanya memakai Google;
-   peran dicocokkan dengan email terverifikasi, dan mematikan login email menutup celah pendaftaran palsu.
-
-### 1a. Memperbarui database yang sudah terpasang
-
-Setiap kali `supabase/v2.sql` berubah (misalnya Fase 3), jalankan ulang seluruh isinya di SQL Editor
-**sebelum** merilis tampilan baru. File ini aman diulang dan tidak menghapus data.
-Fase 3 menambah jadwal acara, efek film per foto, favorit, laporan foto, kuota storage per pembuat,
-tren 30 hari, dan mode layar. Tampilan baru tetap bisa memotret dan membuka album di database lama,
-tetapi fitur Fase 3 baru berfungsi setelah `v2.sql` dijalankan.
-
-### 1c. Foto di Cloudflare R2 (Fase 4)
-
-Penting: buat bucket dan rahasia Worker **sebelum** push kode Fase 4. `wrangler.jsonc` sekarang memakai
-binding R2; tanpa bucket, deploy Cloudflare gagal dan situs tetap di versi lama.
-
-1. Cloudflare -> R2 -> aktifkan R2 (gratis 10 GB, perlu metode pembayaran tercatat) -> **Create bucket**
-   bernama `disposable-asiig-photos`. (Atau: `npx wrangler r2 bucket create disposable-asiig-photos`.)
-2. Workers & Pages -> `disposable-asiig` -> Settings -> **Variables and Secrets**, tambah sebagai Secret:
-   - `SUPABASE_URL` (sama dengan `VITE_SUPABASE_URL`)
-   - `SUPABASE_ANON_KEY` (sama dengan `VITE_SUPABASE_ANON_KEY`)
-   - `SUPABASE_SERVICE_KEY` (Supabase -> Project Settings -> API Keys -> secret / service_role)
-   - `SIGN_SECRET` (teks acak panjang, misalnya hasil `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`)
-3. Jalankan ulang `supabase/v2.sql`, lalu push / deploy kode.
-4. Dashboard -> Pengaturan -> Penyimpanan foto: tunggu tanda **Worker R2 siap**, pilih **Cloudflare R2**, Simpan.
-   Foto baru langsung masuk R2. Foto lama tetap terbaca (Worker menyalinnya ke R2 saat dibuka);
-   tombol **Pindahkan foto lama ke R2** memindahkan semuanya sekaligus dan menghapus salinan di Supabase.
-5. Cek: `https://disposable-asiig.my.id/api/r2/health` harus `{"ok":true,...}`.
-
-Sampul dan rekaman suara tetap di Supabase Storage. Jika kembali memilih Supabase Storage setelah foto
-dipindah, foto yang sudah di R2 tidak terbaca lewat Supabase; pindahkan dulu atau tetap pakai R2.
-
-### 1d. Notifikasi "album terbuka" (Fase 4)
-
-1. Di laptop: `npx web-push generate-vapid-keys`, catat Public Key dan Private Key.
-2. Supabase -> Edge Functions -> Secrets: `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`,
-   `VAPID_SUBJECT` (misalnya `mailto:email-anda@gmail.com`).
-3. Edge Functions -> Deploy a new function -> nama `notify-album`, tempel isi
-   `supabase/functions/notify-album/index.ts` -> Deploy (Verify JWT biarkan aktif).
-4. Dashboard -> Pengaturan -> Notifikasi album -> tempel Public Key -> Simpan.
-
-Tamu mengetuk "Kabari saya" di Album. Kabar terkirim saat acara ditutup (sakelar atau jadwal selesai)
-atau waktu cuci film lewat. Fungsi dipicu aplikasi sendiri (saat acara ditutup dan sesekali saat aplikasi
-dibuka), jadi tidak perlu jadwal pg_cron. iPhone hanya menerima notifikasi jika aplikasi dipasang di layar utama.
-
-### 1b. Hapus otomatis acara (opsional, saat ini dimatikan)
-
-Acara dengan "Rencana hapus foto" yang sudah lewat dihapus tiap malam beserta semua fotonya.
-
-1. Supabase -> Edge Functions -> **Deploy a new function** -> Via Editor. Nama: `purge-events`,
-   tempel isi `supabase/functions/purge-events/index.ts`, lalu Deploy.
-   (Atau dengan CLI: `supabase functions deploy purge-events`.)
-   Setelah terpasang, buka fungsi itu -> Details -> **matikan "Verify JWT"** (fungsi dijaga `CRON_SECRET`).
-2. Edge Functions -> **Secrets** -> tambah `CRON_SECRET` berisi teks acak panjang, misalnya hasil
-   `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`.
-3. SQL Editor -> tempel `supabase/cron.sql`, ganti `<PROJECT-REF>` dan `<CRON-SECRET>` (tanda `< >` ikut dihapus) -> Run.
-   Ganti nilainya di SQL Editor saja; jangan simpan secret di file repo.
-4. Cek: `select * from cron.job_run_details order by start_time desc limit 5;` setelah jadwal berjalan.
-   Hasil penghapusan tercatat di Dashboard -> Log sebagai "sistem (hapus otomatis)".
-
-Jika langkah ini belum dipasang, acara yang lewat tanggal muncul di Dashboard -> Ringkasan
-dengan tombol "Hapus sekarang".
+   resolusi, dan mirror di tab Pengaturan.
 
 ### 2. Google
 
 Google Auth Platform -> Audience -> tambahkan email Anda sebagai test user.
 Sebelum acara dengan tamu, tekan **Publish app** supaya siapa pun bisa login.
-
-### Tes database
-
-```bash
-npm run test:sql
-```
-Menjalankan `schema.sql` + `v2.sql` (dua kali) di Postgres sungguhan (PGlite) dengan tiruan
-skema `auth` dan `storage` Supabase, lalu menguji peran, jatah, album, unduhan, dashboard,
-dan `reset.sql`. Jalankan setiap kali mengubah file SQL.
 
 ### 3. Uji di laptop
 
@@ -183,50 +87,20 @@ Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin d
 
 - [ ] Login Google di Android (Chrome) dan iPhone (Safari).
 - [ ] Link `?kode=` memasukkan peserta setelah layar persetujuan.
-- [ ] Tamu yang login di perangkat/jendela baru tidak melihat acara apa pun di beranda sampai memasukkan kode; setelah Keluar, acara hilang lagi dari beranda.
 - [ ] Jendela bidik muncul; kamera depan/belakang bisa ditukar.
 - [ ] Satu jepretan: penghitung 30 -> 29, foto belum tampil di album.
 - [ ] Mode pesawat saat memotret: foto terkirim sendiri setelah online, jatah hanya berkurang satu.
 - [ ] Buat acara dengan jatah 3: setelah jepretan ke-3 muncul "Film habis" dan foto tampil di HP lain.
 - [ ] Flash: kamera belakang Android menyalakan lampu sesaat; kamera depan memutihkan layar. Di iPhone, tombol flash kamera belakang hanya muncul jika Safari mendukung `torch`.
 - [ ] Balik kamera ke depan: jendela bidik dan hasil foto dicerminkan sesuai Pengaturan.
-- [ ] Efek film: ketuk label film di jendela bidik, pratinjau tiap efek muncul dari gambar kamera; pilihan tetap setelah muat ulang. Matikan "Tamu boleh memilih efek film sendiri" di Panel: label tidak bisa diketuk dan efek bawaan dipakai.
+- [ ] Efek film berbeda per acara (mis. Hitam Putih Klasik menghasilkan foto monokrom).
 - [ ] Resolusi: ubah di Dashboard, foto baru mengikuti (cek ukuran di tab Ringkasan).
 - [ ] Unduh sebagai tamu: sisa kuota berkurang hanya untuk foto orang lain; foto sendiri gratis.
 - [ ] Sembunyikan nama: tamu melihat "Tamu", pemilik acara tetap melihat nama.
 - [ ] Sampul: tampil di layar "Masuk acara" dan di atas halaman acara.
-- [ ] Link dibuka dari WhatsApp/Instagram: muncul peringatan "Buka di Chrome atau Safari dulu"; di Android tombol "Buka di Chrome" membuka Chrome langsung.
-- [ ] Tanpa sinyal: buka aplikasi sekali saat online, aktifkan mode pesawat, muat ulang -> aplikasi tetap terbuka dan foto masuk antrean.
-- [ ] Jendela bidik menampilkan bingkai foto utuh (ada pita gelap di tepi bila rasio layar berbeda).
-- [ ] Album lebih dari 100 foto: Unduh album memunculkan tombol per bagian (maks. 100 foto per ZIP).
-- [ ] Tolak izin kamera di HP uji -> muncul di Dashboard -> Ringkasan -> Kegagalan kamera terbaru.
-- [ ] Semua konfirmasi (hapus, ganti kode, blokir, unduh berkuota) tampil sebagai dialog aplikasi, bukan dialog browser.
-- [ ] Pertama kali membuka Kamera di sebuah acara: muncul tiga kartu aturan main; "Mulai memotret" langsung membuka kamera. Kunjungan berikutnya kamera menyala sendiri bila izin sudah diberikan.
-- [ ] HP: tab Kamera/Album/Panel ada di bawah layar; tab Kamera berlatar gelap.
-- [ ] HP dengan tema gelap: seluruh aplikasi ikut gelap dan teks tetap terbaca.
-- [ ] Album: geser kiri/kanan di penampil foto, ketuk dua kali untuk zoom, penanda "12 / 48"; pil "foto baru" muncul saat menggulir ke bawah.
-- [ ] Panel: sakelar Terbuka/Ditutup, angka peserta/foto/film habis, sub-tab Undangan/Peserta/Pengaturan/Album.
-- [ ] Dashboard pembuat acara: tombol Buat acara dan kartu status per acara. Superadmin: Perlu perhatian, Sedang berlangsung, tabel acara dengan pilih-banyak, Pengguna & peran, Log yang terbaca.
+- [ ] Link dibuka dari WhatsApp/Instagram: muncul peringatan "Buka di Chrome atau Safari dulu".
 - [ ] Panel: tutup acara -> gulungan yang belum habis tampil.
 - [ ] Panel: sembunyikan foto, blokir peserta, unduh ZIP, hapus acara.
-- [ ] Buat acara lewat wizard tiga langkah dengan jadwal dan sampul; layar terakhir menampilkan QR dan tombol kartu QR.
-- [ ] Kartu QR: unduh PNG dan Cetak dari Panel -> Undangan; QR di kartu terbaca kamera HP lain.
-- [ ] Jadwal: atur waktu selesai beberapa menit ke depan; setelah lewat, Kamera menampilkan "Acara ditutup" dan semua foto terbuka. Sakelar Terbuka di Panel membuka lagi dan menghapus waktu selesai.
-- [ ] Mode layar: Panel -> Mode layar di laptop yang tersambung proyektor; foto baru muncul dalam 20 detik dengan label "baru"; layar penuh dan jeda berfungsi; layar tidak meredup.
-- [ ] Album: saringan Semua / Foto saya / Favorit / per tamu (per tamu tidak muncul bila nama disembunyikan); ikon hati menyimpan favorit; nama efek film tampil di penampil.
-- [ ] Laporkan foto sebagai tamu -> muncul di Panel -> Album dan Dashboard -> Moderasi; tiga pelapor berbeda menyembunyikan foto otomatis.
-- [ ] Setelah film habis, Album menampilkan kartu "Simpan album ini": link album terbuka di perangkat lain setelah login dengan akun yang sama; tombol "Pasang di layar utama" (Android) atau petunjuknya (iPhone).
-- [ ] Kamera: suara rana saat memotret, bisa dimatikan lewat ikon speaker; angka sisa bergulir.
-- [ ] Duplikat acara dari Panel -> Pengaturan atau menu ⋯ di Dashboard: pengaturan, undangan, dan sampul ikut.
-- [ ] Superadmin: atur kuota storage pembuat acara; saat penuh, ia tidak bisa membuat acara baru. Pengaturan menampilkan ringkasan perubahan sebelum disimpan.
-- [ ] Ucapan: kirim teks dan rekaman suara (Android Chrome dan iPhone Safari), putar ulang di HP lain; maks. 3 ucapan; pengelola bisa sembunyikan/hapus.
-- [ ] Kolase dari Album: 2×2, 3×3, Story; Bagikan membuka lembar bagikan (Instagram) di HP.
-- [ ] Realtime: dua HP di album yang sama; foto baru dari HP lain muncul dalam beberapa detik tanpa muat ulang.
-- [ ] Notifikasi: "Kabari saya" di Android, lalu tutup acara di Panel -> notifikasi masuk dan membuka album saat diketuk.
-- [ ] Bahasa: HP berbahasa Inggris melihat layar tamu dalam bahasa Inggris; tombol ID/EN di layar login dan beranda.
-- [ ] Data & privasi: kirim permintaan dari beranda; superadmin memprosesnya di Dashboard -> Privasi; status terlihat oleh pengguna.
-- [ ] CSV: Panel -> Peserta -> Laporan; Dashboard -> Acara -> CSV; Dashboard -> Log -> CSV; terbuka rapi di Excel/Sheets.
-- [ ] R2: setelah pindah, foto baru dan lama tampil normal; `/api/r2/health` ok; Ringkasan menampilkan ukuran R2.
 
 ## Naik ke P2 (nanti)
 

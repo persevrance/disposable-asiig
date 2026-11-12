@@ -102,7 +102,10 @@ Jalankan ulang `supabase/v2.sql`; untuk R2 dan notifikasi ikuti README bagian 1c
 
 - [x] Notifikasi browser "album terbuka" (`push_subscriptions`, `album_watch`, Edge Function `notify-album`, dipicu aplikasi tanpa pg_cron)
 - [x] Buku tamu teks + suara maks. 60 detik, 3 per tamu (`guestbook`, bucket `voices`, tab Ucapan)
-- [x] Kolase 2×2 / 3×3 / Story dibuat di HP, dibagikan lewat lembar bagikan (`src/collage.js`)
+- [x] Kolase v2 (BR-09: 1–9 foto, dibuat di HP, tidak diunggah, tanpa kuota unduhan): tata letak, ornamen, ukuran, dan teks sebagai pilihan bebas (`src/collage.js`, `src/collage-layouts.js`); tema per acara `events.collage_theme` (diatur di Panel → Pengaturan → Kolase tamu); tukar foto dengan ketuk, pindah dengan tahan-geser
+- [x] BR-19: logo Jepretin di kolase wajib; boleh dimatikan bila `collage_theme.logo_optional` (diatur superadmin, sampai pembayaran tersedia)
+- [x] Pengaman kapasitas: status pembuatan acara Buka / Hanya acara kecil / Tutup (`set_creation_mode`, `can_create_event(tamu, roll)`), meter kapasitas (`admin_capacity`; request Worker dan realtime puncak sebagai perkiraan model), pengaman otomatis 85%/95% (`capacity_tick`, cron 5 menit), tinjauan acara besar (`needs_review`, `review_event`; kamera aktif setelah ditinjau), daftar tunggu "Kabari saya" (`creation_waitlist`, push lewat `notify-album`)
+- [x] Realtime hanya untuk acara sampai 300 tamu; di atasnya album memakai polling 30–60 detik dengan jeda acak
 - [x] Foto di Cloudflare R2 lewat Worker situs (`worker/index.js`); hak akses tetap dari fungsi database; foto lama dipindah otomatis saat dibaca atau sekaligus dari Pengaturan (`r2_objects`, `stored_objects`)
 - [x] Album realtime: broadcast Supabase per acara, polling jadi cadangan 60 detik
 - [x] Bahasa Inggris untuk layar tamu (`src/i18n.js`), deteksi otomatis + tombol ID/EN

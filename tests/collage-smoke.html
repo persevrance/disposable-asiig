@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Tes asap kolase</title>
+</head>
+<body>
+<!--
+  Tes asap kolase v2 di browser sungguhan (canvas, font, toBlob).
+  Jalankan: npm run dev, lalu buka http://localhost:5173/tests/collage-smoke.html
+  Hasil: tabel di halaman dan judul tab "LULUS" / "GAGAL".
+-->
+<pre id="out">Menjalankan…</pre>
+<script type="module">
+import { drawCollage } from "/src/collage.js";
+
+// Foto tiruan 1080×1350 dengan warna berbeda (tanpa jaringan)
+async function fakePhoto(i) {
+  const c = document.createElement("canvas");
+  c.width = 1080; c.height = 1350;
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = `hsl(${i * 40} 55% 55%)`; ctx.fillRect(0, 0, c.width, c.height);
+  ctx.fillStyle = "rgba(255,255,255,.6)"; ctx.beginPath(); ctx.arc(540, 600, 260, 0, Math.PI * 2); ctx.fill();
+  const img = new Image();
+  img.src = c.toDataURL("image/jpeg", 0.8);
+  await img.decode();
+  return img;
+}
+
+const ev = { event_id: "00000000-0000-0000-0000-000000000001", name: "Wisuda Angkatan 2026", starts_at: "2026-11-14T08:00:00+07:00" };
+const base = { layout: "auto", orn: "polos", bg: "krem", size: "feed", foot: true, stamp: false, logo: true };
+const CASES = [
+  ["1×1 Feed", { ...base, layout: "1x1" }, 1, [1080, 1350]],
+  ["2×2 + Roll film", { ...base, layout: "2x2", orn: "film" }, 4, [1080, 1350]],
+  ["3×3 Story", { ...base, layout: "3x3", size: "story" }, 9, [1080, 1920]],
+  ["Otomatis 5 + Polaroid + cap tanggal, Kotak", { ...base, orn: "polaroid", stamp: true, size: "square" }, 5, [1080, 1080]],
+  ["2×3 Konfeti, tanpa teks", { ...base, layout: "2x3", orn: "konfeti", foot: false }, 6, [1080, 1350]],
+  ["1 + 2 Kartu acara di latar gelap", { ...base, layout: "1p2", orn: "kartu", bg: "gelap" }, 2, [1080, 1350]],
+];
+
+const rows = [];
+let fails = 0;
+const photos = await Promise.all([...Array(9)].map((_, i) => fakePhoto(i)));
+for (const [name, opts, n, [w, h]] of CASES) {
+  try {
+    const t0 = performance.now();
+    const { canvas, g } = await drawCollage(opts, photos.slice(0, n), ev);
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.92));
+    const kb = Math.round(blob.size / 1024);
+    const ok = canvas.width === w && canvas.height === h && kb > 30 && kb < 3000 && g.cells.length > 0;
+    if (!ok) fails++;
+    rows.push(`${ok ? "ok  " : "FAIL"} ${name}: ${canvas.width}×${canvas.height}, ${g.cells.length} kotak, ${kb} KB, ${Math.round(performance.now() - t0)} ms`);
+  } catch (e) {
+    fails++;
+    rows.push(`FAIL ${name}: ${e.message}`);
+  }
+}
+rows.push(fails ? `\n${fails} GAGAL` : "\nLULUS");
+document.getElementById("out").textContent = rows.join("\n");
+document.title = fails ? "GAGAL" : "LULUS";
+</script>
+</body>
+</html>

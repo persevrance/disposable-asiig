@@ -19,7 +19,7 @@ drop policy if exists "suara: dengar"            on storage.objects;
 drop policy if exists "suara: hapus"             on storage.objects;
 
 drop view if exists stored_objects;
-drop table if exists creator_requests, data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
+drop table if exists creation_waitlist, creator_requests, data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
   photo_reports, favorites, client_errors, downloads, audit_log, user_roles, app_settings,
   photos, event_members, event_invites, events, event_creators, profiles cascade;
 
@@ -66,5 +66,11 @@ drop function if exists
   admin_request_paths(bigint), admin_process_request(bigint, text, text),
   -- pengajuan pembuat acara
   normalize_wa(text), my_creator_request(), request_creator(text, text, date, int, text),
-  admin_creator_requests(text), admin_resolve_creator_request(bigint, boolean, text)
+  admin_creator_requests(text), admin_resolve_creator_request(bigint, boolean, text),
+  -- kolase v2 dan pengaman kapasitas
+  valid_ornament(text), creation_mode_now(text, timestamptz), event_photo_estimate(int, int),
+  creation_state(), can_create_event(int, int), set_creation_mode(text, text, timestamptz, int, int),
+  join_creation_waitlist(boolean), due_waitlist_notifications(), mark_waitlist_notified(uuid[]),
+  capacity_meter(text, numeric, numeric, numeric), capacity_meters(), capacity_peak(jsonb),
+  admin_capacity(), capacity_tick(), review_event(uuid)
 cascade;

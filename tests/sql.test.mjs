@@ -472,6 +472,82 @@ await as("admin", `select admin_resolve_creator_request($1, true)`, [cr2]);
 ok((await as("d", `select can_create_event() v`))[0].v === true, "approved request grants creator");
 await expectErr("admin", `select admin_resolve_creator_request($1, true)`, [cr2], "PERMINTAAN_SELESAI");
 
+// ---- Kolase v2: tema kolase per acara ----
+await as("host", `select set_event($1, $2)`, [ev, { collage_theme: { ornament: "film", accent: "#D6336C", allowed: ["polos", "film"], logo_optional: true } }]);
+let theme = (await as("host", `select collage_theme from my_status($1)`, [ev]))[0].collage_theme;
+ok(theme.ornament === "film" && theme.logo_optional === undefined, "collage_theme saved; logo_optional ignored for host");
+await as("admin", `select set_event($1, $2)`, [ev, { collage_theme: { ornament: "film", logo_optional: true } }]);
+await as("host", `select set_event($1, $2)`, [ev, { collage_theme: { ornament: "konfeti" } }]);
+theme = (await as("host", `select collage_theme from my_status($1)`, [ev]))[0].collage_theme;
+ok(theme.ornament === "konfeti" && theme.logo_optional === true, "logo_optional kept when host edits theme");
+await expectErr("host", `select set_event($1, $2)`, [ev, { collage_theme: { ornament: "pelangi" } }], "TEMA_KOLASE_TIDAK_VALID");
+await expectErr("host", `select set_event($1, $2)`, [ev, { collage_theme: { accent: "merah" } }], "TEMA_KOLASE_TIDAK_VALID");
+await expectErr("host", `select set_event($1, $2)`, [ev, { collage_theme: { allowed: ["film", "x"] } }], "TEMA_KOLASE_TIDAK_VALID");
+
+// ---- Pengaman kapasitas: status pembuatan acara ----
+ok((await as("host", `select creation_state() s`))[0].s.mode === "open", "creation open by default");
+await expectErr("host", `select set_creation_mode('closed')`, [], "BUKAN_SUPERADMIN");
+await expectErr("admin", `select set_creation_mode('rusak')`, [], "STATUS_TIDAK_DIKENAL");
+await expectErr("admin", `select set_creation_mode('closed', 'x', now() - interval '1 hour')`, [], "JADWAL_TIDAK_VALID");
+await as("admin", `select set_creation_mode('limited', null, null, 50, 24)`);
+ok((await as("host", `select can_create_event(50, 24) v`))[0].v.ok === true, "limited allows small event");
+ok((await as("host", `select can_create_event(51, 24) v`))[0].v.code === "PEMBUATAN_DIBATASI", "limited rejects big event");
+await expectErr("host", `select create_event('Besar', 30, 200)`, [], "PEMBUATAN_DIBATASI");
+const small = (await as("host", `select create_event('Kecil', 24, 40) id`))[0].id;
+await expectErr("host", `select set_event($1, $2)`, [small, { max_members: 80 }], "PEMBUATAN_DIBATASI");
+await as("host", `select set_event($1, $2)`, [small, { max_members: 50 }]);
+ok((await as("admin", `select can_create_event(2000, 100) v`))[0].v.ok === true, "superadmin bypasses limit");
+await as("admin", `select set_creation_mode('closed', 'Penuh minggu ini', now() + interval '2 days')`);
+const cs = (await as("host", `select creation_state() s`))[0].s;
+ok(cs.mode === "closed" && cs.message === "Penuh minggu ini" && cs.reopen_at, "closed state with message");
+await expectErr("host", `select create_event('Tutup', 3)`, [], "PEMBUATAN_DITUTUP");
+ok((await db.query(`select count(*)::int n from audit_log where action = 'ubah_pembuatan_acara'`)).rows[0].n === 2, "mode changes audited");
+await as("host", `select join_creation_waitlist(true)`);
+ok((await as("host", `select creation_state() s`))[0].s.waiting === true, "waitlist joined");
+await db.query(`insert into push_subscriptions (endpoint, user_id, p256dh, auth) values ('https://push/x', $1, 'k', 'a')`, [U.host[0]]);
+ok((await db.query(`select * from due_waitlist_notifications()`)).rows.length === 0, "no waitlist push while closed");
+// Jadwal buka lagi lewat: efektif Buka, lalu capacity_tick menyimpannya
+await db.exec(`update app_settings set creation_reopen_at = now() - interval '1 minute'`);
+ok((await as("host", `select creation_state() s`))[0].s.mode === "open", "reopen_at passed = open");
+ok((await db.query(`select * from due_waitlist_notifications()`)).rows.length === 1, "waitlist push due after reopen");
+ok((await as("admin", `select capacity_tick() a`))[0].a === "buka", "capacity_tick reopens on schedule");
+await db.query(`select mark_waitlist_notified(array[$1::uuid])`, [U.host[0]]);
+ok((await db.query(`select count(*)::int n from creation_waitlist`)).rows[0].n === 0, "waitlist cleared after notify");
+await expectErr("host", `select capacity_tick()`, [], "BUKAN_SUPERADMIN");
+
+// ---- Meter kapasitas, pengaman otomatis, tinjauan acara besar ----
+await as("admin", `select admin_set_settings($1)`, [{ max_members_limit: 2000 }]);
+const big = (await as("admin", `select create_event('Konser', 36, 2000) id`))[0].id;
+await as("admin", `select set_event($1, $2)`, [big, { starts_at: new Date(Date.now() + 5 * 86400e3).toISOString() }]);
+const capa = (await as("admin", `select admin_capacity() c`))[0].c;
+const stor = capa.meters.find((m) => m.key === "storage");
+ok(capa.scheduled_events === 1 && Number(stor.proj) > Number(stor.used), "scheduled event raises storage projection");
+ok(capa.queue.some((q) => q.id === big), "scheduled event in queue");
+ok(["worker", "realtime"].every((k) => capa.meters.find((m) => m.key === k)?.estimate === true), "worker and realtime estimate meters");
+await expectErr("host", `select admin_capacity()`, [], "BUKAN_SUPERADMIN");
+// Anggaran kecil: perkiraan > 95% → tutup otomatis
+await as("admin", `select admin_set_settings($1)`, [{ capacity_storage_gb: 10 }]);
+ok((await as("admin", `select capacity_tick() a`))[0].a === "tutup", "auto close at 95%");
+const ovCap = (await as("admin", `select admin_overview() o`))[0].o;
+ok(ovCap.creation_mode === "closed" && ovCap.creation_mode_auto === true, "overview shows auto-closed mode");
+await as("admin", `select set_creation_mode('open')`);
+await as("admin", `select admin_set_settings($1)`, [{ capacity_auto_close: false }]);
+ok((await as("admin", `select capacity_tick() a`))[0].a === "batasi", "auto limit at 85% when auto close off");
+await as("admin", `select admin_set_settings($1)`, [{ capacity_storage_gb: 800, capacity_auto_close: true }]);
+await as("admin", `select set_creation_mode('open')`);
+// Pembuat acara: acara 1.000 tamu masuk Perlu ditinjau
+const rev = (await as("host", `select create_event('Wisuda Besar', 10, 1000) id`))[0].id;
+ok((await db.query(`select needs_review from events where id = $1`, [rev])).rows[0].needs_review === true, "big event needs review");
+ok((await as("admin", `select admin_overview() o`))[0].o.events_review === 1, "overview counts events to review");
+const revCode = (await db.query(`select join_code from events where id = $1`, [rev])).rows[0].join_code;
+await as("d", `select join_event($1)`, [revCode]);
+ok((await as("host", `select needs_review from my_status($1)`, [rev]))[0].needs_review === true, "my_status exposes needs_review");
+await expectErr("d", `select * from reserve_shot($1, gen_random_uuid())`, [rev], "ACARA_MENUNGGU_TINJAUAN");
+await as("admin", `select review_event($1)`, [rev]);
+ok((await as("d", `select * from reserve_shot($1, gen_random_uuid())`, [rev])).length === 1, "shooting allowed after review");
+ok((await db.query(`select needs_review, reviewed_at from events where id = $1`, [rev])).rows[0].reviewed_at !== null, "review_event marks reviewed");
+for (const id of [small, big, rev]) await as("admin", `select delete_event($1)`, [id]);
+
 await as("host", `select delete_event($1)`, [ev]);
 ok((await db.query(`select count(*)::int n from photos`)).rows[0].n === 0, "delete_event cascades");
 

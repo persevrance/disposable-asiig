@@ -6,9 +6,9 @@ import { getUrls } from "./storage.js";
 import { attachZoom } from "./zoom.js";
 import { filmName } from "./film.js";
 import { canInstall, promptInstall } from "./install.js";
-import { onAlbumPing, albumLive } from "./realtime.js";
+import { onAlbumPing, albumLive, REALTIME_MAX } from "./realtime.js";
 import { pushSupport, enableAlbumNotify, disableAlbumNotify, albumNotifyOn, kickNotify } from "./push.js";
-import { openCollage } from "./collage.js";
+import { openCollage, COLLAGE_MAX } from "./collage.js";
 import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, copyText, ICON } from "./ui.js";
 import { t } from "./i18n.js";
 
@@ -229,15 +229,19 @@ export async function renderAlbum(root, status) {
       : t("Sisa unduhan: {a} dari {b} · foto Anda sendiri gratis", { a: quotaLeft(), b: status.max_shots });
   }
 
-  // Mode pilih: "download" (unduh, memakai kuota) atau "collage" (2–9 foto, tanpa kuota)
-  const COLLAGE_MAX = 9;
+  // Mode pilih: "download" (unduh, memakai kuota) atau "collage" (1–9 foto, tanpa kuota).
+  // Di mode kolase, urutan ketukan = urutan di kolase (angka di tiap foto).
   let selMode = "download";
   const collageBtn = view.querySelector('[data-act="sel-collage"]');
   function updateSelBar() {
     if (selMode === "collage") {
       selInfo.textContent = t("{n}/{max} dipilih", { n: selected.size, max: COLLAGE_MAX });
       selInfo.classList.remove("warn");
-      collageBtn.disabled = selected.size < 2;
+      collageBtn.disabled = selected.size < 1;
+      const order = [...selected];
+      grid.querySelectorAll(".tile.selected").forEach((n) => {
+        n.querySelector(".order").textContent = String(order.indexOf(n.dataset.id) + 1);
+      });
       return;
     }
     const c = cost(selected);
@@ -247,7 +251,7 @@ export async function renderAlbum(root, status) {
     const over = !unlimited() && c > quotaLeft();
     selInfo.classList.toggle("warn", over);
     view.querySelector('[data-act="get"]').disabled = !selected.size || over;
-    collageBtn.disabled = selected.size < 2;
+    collageBtn.disabled = selected.size < 1;
   }
 
   function setSelecting(on, mode = "download") {
@@ -255,6 +259,7 @@ export async function renderAlbum(root, status) {
     selMode = mode;
     selected.clear();
     grid.classList.toggle("selecting", on);
+    grid.classList.toggle("collage-select", on && mode === "collage");
     grid.querySelectorAll(".tile.selected").forEach((t) => t.classList.remove("selected"));
     selBar.hidden = !on;
     selBar.classList.toggle("collage-mode", mode === "collage");
@@ -264,7 +269,7 @@ export async function renderAlbum(root, status) {
     view.querySelector('[data-act="auto"]').hidden = mode !== "collage";
     collageBtn.textContent = mode === "collage" ? t("Buat kolase") : t("Kolase");
     collageBtn.classList.toggle("primary", mode === "collage");
-    if (on && mode === "collage") toast(t("Ketuk 2–9 foto untuk kolase."), 2500);
+    if (on && mode === "collage") toast(t("Ketuk 1–9 foto. Urutan ketukan menjadi urutan di kolase."), 3000);
     updateSelBar();
   }
   selectBtn.onclick = () => setSelecting(true);
@@ -276,12 +281,39 @@ export async function renderAlbum(root, status) {
   };
 
   // ---- kolase: dari foto terpilih, atau favorit lalu foto terbaru ----
+  // Thumbnail sudah dimuat di ubin album; ukuran sedang lewat URL bertanda tangan
+  const thumbOf = (id) => grid.querySelector(`.tile[data-id="${id}"] img`)?.src || "";
+  async function collagePhotos(rows) {
+    const urls = await getUrls(rows.map((r) => r.medium_path));
+    return rows.map((r) => ({ id: r.photo_id, url: urls[r.medium_path], thumb: thumbOf(r.photo_id), owner_name: r.owner_name }))
+      .filter((p) => p.url);
+  }
   async function collageFrom(ids) {
-    const rows = ids.map((id) => items.get(id)).filter(Boolean).slice(0, 9);
-    try {
-      const urls = await getUrls(rows.map((r) => r.medium_path));
-      openCollage(status, rows.map((r) => ({ url: urls[r.medium_path], owner_name: r.owner_name })).filter((p) => p.url));
-    } catch (e) { toast(friendly(e)); }
+    const rows = ids.map((id) => items.get(id)).filter(Boolean).slice(0, COLLAGE_MAX);
+    try { openCollage(status, await collagePhotos(rows), { pickMore }); }
+    catch (e) { toast(friendly(e)); }
+  }
+  // Kotak kosong di editor kolase: pilih satu foto lagi dari album yang sudah dimuat
+  function pickMore(exclude) {
+    return new Promise((resolve) => {
+      const rows = [...items.values()].filter((r) => !r.hidden && !exclude.includes(r.photo_id));
+      if (!rows.length) { toast(t("Tidak ada foto lain di album.")); resolve(null); return; }
+      let chosen = null;
+      const { box, close } = modal(`
+        <div class="dialog">
+          <h3>${t("Tambah foto")}</h3>
+          <div class="pick-grid">${rows.map((r) => `
+            <button type="button" class="tile" data-id="${r.photo_id}"><img alt="${esc(t("Foto {x}", { x: label(r) }))}" src="${esc(thumbOf(r.photo_id))}" /></button>`).join("")}
+          </div>
+          <div class="dialog-actions"><button type="button" class="btn" data-act="cancel">${t("Batal")}</button></div>
+        </div>`, { onClose: () => resolve(chosen) });
+      box.querySelector('[data-act="cancel"]').onclick = close;
+      box.querySelector(".pick-grid").onclick = async (e) => {
+        const b = e.target.closest("[data-id]"); if (!b) return;
+        try { chosen = (await collagePhotos([items.get(b.dataset.id)]))[0] || null; } catch (err) { toast(friendly(err)); }
+        close();
+      };
+    });
   }
   // Tombol kolase di kepala album: masuk mode pilih khusus kolase
   view.querySelector('[data-act="collage"]').onclick = () => setSelecting(true, "collage");
@@ -325,6 +357,7 @@ export async function renderAlbum(root, status) {
           <img loading="lazy" alt="${esc(t("Foto {x}", { x: label(r) }))}" src="${esc(urls[r.thumb_path] || "")}" />
           <span class="tile-badges">${tileBadges(r)}</span>
           <span class="check" aria-hidden="true">${ICON.check}</span>
+          <span class="order" aria-hidden="true"></span>
         </button>`);
       n.onclick = () => {
         if (!selecting) return openViewer(r.photo_id);
@@ -332,6 +365,7 @@ export async function renderAlbum(root, status) {
         else if (selMode === "collage" && selected.size >= COLLAGE_MAX) { toast(t("Kolase paling banyak {n} foto.", { n: COLLAGE_MAX })); return; }
         else selected.add(r.photo_id);
         n.classList.toggle("selected", selected.has(r.photo_id));
+        if (selMode === "collage") n.querySelector(".order").textContent = "";
         updateSelBar();
       };
       const takenAt = new Date(r.taken_at);
@@ -651,19 +685,24 @@ export async function renderAlbum(root, status) {
   io.observe(view.querySelector(".sentinel"));
   await loadMore();
   kickNotify();
-  // Realtime: muat ulang segera saat ada foto baru; polling jarang sebagai cadangan
+  // Realtime: muat ulang segera saat ada foto baru; polling jarang sebagai cadangan.
+  // Acara di atas REALTIME_MAX tamu tanpa realtime (menjaga koneksi serentak di bawah batas
+  // paket Supabase); album memakai polling 30–60 detik dengan jeda acak.
   let wait = 0;
-  const off = onAlbumPing(status.event_id, (m) => {
+  const live = (status.max_members || 0) <= REALTIME_MAX;
+  const off = !live ? () => {} : onAlbumPing(status.event_id, (m) => {
     if (m.state) return;
     if (m.kind === "message") return;
     clearTimeout(wait);
     wait = setTimeout(() => { poll(); if (m.kind === "closed") kickNotify(true); }, 1200);
   });
   // Tanpa realtime: tiap 15 detik seperti dulu. Dengan realtime: cadangan tiap 60 detik.
-  const timer = setInterval(() => { if (!albumLive(status.event_id)) poll(); }, 15000);
-  const slow = setInterval(poll, 60000);
+  const timer = live ? setInterval(() => { if (!albumLive(status.event_id)) poll(); }, 15000) : 0;
+  const slow = live ? setInterval(poll, 60000) : 0;
+  let jitter = 0;
+  if (!live) { const next = () => { jitter = setTimeout(() => { poll(); next(); }, 30000 + Math.random() * 30000); }; next(); }
 
-  return () => { clearInterval(timer); clearInterval(slow); clearTimeout(wait); off(); io.disconnect(); window.removeEventListener("scroll", onScroll); };
+  return () => { clearInterval(timer); clearInterval(slow); clearTimeout(jitter); clearTimeout(wait); off(); io.disconnect(); window.removeEventListener("scroll", onScroll); };
 }
 
 // Toast yang bisa diperbarui; panggil dengan null untuk menutup

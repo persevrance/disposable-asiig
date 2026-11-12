@@ -7,17 +7,18 @@ import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData, resizeImage } from "./owner.js";
 import { uploadCover, coverUrl, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
 import { pingAlbum } from "./realtime.js";
-import { kickNotify, setVapidKey } from "./push.js";
+import { kickNotify, setVapidKey, joinCreationWaitlist } from "./push.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
-  fmtRange, fromLocalInput, downloadCsv, brandLockup, initial,
+  fmtRange, fromLocalInput, toLocalInput, downloadCsv, brandLockup, initial,
 } from "./ui.js";
 
 const TABS = [
   ["ringkasan", "Ringkasan"],
   ["acara", "Acara"],
+  ["pembuatan", "Pembuatan acara"],
   ["pengguna", "Pengguna & peran"],
   ["moderasi", "Moderasi"],
   ["privasi", "Privasi"],
@@ -93,8 +94,9 @@ export async function renderAdmin(app, tab, { setView, me }) {
       if (a && n > 0) a.insertAdjacentHTML("beforeend", ` <span class="nav-count" aria-label="${n} menunggu">${n}</span>`);
     };
     set("moderasi", o.reports_open); set("pengguna", o.creator_requests_open); set("privasi", o.data_requests_open);
+    set("pembuatan", o.events_review);
   }).catch(() => {});
-  const render = { ringkasan, acara, pengguna, moderasi, privasi, pengaturan, log }[tab];
+  const render = { ringkasan, acara, pembuatan, pengguna, moderasi, privasi, pengaturan, log }[tab];
   try { await render(body, me, role); }
   catch (e) { body.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); }
 }
@@ -142,6 +144,36 @@ async function deleteEventFully(eventId, coverPath) {
   await rpc("delete_event", { p_event: eventId });
 }
 
+// ---------- Pembuatan acara ditutup (dilihat penyelenggara) ----------
+function creationClosedDialog(gate) {
+  const reopen = gate.reopen_at ? fmtDate(gate.reopen_at) : "";
+  const { box, close } = modal(`
+    <div class="dialog creation-closed">
+      <span class="cc-icon" aria-hidden="true">${ICON.calendar}</span>
+      <h3>Pembuatan acara baru sedang ditutup</h3>
+      <p>${esc(gate.message || "Kapasitas sedang penuh. Kami akan membuka lagi secepatnya.")}</p>
+      ${reopen ? `<p class="hint">Dibuka lagi otomatis: <b>${esc(reopen)}</b></p>` : ""}
+      <ul class="cc-list">
+        <li>${ICON.check}Acara yang sudah kamu buat tetap berjalan normal.</li>
+        <li>${ICON.check}Tamu tetap bisa bergabung dan memotret di acara yang ada.</li>
+        <li>${ICON.check}Pengaturan acara tetap bisa diubah, kecuali menambah tamu atau roll.</li>
+      </ul>
+      <button type="button" class="btn primary" data-act="notify">${ICON.bell} ${gate.waiting ? "Kamu akan dikabari" : "Kabari saya saat dibuka"}</button>
+      <button type="button" class="btn ghost" data-act="close">Tutup</button>
+    </div>`);
+  const btn = box.querySelector('[data-act="notify"]');
+  btn.disabled = Boolean(gate.waiting);
+  box.querySelector('[data-act="close"]').onclick = close;
+  btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      const pushed = await joinCreationWaitlist();
+      btn.innerHTML = `${ICON.bell} Kamu akan dikabari`;
+      toast(pushed ? "Kami kirim notifikasi saat pembuatan acara dibuka lagi." : "Tercatat. Notifikasi belum aktif di perangkat ini, jadi cek lagi nanti.", 5000);
+    } catch (e) { toast(friendly(e)); btn.disabled = false; }
+  };
+}
+
 // ---------- Buat acara: wizard tiga langkah, diakhiri kartu QR ----------
 // Dipakai juga dari beranda. Langkah: (1) nama & jadwal, (2) jatah & film,
 // (3) sampul, sambutan, cuci film & rencana hapus. Lalu layar selesai dengan QR.
@@ -163,10 +195,20 @@ function revealAt(choice, endsIso) {
 }
 
 export async function createEventDialog() {
-  let settings, quota;
+  let settings, quota, gate;
   try {
-    [settings, quota] = await Promise.all([rpc("get_settings"), rpc("my_event_quota").catch(() => null)]);
+    [settings, quota, gate] = await Promise.all([
+      rpc("get_settings"), rpc("my_event_quota").catch(() => null), rpc("creation_state").catch(() => null),
+    ]);
   } catch (e) { toast(friendly(e)); return; }
+  // Pembuatan acara ditutup superadmin: tampilkan pesan penutupan, bukan wizard
+  if (gate && !gate.bypass && gate.mode === "closed") { creationClosedDialog(gate); return; }
+  // Hanya acara kecil: batas tamu dan roll mengikuti status, bukan batas global
+  const small = Boolean(gate && !gate.bypass && gate.mode === "limited");
+  if (small) {
+    settings.max_members_limit = Math.min(settings.max_members_limit, gate.max_guests);
+    settings.max_shots_limit = Math.min(settings.max_shots_limit, gate.max_shots);
+  }
   const limited = quota && quota.limit !== null && quota.limit !== undefined;
   const left = limited ? Math.max(0, quota.limit - quota.used) : null;
   if (left === 0) {
@@ -198,6 +240,7 @@ export async function createEventDialog() {
         <h3 class="wiz-title">Nama dan jadwal</h3>
       </div>
       ${limited ? `<p class="hint">Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
+      ${small ? `<p class="note warn-note">Pembuatan acara sedang dibatasi: maks. <b>${settings.max_members_limit}</b> peserta × <b>${settings.max_shots_limit}</b> jepretan.${gate.message ? ` ${esc(gate.message)}` : ""}</p>` : ""}
 
       <fieldset class="wiz-step" data-step="1">
         <label>Nama acara <input name="name" required maxlength="80" autofocus placeholder="Contoh: Pernikahan Rani & Bima" /></label>
@@ -364,6 +407,7 @@ export async function createEventDialog() {
       <div class="dialog wiz-done">
         <div class="wiz-done-head">${ICON.check}<h3>Acara siap</h3></div>
         <p><b>${esc(st.name)}</b>${when ? `<br>${esc(when)}` : ""}</p>
+        ${st.needs_review ? `<p class="warn-note">Acara sebesar ini ditinjau superadmin dulu. Tamu sudah bisa bergabung; kamera aktif setelah tinjauan selesai.</p>` : ""}
         <div class="invite">
           <canvas class="qr" aria-label="Kode QR undangan"></canvas>
           <div><p class="code">${esc(st.join_code)}</p><p class="link">${esc(link)}</p></div>
@@ -437,6 +481,25 @@ async function ringkasan(body) {
             <span>${fmtBytes(x.used)} dari ${fmtBytes(x.quota)} (${x.pct.toFixed(1)}%)</span></div>
           <div class="meter" role="img" aria-label="${x.name} terpakai ${x.pct.toFixed(0)} persen"><span style="width:${x.pct.toFixed(1)}%" class="${x.pct > 85 ? "hot" : ""}"></span></div>
         </div>`;
+  // Kapasitas: meter yang melewati 75% (sekarang atau perkiraan), status pembuatan acara
+  const MODE_TEXT = { limited: "dibatasi (hanya acara kecil)", closed: "ditutup" };
+  const modeNote = o.creation_mode && o.creation_mode !== "open"
+    ? ` Pembuatan acara ${MODE_TEXT[o.creation_mode]}${o.creation_mode_auto ? " otomatis" : ""}.` : "";
+  let capItems = 0;
+  if (o.capacity && o.capacity_warn) for (const m of o.capacity.meters) {
+    const peak = Math.max(Number(m.pct) || 0, Number(m.proj_pct) || 0);
+    if (peak < 75) continue;
+    capItems++;
+    items.push([`${METERS[m.key]?.name || m.key} ${Number(m.pct).toFixed(0)}%`,
+      `Perkiraan ${Number(m.proj_pct).toFixed(0)}% setelah acara terjadwal.${modeNote}`,
+      `<a class="btn small" href="#/admin/pembuatan">Kapasitas</a>`, peak >= 90 ? "crit" : "mid"]);
+  }
+  if (!capItems && modeNote) items.push([`Pembuatan acara ${MODE_TEXT[o.creation_mode]}`,
+    "Acara yang ada tetap berjalan. Buka lagi dari halaman Pembuatan acara bila kapasitas sudah cukup.",
+    `<a class="btn small" href="#/admin/pembuatan">Pembuatan acara</a>`, "info"]);
+  if (o.events_review > 0) items.push([`${o.events_review} acara besar perlu ditinjau`,
+    "Pastikan kapasitas pada tanggalnya sebelum acara aktif.",
+    `<a class="btn small" href="#/admin/pembuatan">Tinjau</a>`, "mid"]);
   if (o.reports_open > 0) items.push([`${o.reports_open} foto dilaporkan tamu`,
     "Tinjau dan sembunyikan bila perlu. Foto otomatis disembunyikan setelah tiga laporan.",
     `<a class="btn small" href="#/admin/moderasi">Moderasi</a>`]);
@@ -464,9 +527,10 @@ async function ringkasan(body) {
       ${items.length ? `
       <div class="card attention">
         <h3>Perlu perhatian</h3>
-        <ul class="attention-list">${items.map(([t, s, a]) => {
+        <ul class="attention-list">${items.map(([t, s, a, lv]) => {
           // Tingkat: kritis (laporan, permintaan data), sedang (tertahan, kamera, tanggal hapus, storage), info
-          const lvl = /dilaporkan|hapus data/.test(t) ? ["crit", "Kritis"] : /batas acara/.test(t) ? ["info", "Info"] : ["mid", "Sedang"];
+          const LV = { crit: ["crit", "Kritis"], mid: ["mid", "Sedang"], info: ["info", "Info"] };
+          const lvl = lv ? LV[lv] : /dilaporkan|hapus data/.test(t) ? LV.crit : /batas acara/.test(t) ? LV.info : LV.mid;
           return `<li class="att-${lvl[0]}"><span class="att-tag">${lvl[1]}</span><div><b>${esc(t)}</b><small>${esc(s)}</small></div>${a}</li>`;
         }).join("")}</ul>
       </div>` : `
@@ -717,6 +781,251 @@ async function privasi(body) {
     }));
   }
   await load();
+}
+
+// ---------- Pembuatan acara: status Buka / Hanya acara kecil / Tutup, kapasitas, antrean ----------
+// Status hanya menahan acara BARU (dan penambahan tamu/roll). Acara yang sudah dibuat atau
+// berlangsung, tamu yang bergabung, dan jepretan tidak pernah dihentikan olehnya.
+const CREATION_MODES = {
+  open:    { label: "Buka",        title: "Menerima semua acara", badge: "Terbuka",  tone: "open",
+             desc: "Semua akun pembuat acara bisa membuat acara sesuai batas global dan kuotanya." },
+  limited: { label: "Hanya kecil", title: "Hanya acara kecil",    badge: "Dibatasi", tone: "limited",
+             desc: "Akun tetap bisa membuat acara sampai batas tamu dan roll di bawah. Di atas itu wizard menolak dengan keterangan." },
+  closed:  { label: "Tutup",       title: "Pembuatan acara ditutup", badge: "Ditutup", tone: "closed",
+             desc: "Tidak ada acara baru yang bisa dibuat, dan tamu atau roll acara yang ada tidak bisa ditambah. Pesan di bawah ditampilkan ke penyelenggara." },
+};
+const METERS = {
+  storage:   { name: "Storage foto (anggaran)", bytes: true, note: "Supabase Storage + R2, dibagi anggaran yang Anda tetapkan" },
+  database:  { name: "Database", bytes: true, note: "Batas paket Supabase (Pro 8 GB)" },
+  mau:       { name: "Pengguna aktif 30 hari", note: "MAU paket Supabase (Pro 100.000)" },
+  r2_writes: { name: "Operasi tulis R2 bulan ini", note: "Gratis sampai 1 juta per bulan; tiap foto = 3 operasi" },
+  worker:    { name: "Request Worker bulan ini", note: "Perkiraan: foto bulan ini × request per foto. Workers Paid termasuk 10 juta, lalu US$0,30 per juta" },
+  realtime:  { name: "Koneksi realtime puncak", note: "Perkiraan: 60% peserta acara terbuka sampai 300 tamu; puncak = hari terjadwal terpadat" },
+};
+const capLevel = (m) => {
+  const p = Math.max(Number(m.pct) || 0, Number(m.proj_pct) || 0);
+  return p >= 90 ? ["Kritis", "bad"] : p >= 75 ? ["Waspada", "warn"] : ["Aman", "ok"];
+};
+const fmtNum = (n) => Number(n).toLocaleString("id-ID", { maximumFractionDigits: 0 });
+const fmtMeter = (key, v) => (METERS[key]?.bytes ? fmtBytes(Number(v)) : fmtNum(v));
+
+async function pembuatan(body) {
+  try { await rpc("capacity_tick"); } catch { /* jadwal buka lagi tetap dihitung di creation_state */ }
+  const c = await rpc("admin_capacity");
+  const st = { mode: c.mode, filter: "all" };
+  const auto = c.mode_auto ? " Dipasang otomatis oleh pengaman kapasitas." : "";
+
+  const view = el(`
+    <div class="creation">
+      <section class="card mode-card" aria-labelledby="h-mode">
+        <div class="mode-top">
+          <div class="mode-text">
+            <span class="mode-badge"></span>
+            <h2 id="h-mode" class="mode-title"></h2>
+            <p class="mode-desc"></p>
+          </div>
+          <div class="mode-radios" role="radiogroup" aria-label="Status pembuatan acara">
+            ${Object.entries(CREATION_MODES).map(([id, m]) => `<button type="button" role="radio" data-mode="${id}">${m.label}</button>`).join("")}
+          </div>
+        </div>
+        <div class="date-row mode-limited">
+          <label>Maks. tamu per acara baru<input type="number" name="max_guests" min="1" max="5000" value="${c.max_guests}" /></label>
+          <label>Maks. roll per tamu<input type="number" name="max_shots" min="1" max="500" value="${c.max_shots}" /></label>
+        </div>
+        <div class="mode-closed">
+          <label>Pesan untuk penyelenggara<input type="text" name="message" maxlength="300" placeholder="Kapasitas penuh untuk minggu ini. Kami buka lagi Senin." value="${esc(c.message || "")}" /></label>
+          <label>Buka lagi otomatis (opsional)<input type="datetime-local" name="reopen_at" value="${c.reopen_at ? toLocalInput(c.reopen_at) : ""}" /></label>
+        </div>
+        <div class="row tight wrap mode-actions">
+          <button type="button" class="btn primary" data-act="save-mode">Simpan status</button>
+          <span class="hint">${c.waitlist ? `${fmtNum(c.waitlist)} akun menunggu kabar "dibuka lagi".` : ""}</span>
+        </div>
+        <p class="hint">Acara yang sudah dibuat atau sedang berlangsung tidak terpengaruh. Tamu tetap bisa bergabung dan memotret.</p>
+      </section>
+
+      <section class="card" aria-labelledby="h-cap">
+        <div class="sec-head">
+          <h2 id="h-cap">Kapasitas sistem</h2>
+          <span class="hint">Diperbarui ${esc(fmtDate(c.at))} · termasuk ${fmtNum(c.scheduled_events)} acara terjadwal 30 hari ke depan (${fmtNum(c.scheduled_photos)} foto perkiraan)</span>
+        </div>
+        <div class="cap-grid">${c.meters.map((m) => {
+          const meta = METERS[m.key] || { name: m.key, note: "" };
+          const [lv, tone] = capLevel(m);
+          const pct = Math.min(100, Number(m.pct) || 0), proj = Math.min(100, Number(m.proj_pct) || 0);
+          return `
+          <div class="cap-card ${tone}">
+            <div class="cap-head"><b>${esc(meta.name)}${m.estimate ? ` <small class="est">perkiraan</small>` : ""}</b><span class="tag ${tone}">${lv}</span></div>
+            <span class="cap-val">${fmtMeter(m.key, m.used)} <small>/ ${fmtMeter(m.key, m.cap)}</small></span>
+            <div class="cap-bar" role="img" aria-label="${esc(meta.name)}: ${pct.toFixed(0)}% terpakai, perkiraan ${proj.toFixed(0)}%">
+              <span class="now" style="width:${pct}%"></span><span class="proj" style="left:${pct}%;width:${Math.max(0, proj - pct)}%"></span>
+            </div>
+            <small>${pct.toFixed(0)}% sekarang · ${proj.toFixed(0)}% perkiraan. ${esc(meta.note)}</small>
+          </div>`;
+        }).join("")}</div>
+        <div class="cap-legend">
+          <span><i class="now"></i>Terpakai sekarang</span>
+          <span><i class="proj"></i>Perkiraan setelah acara terjadwal</span>
+          <span>Waspada mulai 75%, kritis mulai 90%</span>
+        </div>
+        <p class="hint">Request Worker dan koneksi realtime tidak tercatat di database, jadi meternya dihitung dari model (bertanda "perkiraan"); angka pastinya ada di dasbor Cloudflare dan Supabase. Album acara di atas 300 tamu memakai polling, bukan realtime.</p>
+        <details class="advanced">
+          <summary>Anggaran kapasitas</summary>
+          <form class="settings cap-settings">
+            <div class="date-row">
+              <label>Anggaran storage (GB)<input type="number" name="capacity_storage_gb" min="1" max="1000000" value="${c.settings.capacity_storage_gb}" /></label>
+              <label>Batas database (GB)<input type="number" name="capacity_db_gb" min="1" max="100000" value="${c.settings.capacity_db_gb}" /></label>
+            </div>
+            <div class="date-row">
+              <label>Batas MAU<input type="number" name="capacity_mau" min="100" max="100000000" value="${c.settings.capacity_mau}" /></label>
+              <label>Operasi tulis R2 per bulan<input type="number" name="capacity_r2_writes" min="1000" max="2000000000" value="${c.settings.capacity_r2_writes}" /></label>
+            </div>
+            <div class="date-row">
+              <label>Rata-rata ukuran foto (MB, 3 ukuran)<input type="number" name="photo_mb_estimate" min="0.1" max="50" step="0.01" value="${c.settings.photo_mb_estimate}" /></label>
+              <label>Tinjau acara mulai (tamu)<input type="number" name="review_guests" min="1" max="5000" value="${c.settings.review_guests}" /></label>
+            </div>
+            <div class="date-row">
+              <label>Batas koneksi realtime<input type="number" name="capacity_realtime" min="10" max="1000000" value="${c.settings.capacity_realtime}" /></label>
+              <label>Request Worker per bulan<input type="number" name="capacity_worker_req" min="100000" max="100000000000" value="${c.settings.capacity_worker_req}" /></label>
+            </div>
+            <label>Request Worker per foto (model)<input type="number" name="worker_req_per_photo" min="1" max="10000" value="${c.settings.worker_req_per_photo}" /></label>
+            <p class="hint">Perkiraan per acara = tamu × roll × 70% × ukuran foto. Acara juga masuk "Perlu ditinjau" bila perkiraannya lebih dari 5% anggaran storage.</p>
+            <button class="btn small" type="submit">Simpan anggaran</button>
+          </form>
+        </details>
+      </section>
+
+      <section class="card" aria-labelledby="h-auto">
+        <h2 id="h-auto">Pengaman otomatis</h2>
+        <div class="auto-rules">${[
+          ["capacity_auto_warn", "Peringatan ke superadmin", "Tampilkan di Perlu perhatian pada Ringkasan saat satu batas melewati 75%."],
+          ["capacity_auto_limit", "Batasi otomatis di 85%", 'Ganti ke "Hanya acara kecil" saat perkiraan pemakaian melewati 85%.'],
+          ["capacity_auto_close", "Tutup otomatis di 95%", "Hentikan pembuatan acara saat perkiraan pemakaian melewati 95%."],
+        ].map(([k, name, desc]) => `
+          <div class="auto-rule">
+            <span><b>${name}</b><small>${desc}</small></span>
+            <button type="button" class="switch bare" role="switch" data-rule="${k}" aria-checked="${Boolean(c.settings[k])}" aria-label="${name}"><span class="knob"></span></button>
+          </div>`).join("")}</div>
+        <p class="hint">Diperiksa tiap 5 menit oleh jadwal <code>pengaman-kapasitas</code> (supabase/cron.sql) dan setiap halaman ini dibuka. Pengaman tidak pernah membuka lagi pembuatan acara sendiri; gunakan jadwal buka lagi.</p>
+      </section>
+
+      <section class="card" aria-labelledby="h-queue">
+        <div class="sec-head">
+          <h2 id="h-queue">Acara baru dan terjadwal</h2>
+        </div>
+        <div class="queue-filter"></div>
+        <div class="table-scroll"><table class="queue-table">
+          <thead><tr><th>Acara</th><th>Tanggal</th><th class="num">Tamu × roll</th><th class="num">Perkiraan storage</th><th>Status</th><th><span class="sr-only">Aksi</span></th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+      </section>
+    </div>`);
+  body.replaceChildren(view);
+  const f = (n) => view.querySelector(`[name="${n}"]`);
+
+  function showMode() {
+    const m = CREATION_MODES[st.mode];
+    const card = view.querySelector(".mode-card");
+    card.dataset.tone = m.tone;
+    view.querySelector(".mode-badge").textContent = m.badge;
+    view.querySelector(".mode-title").textContent = m.title;
+    view.querySelector(".mode-desc").textContent = m.desc + (st.mode === c.mode ? auto : "");
+    view.querySelectorAll("[data-mode]").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.mode === st.mode)));
+    view.querySelector(".mode-limited").hidden = st.mode !== "limited";
+    view.querySelector(".mode-closed").hidden = st.mode !== "closed";
+  }
+  view.querySelector(".mode-radios").onclick = (e) => {
+    const b = e.target.closest("[data-mode]"); if (!b) return;
+    st.mode = b.dataset.mode; showMode();
+  };
+  view.querySelector(".mode-radios").onkeydown = (e) => {
+    if (!["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp"].includes(e.key)) return;
+    e.preventDefault();
+    const ids = Object.keys(CREATION_MODES), d = e.key === "ArrowRight" || e.key === "ArrowDown" ? 1 : ids.length - 1;
+    st.mode = ids[(ids.indexOf(st.mode) + d) % ids.length]; showMode();
+    view.querySelector(`[data-mode="${st.mode}"]`).focus();
+  };
+  showMode();
+
+  view.querySelector('[data-act="save-mode"]').onclick = async (e) => {
+    const reopen = st.mode === "closed" ? fromLocalInput(f("reopen_at").value) : null;
+    if (st.mode === "closed" && c.mode !== "closed") {
+      const yes = await confirmDialog({
+        title: "Tutup pembuatan acara baru?",
+        text: "Tombol Buat acara diganti pesan penutupan untuk semua pembuat acara. Acara yang sudah ada tetap berjalan normal, tetapi tamu dan roll-nya tidak bisa ditambah. Akun yang menekan \"Kabari saya\" mendapat notifikasi saat dibuka lagi.",
+        ok: "Ya, tutup sekarang", danger: true,
+      });
+      if (!yes) return;
+    }
+    e.currentTarget.disabled = true;
+    try {
+      await rpc("set_creation_mode", {
+        p_mode: st.mode,
+        p_message: st.mode === "closed" ? f("message").value : (st.mode === "limited" ? c.message : null),
+        p_reopen_at: reopen,
+        p_max_guests: st.mode === "limited" ? Number(f("max_guests").value) : null,
+        p_max_shots: st.mode === "limited" ? Number(f("max_shots").value) : null,
+      });
+      // Dibuka lagi: kabari daftar tunggu lewat Edge Function notify-album
+      if (st.mode === "open" && c.mode !== "open") kickNotify(true);
+      toast("Status pembuatan acara disimpan.");
+      pembuatan(body);
+    } catch (err) { toast(friendly(err)); e.currentTarget.disabled = false; }
+  };
+
+  view.querySelector(".cap-settings").onsubmit = async (e) => {
+    e.preventDefault();
+    const patch = {};
+    for (const k of ["capacity_storage_gb", "capacity_db_gb", "capacity_mau", "capacity_r2_writes", "review_guests",
+      "capacity_realtime", "capacity_worker_req", "worker_req_per_photo"]) patch[k] = Number(f(k).value);
+    patch.photo_mb_estimate = Number(f("photo_mb_estimate").value);
+    try { await rpc("admin_set_settings", { p_patch: patch }); toast("Anggaran disimpan."); pembuatan(body); }
+    catch (err) { toast(friendly(err)); }
+  };
+
+  view.querySelector(".auto-rules").onclick = async (e) => {
+    const b = e.target.closest("[data-rule]"); if (!b) return;
+    const on = b.getAttribute("aria-checked") !== "true";
+    b.setAttribute("aria-checked", String(on));
+    try { await rpc("admin_set_settings", { p_patch: { [b.dataset.rule]: on } }); }
+    catch (err) { b.setAttribute("aria-checked", String(!on)); toast(friendly(err)); }
+  };
+
+  // Antrean: acara yang perlu ditinjau dulu, lalu yang terjadwal
+  const tbody = view.querySelector(".queue-table tbody");
+  const statusOf = (q) => q.needs_review ? ["Perlu ditinjau", "warn"]
+    : q.is_open ? ["Terbuka", "ok"]
+    : q.starts_at && new Date(q.starts_at) > new Date() ? ["Terjadwal", ""]
+    : ["Selesai", ""];
+  function renderQueue() {
+    const rows = c.queue.filter((q) => st.filter === "all" || (st.filter === "review" ? q.needs_review : !q.needs_review && q.starts_at && new Date(q.starts_at) > new Date()));
+    tbody.innerHTML = rows.length ? rows.map((q) => {
+      const [label, tone] = statusOf(q);
+      return `<tr>
+        <td><b>${esc(q.name)}</b><br><small class="hint">${esc(q.owner_name || "")}${q.photos ? ` · ${fmtNum(q.photos)} foto` : ""}</small></td>
+        <td>${q.starts_at ? esc(fmtDate(q.starts_at)) : "<span class=\"hint\">Belum berjadwal</span>"}</td>
+        <td class="num">${fmtNum(q.max_members)} × ${q.max_shots}</td>
+        <td class="num">${fmtBytes(Number(q.est_bytes))}</td>
+        <td><span class="tag ${tone}">${label}</span></td>
+        <td class="row tight">
+          ${q.needs_review ? `<button type="button" class="btn small primary" data-review="${q.id}">Tandai sudah ditinjau</button>` : ""}
+          <a class="btn small" href="#/e/${q.id}/panel">Kelola</a>
+        </td></tr>`;
+    }).join("") : `<tr><td colspan="6" class="hint">Tidak ada acara di daftar ini.</td></tr>`;
+  }
+  view.querySelector(".queue-filter").append(chips(
+    [["all", "Semua"], ["review", `Perlu ditinjau (${c.queue.filter((q) => q.needs_review).length})`], ["scheduled", "Terjadwal"]],
+    st.filter, (v) => { st.filter = v; renderQueue(); }, "Saring acara"));
+  tbody.onclick = async (e) => {
+    const b = e.target.closest("[data-review]"); if (!b) return;
+    b.disabled = true;
+    try {
+      await rpc("review_event", { p_event: b.dataset.review });
+      const q = c.queue.find((x) => x.id === b.dataset.review); if (q) q.needs_review = false;
+      toast("Acara ditandai sudah ditinjau.");
+      renderQueue();
+    } catch (err) { toast(friendly(err)); b.disabled = false; }
+  };
+  renderQueue();
 }
 
 // ---------- Acara ----------
@@ -1478,6 +1787,11 @@ function describe(r) {
   const patch = () => Object.entries(d).map(([k, v]) => describeChange(k, v)).join(", ");
   switch (r.action) {
     case "buat_acara": return `membuat acara “${d.name || t}”`;
+    case "ubah_pembuatan_acara": {
+      const m = { open: "Buka", limited: "Hanya acara kecil", closed: "Tutup" }[r.target] || r.target;
+      return `${d.auto ? "pengaman otomatis " : ""}mengubah status pembuatan acara menjadi ${m}${d.auto === "jadwal" ? " (jadwal buka lagi)" : d.peak ? ` (perkiraan ${Math.round(d.peak)}%)` : ""}`;
+    }
+    case "tinjau_acara": return `menandai acara “${t}” sudah ditinjau`;
     case "hapus_acara": return `menghapus acara “${d.name || t}”${d.files !== undefined ? ` (${d.files} file)` : ""}`;
     case "ubah_sampul": return `${d.path ? "mengganti" : "menghapus"} sampul acara “${t}”`;
     case "ubah_acara": return `mengubah acara “${t}”: ${patch()}`;

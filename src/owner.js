@@ -6,6 +6,7 @@ import { getUrls, removeFiles, uploadCover, coverUrl, removeCover, copyCover, re
 import { pingAlbum } from "./realtime.js";
 import { kickNotify } from "./push.js";
 import { FILMS } from "./film.js";
+import { ORNAMENTS } from "./collage-layouts.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
 import { attachZoom } from "./zoom.js";
@@ -57,6 +58,7 @@ export async function duplicateEvent(ev) {
 }
 
 export async function renderPanel(root, status, { reload, home }) {
+  const theme = status.collage_theme || {};
   const link = `${location.origin}/?kode=${status.join_code}`;
   const tabKey = `panelTab:${status.event_id}`;
   const endedBySchedule = !status.is_open && status.ends_at && new Date(status.ends_at) <= new Date();
@@ -64,6 +66,12 @@ export async function renderPanel(root, status, { reload, home }) {
   const view = el(`
     <section class="panel">
       ${status.is_admin && !status.is_owner ? `<p class="pill admin-pill">Anda mengelola acara ini sebagai superadmin</p>` : ""}
+      ${status.needs_review ? `
+      <div class="review-banner" role="status">
+        <div><b>Menunggu tinjauan superadmin</b>
+          <small>Acara sebesar ini dicek dulu kapasitasnya pada tanggalnya. Tamu sudah bisa bergabung; kamera aktif setelah tinjauan selesai.</small></div>
+        ${status.is_admin ? `<button type="button" class="btn small primary" data-act="review">Tandai sudah ditinjau</button>` : ""}
+      </div>` : ""}
 
       <div class="status-card">
         <div class="status-head">
@@ -166,6 +174,20 @@ export async function renderPanel(root, status, { reload, home }) {
           </label>
           <p class="hint">Batas admin: ${status.max_shots_limit}. ${status.is_admin ? "" : "Jatah hanya bisa dinaikkan. "}Menaikkan jatah membuka lagi gulungan yang sudah habis, dan fotonya tersembunyi lagi sampai gulungan itu habis.</p>
           <label class="check"><input type="checkbox" name="hide_names" ${status.hide_names ? "checked" : ""}/> Sembunyikan nama pengunggah (hanya Anda dan superadmin yang tahu)</label>
+          <fieldset class="collage-theme">
+            <legend>Kolase tamu</legend>
+            <label>Ornamen bawaan
+              <select name="cl_ornament">${ORNAMENTS.map((o) => `<option value="${o.id}" ${(theme.ornament || "polos") === o.id ? "selected" : ""}>${esc(o.name)}</option>`).join("")}</select></label>
+            <p class="hint">Ornamen yang boleh dipilih tamu:</p>
+            <div class="orn-checks">${ORNAMENTS.map((o) => `
+              <label class="check"><input type="checkbox" name="cl_allowed" value="${o.id}" ${!theme.allowed?.length || theme.allowed.includes(o.id) ? "checked" : ""}/> ${esc(o.name)}</label>`).join("")}
+            </div>
+            <label class="check"><input type="checkbox" name="cl_accent_on" ${theme.accent ? "checked" : ""}/> Warna aksen sendiri (konfeti)</label>
+            <input type="color" name="cl_accent" aria-label="Warna aksen kolase" value="${esc(theme.accent || "#ff5c8a")}" />
+            ${status.is_admin ? `
+            <label class="check"><input type="checkbox" name="cl_logo_optional" ${theme.logo_optional ? "checked" : ""}/> Tamu boleh mematikan logo Jepretin (acara berbayar)</label>`
+            : `<p class="hint">Logo Jepretin ${theme.logo_optional ? "boleh dimatikan tamu di acara ini." : "wajib tampil di kolase acara gratis."}</p>`}
+          </fieldset>
           <details class="advanced">
             <summary>Pengaturan lanjutan</summary>
             <label class="check"><input type="checkbox" name="reveal" ${status.reveal_at ? "checked" : ""}/> Mode cuci film: semua foto tampil bersamaan pada</label>
@@ -216,6 +238,11 @@ export async function renderPanel(root, status, { reload, home }) {
       </div>
     </section>`);
   root.replaceChildren(view);
+  view.querySelector('[data-act="review"]')?.addEventListener("click", async (e) => {
+    e.currentTarget.disabled = true;
+    try { await rpc("review_event", { p_event: status.event_id }); toast("Acara ditandai sudah ditinjau."); reload(); }
+    catch (err) { toast(friendly(err)); e.currentTarget.disabled = false; }
+  });
   const form = view.querySelector("form.settings");
 
   // --- sub-tab ---
@@ -353,6 +380,15 @@ export async function renderPanel(root, status, { reload, home }) {
       ends_at: endsAt,
     };
     if (Number(f.max_shots.value) !== status.max_shots) patch.max_shots = Number(f.max_shots.value);
+    // Tema kolase: semua ornamen dicentang = tanpa batasan; ornamen bawaan selalu ikut diizinkan
+    const allowed = [...form.querySelectorAll('[name="cl_allowed"]:checked')].map((x) => x.value);
+    if (!allowed.length) return toast("Pilih paling sedikit satu ornamen kolase.");
+    const nextTheme = { ornament: f.cl_ornament.value };
+    if (allowed.length < ORNAMENTS.length) nextTheme.allowed = [...new Set([...allowed, f.cl_ornament.value])];
+    if (f.cl_accent_on.checked) nextTheme.accent = f.cl_accent.value;
+    if (status.is_admin) nextTheme.logo_optional = f.cl_logo_optional.checked;
+    else if (theme.logo_optional !== undefined) nextTheme.logo_optional = theme.logo_optional;
+    if (JSON.stringify(nextTheme) !== JSON.stringify(theme)) patch.collage_theme = nextTheme;
     if (status.is_admin) {
       patch.photo_max_side = f.photo_max_side.value ? Number(f.photo_max_side.value) : null;
       patch.mirror_preview = triValue(f.mirror_preview.value);

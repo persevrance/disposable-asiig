@@ -725,9 +725,6 @@ body.show-page { background: #0d0810; overflow: hidden; }
 .btn.ghost.danger { color: var(--danger); border-color: var(--danger-line); }
 
 /* Kolase */
-.collage .chips { margin-bottom: .25rem; }
-.collage-preview { display: grid; place-items: center; min-height: 200px; background: var(--bg-2); border-radius: 16px; padding: .75rem; }
-.collage-preview img { max-width: 100%; max-height: 56dvh; border-radius: 10px; box-shadow: var(--shadow); }
 
 /* Data & privasi */
 .privacy .pv-history { border-top: 1.5px dashed var(--line); padding-top: .6rem; display: grid; gap: .4rem; font-size: .88rem; }

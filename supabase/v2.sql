@@ -177,6 +177,23 @@ alter table photo_reports enable row level security;
 
 -- ---------- Fase 4: kolom dan tabel ---------------------------------
 
+-- Kolase v2: tema kolase per acara
+-- Ornamen kolase yang dikenal (samakan dengan src/collage-layouts.js)
+create or replace function valid_ornament(p text) returns boolean
+language sql immutable as $$
+  select p in ('polos', 'film', 'polaroid', 'tanggal', 'selotip', 'konfeti', 'kartu');
+$$;
+
+-- Opsional: { ornament, allowed: [...], accent: "#rrggbb", logo_optional }.
+-- logo_optional (logo Jepretin boleh dimatikan, BR-19) hanya bisa diubah superadmin.
+alter table events add column if not exists collage_theme jsonb
+  check (collage_theme is null or jsonb_typeof(collage_theme) = 'object');
+-- Acara besar menunggu tinjauan superadmin: tamu bisa bergabung, tetapi belum bisa memotret
+alter table events
+  add column if not exists needs_review boolean not null default false,
+  add column if not exists reviewed_at timestamptz;
+
+
 -- Penyimpanan foto: 'supabase' (Storage) atau 'r2' (Cloudflare R2 lewat Worker situs)
 alter table app_settings
   add column if not exists storage_backend text not null default 'supabase'
@@ -444,6 +461,9 @@ begin
 
   select e.max_shots, open_now(e) into v_max, v_open from events e where e.id = p_event;
   if not v_open then raise exception 'ACARA_TUTUP'; end if;
+  if exists (select 1 from events where id = p_event and needs_review) then
+    raise exception 'ACARA_MENUNGGU_TINJAUAN';
+  end if;
   if v_used >= v_max then raise exception 'FILM_HABIS'; end if;
 
   select coalesce(max(p.seq), 0) + 1 into v_seq
@@ -583,7 +603,7 @@ returns table (event_id uuid, name text, join_code text, max_shots int, max_memb
                ev_film text, ev_mirror_preview boolean, ev_mirror_photo boolean,
                ev_photo_max_side int, downloads_used int,
                max_shots_limit int, max_members_limit int, allow_film_choice boolean,
-               starts_at timestamptz, ends_at timestamptz)
+               starts_at timestamptz, ends_at timestamptz, collage_theme jsonb, needs_review boolean)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name,
          case when can_manage(e.id) then e.join_code end,
@@ -600,7 +620,7 @@ language sql stable security definer set search_path = public as $$
          (select count(*)::int from downloads d join photos p on p.id = d.photo_id
            where d.event_id = e.id and d.user_id = auth.uid() and p.user_id <> auth.uid()),
          s.max_shots_limit, s.max_members_limit, e.allow_film_choice,
-         e.starts_at, e.ends_at
+         e.starts_at, e.ends_at, e.collage_theme, e.needs_review
     from events e
     cross join app_settings s
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
@@ -730,10 +750,13 @@ create or replace function create_event(p_name text, p_max_shots int default 30,
                              p_film text default null)
 returns uuid
 language plpgsql security definer set search_path = public as $$
-declare v_id uuid; v_try int := 0; s app_settings%rowtype; r user_roles%rowtype;
+declare v_id uuid; v_try int := 0; s app_settings%rowtype; r user_roles%rowtype; v_gate jsonb;
 begin
   perform assert_not_banned();
   if not can_create_event() then raise exception 'TIDAK_BOLEH_MEMBUAT'; end if;
+  -- Status pembuatan acara (Buka / Hanya acara kecil / Tutup) dari superadmin
+  v_gate := can_create_event(p_max_members, p_max_shots);
+  if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
   -- Kunci baris peran supaya dua permintaan bersamaan tidak melewati batas
   select * into r from user_roles where email = my_verified_email() for update;
   if r.role <> 'superadmin' and r.event_limit is not null
@@ -765,6 +788,12 @@ begin
     end;
   end loop;
   insert into event_members (event_id, user_id) values (v_id, auth.uid());
+  -- Acara besar masuk "Perlu ditinjau" supaya superadmin memastikan kapasitas pada tanggalnya
+  if r.role <> 'superadmin' and (p_max_members >= s.review_guests
+       or event_photo_estimate(p_max_members, p_max_shots) * s.photo_mb_estimate
+          >= s.capacity_storage_gb * 1024 * 0.05) then
+    update events set needs_review = true where id = v_id;
+  end if;
   update user_roles set events_created = events_created + 1 where email = r.email;
   perform log_audit('buat_acara', v_id::text, jsonb_build_object('name', trim(p_name)));
   return v_id;
@@ -810,6 +839,10 @@ declare
   s app_settings%rowtype;
   v_admin boolean := is_superadmin();
   v int;
+  v_theme jsonb;
+  v_old_members int;
+  v_old_shots int;
+  v_gate jsonb;
 begin
   perform assert_owner(p_event);
   select * into e from events where id = p_event for update;
@@ -863,6 +896,43 @@ begin
     e.max_shots := v;
   end if;
 
+  -- Menambah tamu atau roll ikut status pembuatan acara (Hanya acara kecil / Tutup)
+  select max_members, max_shots into v_old_members, v_old_shots from events where id = p_event;
+  if e.max_members > v_old_members or e.max_shots > v_old_shots then
+    v_gate := can_create_event(e.max_members, e.max_shots);
+    if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
+    if not v_admin and e.max_members >= s.review_guests and v_old_members < s.review_guests then
+      e.needs_review := true;
+    end if;
+  end if;
+
+  -- Tema kolase. logo_optional hanya bisa diubah superadmin (nilai lama dipertahankan).
+  if p_patch ? 'collage_theme' then
+    v_theme := p_patch->'collage_theme';
+    if v_theme is null or jsonb_typeof(v_theme) = 'null' then
+      v_theme := null;
+    elsif jsonb_typeof(v_theme) <> 'object'
+       or exists (select 1 from jsonb_object_keys(v_theme) k
+                   where k not in ('ornament', 'allowed', 'accent', 'logo_optional'))
+       or (v_theme ? 'ornament' and not coalesce(valid_ornament(v_theme->>'ornament'), false))
+       or (v_theme ? 'accent' and coalesce(v_theme->>'accent', '') !~ '^#[0-9A-Fa-f]{6}$')
+       or (v_theme ? 'logo_optional' and jsonb_typeof(v_theme->'logo_optional') <> 'boolean')
+       or (v_theme ? 'allowed' and (jsonb_typeof(v_theme->'allowed') <> 'array'
+             or exists (select 1 from jsonb_array_elements_text(
+                          case when jsonb_typeof(v_theme->'allowed') = 'array' then v_theme->'allowed' else '[]' end) a
+                         where not valid_ornament(a)))) then
+      raise exception 'TEMA_KOLASE_TIDAK_VALID';
+    end if;
+    if not v_admin then
+      v_theme := coalesce(v_theme, '{}') - 'logo_optional'
+                 || case when e.collage_theme ? 'logo_optional'
+                         then jsonb_build_object('logo_optional', e.collage_theme->'logo_optional')
+                         else '{}' end;
+      if v_theme = '{}' then v_theme := null; end if;
+    end if;
+    e.collage_theme := v_theme;
+  end if;
+
   update events set name = e.name, is_open = e.is_open, reveal_at = e.reveal_at,
                     purge_at = e.purge_at, invite_only = e.invite_only,
                     hide_names = e.hide_names, welcome_text = e.welcome_text,
@@ -870,7 +940,8 @@ begin
                     mirror_preview = e.mirror_preview, mirror_photo = e.mirror_photo,
                     photo_max_side = e.photo_max_side, film = e.film,
                     max_members = e.max_members, max_shots = e.max_shots,
-                    starts_at = e.starts_at, ends_at = e.ends_at
+                    starts_at = e.starts_at, ends_at = e.ends_at,
+                    collage_theme = e.collage_theme, needs_review = e.needs_review
    where id = p_event;
   perform log_audit('ubah_acara', p_event::text, p_patch);
 end $$;
@@ -1001,7 +1072,14 @@ begin
     'stuck_pending', (select count(*) from photos where status = 'pending'
                        and taken_at < now() - interval '1 hour'),
     'creators_at_limit', (select count(*) from user_roles where role = 'creator'
-                           and event_limit is not null and events_created >= event_limit));
+                           and event_limit is not null and events_created >= event_limit))
+    || (select jsonb_build_object(
+          'creation_mode', creation_mode_now(s.creation_mode, s.creation_reopen_at),
+          'creation_mode_auto', s.creation_mode_auto,
+          'capacity_warn', s.capacity_auto_warn,
+          'capacity', capacity_meters(),
+          'events_review', (select count(*) from events where needs_review))
+          from app_settings s);
 end $$;
 
 drop function if exists admin_roles();
@@ -1098,6 +1176,18 @@ begin
     storage_backend   = coalesce(p_patch->>'storage_backend', storage_backend),
     vapid_public_key  = case when p_patch ? 'vapid_public_key'
                              then nullif(trim(p_patch->>'vapid_public_key'), '') else vapid_public_key end,
+    capacity_storage_gb = coalesce((p_patch->>'capacity_storage_gb')::int, capacity_storage_gb),
+    capacity_db_gb      = coalesce((p_patch->>'capacity_db_gb')::int,      capacity_db_gb),
+    capacity_mau        = coalesce((p_patch->>'capacity_mau')::int,        capacity_mau),
+    capacity_r2_writes  = coalesce((p_patch->>'capacity_r2_writes')::int,  capacity_r2_writes),
+    capacity_auto_warn  = coalesce((p_patch->>'capacity_auto_warn')::boolean,  capacity_auto_warn),
+    capacity_auto_limit = coalesce((p_patch->>'capacity_auto_limit')::boolean, capacity_auto_limit),
+    capacity_auto_close = coalesce((p_patch->>'capacity_auto_close')::boolean, capacity_auto_close),
+    review_guests       = coalesce((p_patch->>'review_guests')::int,       review_guests),
+    capacity_realtime   = coalesce((p_patch->>'capacity_realtime')::int,   capacity_realtime),
+    capacity_worker_req = coalesce((p_patch->>'capacity_worker_req')::bigint, capacity_worker_req),
+    worker_req_per_photo = coalesce((p_patch->>'worker_req_per_photo')::int, worker_req_per_photo),
+    photo_mb_estimate   = coalesce((p_patch->>'photo_mb_estimate')::numeric, photo_mb_estimate),
     updated_at = now(), updated_by = auth.uid()
   where id;
   perform log_audit('ubah_pengaturan', null, p_patch);
@@ -1897,6 +1987,303 @@ begin
                     jsonb_build_object('approve', p_approve, 'event_name', r.event_name));
 end $$;
 
+-- ---------- Pengaman kapasitas dan status pembuatan acara ------------
+
+alter table app_settings
+  -- open = Buka, limited = Hanya acara kecil, closed = Tutup. Hanya menahan acara BARU.
+  add column if not exists creation_mode text not null default 'open'
+    check (creation_mode in ('open', 'limited', 'closed')),
+  add column if not exists creation_message text
+    check (creation_message is null or length(creation_message) <= 300),
+  add column if not exists creation_reopen_at timestamptz,          -- kembali Buka otomatis
+  add column if not exists creation_max_guests int not null default 100
+    check (creation_max_guests between 1 and 5000),
+  add column if not exists creation_max_shots int not null default 36
+    check (creation_max_shots between 1 and 500),
+  add column if not exists creation_mode_auto boolean not null default false, -- dipasang pengaman otomatis
+  add column if not exists creation_changed_at timestamptz,
+  -- Anggaran kapasitas (pembagi meter). R2 dan Workers tidak punya batas keras.
+  add column if not exists capacity_storage_gb int not null default 800
+    check (capacity_storage_gb between 1 and 1000000),
+  add column if not exists capacity_db_gb int not null default 8
+    check (capacity_db_gb between 1 and 100000),
+  add column if not exists capacity_mau int not null default 100000
+    check (capacity_mau between 100 and 100000000),
+  add column if not exists capacity_r2_writes int not null default 1000000
+    check (capacity_r2_writes between 1000 and 2000000000),
+  add column if not exists capacity_realtime int not null default 500
+    check (capacity_realtime between 10 and 1000000),
+  add column if not exists capacity_worker_req bigint not null default 10000000
+    check (capacity_worker_req between 100000 and 100000000000),
+  -- Model: request Worker per foto (unggah 3 + tampil di album, penampil, slideshow, unduhan)
+  add column if not exists worker_req_per_photo int not null default 46
+    check (worker_req_per_photo between 1 and 10000),
+  add column if not exists capacity_auto_warn  boolean not null default true,
+  add column if not exists capacity_auto_limit boolean not null default true,
+  add column if not exists capacity_auto_close boolean not null default true,
+  -- Acara dengan tamu sebanyak ini (atau perkiraan storage > 5% anggaran) perlu ditinjau
+  add column if not exists review_guests int not null default 1000
+    check (review_guests between 1 and 5000),
+  -- Rata-rata ukuran satu foto (tiga ukuran), MB. Ganti dengan rata-rata asli r2_objects.
+  add column if not exists photo_mb_estimate numeric(6, 2) not null default 1.79
+    check (photo_mb_estimate between 0.1 and 50);
+
+-- Akun yang menekan "Kabari saya" saat pembuatan acara ditutup
+create table if not exists creation_waitlist (
+  user_id uuid primary key references profiles(id) on delete cascade,
+  at      timestamptz not null default now()
+);
+alter table creation_waitlist enable row level security;
+
+-- Status efektif: status yang dipasang, kecuali jadwal buka lagi sudah lewat
+create or replace function creation_mode_now(p_mode text, p_reopen timestamptz) returns text
+language sql stable as $$
+  select case when p_mode <> 'open' and p_reopen is not null and p_reopen <= now()
+              then 'open' else p_mode end;
+$$;
+
+-- Perkiraan foto acara: tamu × roll × 70% jatah terpakai
+create or replace function event_photo_estimate(p_members int, p_shots int) returns numeric
+language sql immutable as $$
+  select p_members::numeric * p_shots * 0.7;
+$$;
+
+-- Status pembuatan acara untuk pemanggil (Dashboard dan wizard Buat acara)
+create or replace function creation_state() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+           'mode', creation_mode_now(s.creation_mode, s.creation_reopen_at),
+           'message', s.creation_message,
+           'reopen_at', case when creation_mode_now(s.creation_mode, s.creation_reopen_at) <> 'open'
+                             then s.creation_reopen_at end,
+           'max_guests', s.creation_max_guests,
+           'max_shots', s.creation_max_shots,
+           'waiting', exists (select 1 from creation_waitlist where user_id = auth.uid()),
+           'bypass', is_superadmin())
+    from app_settings s;
+$$;
+
+-- Boleh membuat acara dengan ukuran ini? Mengembalikan { ok, code, mode, message, ... }.
+-- Dipanggil create_event (dan aplikasi sebelum menyimpan). Superadmin selalu boleh.
+create or replace function can_create_event(p_guests int, p_shots int) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare s app_settings%rowtype; v_mode text; v jsonb;
+begin
+  select * into s from app_settings;
+  v_mode := creation_mode_now(s.creation_mode, s.creation_reopen_at);
+  v := jsonb_build_object('mode', v_mode, 'message', s.creation_message,
+                          'reopen_at', s.creation_reopen_at,
+                          'max_guests', s.creation_max_guests, 'max_shots', s.creation_max_shots);
+  if v_mode = 'open' or is_superadmin() then return v || '{"ok": true}'; end if;
+  if v_mode = 'closed' then return v || '{"ok": false, "code": "PEMBUATAN_DITUTUP"}'; end if;
+  if coalesce(p_guests, 0) > s.creation_max_guests or coalesce(p_shots, 0) > s.creation_max_shots then
+    return v || '{"ok": false, "code": "PEMBUATAN_DIBATASI"}';
+  end if;
+  return v || '{"ok": true}';
+end $$;
+
+create or replace function set_creation_mode(p_mode text, p_message text default null,
+                                             p_reopen_at timestamptz default null,
+                                             p_max_guests int default null, p_max_shots int default null)
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform assert_superadmin();
+  if p_mode not in ('open', 'limited', 'closed') then raise exception 'STATUS_TIDAK_DIKENAL'; end if;
+  if p_reopen_at is not null and p_reopen_at <= now() then raise exception 'JADWAL_TIDAK_VALID'; end if;
+  update app_settings set
+    creation_mode = p_mode,
+    creation_message = nullif(left(trim(coalesce(p_message, '')), 300), ''),
+    creation_reopen_at = case when p_mode = 'open' then null else p_reopen_at end,
+    creation_max_guests = coalesce(p_max_guests, creation_max_guests),
+    creation_max_shots  = coalesce(p_max_shots, creation_max_shots),
+    creation_mode_auto = false,
+    creation_changed_at = now(),
+    updated_at = now(), updated_by = auth.uid()
+  where id;
+  perform log_audit('ubah_pembuatan_acara', p_mode, jsonb_build_object(
+    'message', p_message, 'reopen_at', p_reopen_at, 'max_guests', p_max_guests, 'max_shots', p_max_shots));
+end $$;
+
+-- "Kabari saya saat dibuka". p_on false = batal.
+create or replace function join_creation_waitlist(p_on boolean) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  perform assert_not_banned();
+  if p_on then
+    insert into creation_waitlist (user_id) values (auth.uid()) on conflict do nothing;
+  else
+    delete from creation_waitlist where user_id = auth.uid();
+  end if;
+  return p_on;
+end $$;
+
+-- Untuk Edge Function notify-album (service role): kabari daftar tunggu saat sudah Buka
+create or replace function due_waitlist_notifications()
+returns table (user_id uuid, endpoint text, p256dh text, auth text)
+language sql stable security definer set search_path = public as $$
+  select w.user_id, p.endpoint, p.p256dh, p.auth
+    from creation_waitlist w
+    join push_subscriptions p on p.user_id = w.user_id
+    cross join app_settings s
+   where creation_mode_now(s.creation_mode, s.creation_reopen_at) = 'open';
+$$;
+create or replace function mark_waitlist_notified(p_users uuid[]) returns void
+language sql security definer set search_path = public as $$
+  delete from creation_waitlist where user_id = any(p_users);
+$$;
+
+-- Satu meter: angka mentah + persen sekarang dan perkiraan
+create or replace function capacity_meter(p_key text, p_used numeric, p_cap numeric, p_proj numeric)
+returns jsonb
+language sql immutable as $$
+  select jsonb_build_object('key', p_key, 'used', p_used, 'cap', p_cap, 'proj', greatest(p_used, p_proj),
+                            'pct', round(100 * p_used / nullif(p_cap, 0), 1),
+                            'proj_pct', round(100 * greatest(p_used, p_proj) / nullif(p_cap, 0), 1));
+$$;
+
+-- Pemakaian sekarang dan perkiraan setelah acara terjadwal 30 hari ke depan, untuk batas
+-- yang bisa diukur dari database. Request Worker dan koneksi realtime puncak dipantau di
+-- dasbor Cloudflare dan Supabase (tidak tercatat di database).
+create or replace function capacity_meters() returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  s app_settings%rowtype;
+  v_events int; v_guests bigint; v_photos numeric; v_month_photos numeric;
+  v_store numeric; v_db numeric; v_mau numeric; v_writes numeric;
+  v_rt numeric; v_rt_proj numeric; v_taken numeric;
+begin
+  select * into s from app_settings;
+  select count(*), coalesce(sum(e.max_members), 0),
+         coalesce(sum(event_photo_estimate(e.max_members, e.max_shots)), 0),
+         coalesce(sum(event_photo_estimate(e.max_members, e.max_shots))
+                    filter (where e.starts_at < date_trunc('month', now()) + interval '1 month'), 0)
+    into v_events, v_guests, v_photos, v_month_photos
+    from events e
+   where e.starts_at >= now() and e.starts_at < now() + interval '30 days';
+  select coalesce(sum(size), 0) into v_store from stored_objects;
+  v_db := pg_database_size(current_database());
+  select count(*) into v_mau from auth.users where last_sign_in_at > now() - interval '30 days';
+  select count(*) into v_writes from r2_objects where at >= date_trunc('month', now());
+  -- Realtime (perkiraan): 60% peserta acara terbuka sampai 300 tamu tersambung bersamaan.
+  -- Perkiraan puncak = hari terjadwal dengan jumlah tamu acara kecil terbanyak.
+  select coalesce(sum(n) * 0.6, 0) into v_rt
+    from (select (select count(*) from event_members m where m.event_id = e.id) n
+            from events e where open_now(e) and e.max_members <= 300) x;
+  select coalesce(max(day_guests) * 0.6, 0) into v_rt_proj
+    from (select sum(e.max_members) day_guests from events e
+           where e.max_members <= 300 and e.starts_at >= now() and e.starts_at < now() + interval '30 days'
+           group by date_trunc('day', e.starts_at)) d;
+  -- Request Worker (perkiraan model): foto bulan ini × request per foto
+  select count(*) into v_taken from photos where taken_at >= date_trunc('month', now());
+  return jsonb_build_object(
+    'scheduled_events', v_events,
+    'scheduled_guests', v_guests,
+    'scheduled_photos', round(v_photos),
+    'at', now(),
+    'meters', jsonb_build_array(
+      capacity_meter('storage', v_store, s.capacity_storage_gb * 1073741824.0,
+                     v_store + v_photos * s.photo_mb_estimate * 1048576),
+      capacity_meter('database', v_db, s.capacity_db_gb * 1073741824.0, v_db + v_photos * 2048),
+      capacity_meter('mau', v_mau, s.capacity_mau, v_mau + v_guests),
+      capacity_meter('r2_writes', v_writes, s.capacity_r2_writes, v_writes + v_month_photos * 3),
+      capacity_meter('worker', v_taken * s.worker_req_per_photo, s.capacity_worker_req,
+                     (v_taken + v_month_photos) * s.worker_req_per_photo) || '{"estimate": true}',
+      capacity_meter('realtime', round(v_rt), s.capacity_realtime, round(greatest(v_rt, v_rt_proj)))
+        || '{"estimate": true}'));
+end $$;
+
+-- Persen tertinggi (sekarang atau perkiraan) dari semua meter
+create or replace function capacity_peak(p jsonb) returns numeric
+language sql immutable as $$
+  select coalesce(max(greatest(coalesce((m->>'pct')::numeric, 0), coalesce((m->>'proj_pct')::numeric, 0))), 0)
+    from jsonb_array_elements(p->'meters') m;
+$$;
+
+-- Halaman Pembuatan acara: status, meter, pengaman otomatis, dan antrean acara
+create or replace function admin_capacity() returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare s app_settings%rowtype; v jsonb;
+begin
+  perform assert_superadmin();
+  select * into s from app_settings;
+  v := capacity_meters();
+  return v || jsonb_build_object(
+    'peak', capacity_peak(v),
+    'mode', creation_mode_now(s.creation_mode, s.creation_reopen_at),
+    'mode_set', s.creation_mode,
+    'mode_auto', s.creation_mode_auto,
+    'mode_changed_at', s.creation_changed_at,
+    'message', s.creation_message,
+    'reopen_at', s.creation_reopen_at,
+    'max_guests', s.creation_max_guests,
+    'max_shots', s.creation_max_shots,
+    'waitlist', (select count(*) from creation_waitlist),
+    'photo_mb', s.photo_mb_estimate,
+    'settings', jsonb_build_object(
+      'capacity_storage_gb', s.capacity_storage_gb, 'capacity_db_gb', s.capacity_db_gb,
+      'capacity_mau', s.capacity_mau, 'capacity_r2_writes', s.capacity_r2_writes,
+      'capacity_auto_warn', s.capacity_auto_warn, 'capacity_auto_limit', s.capacity_auto_limit,
+      'capacity_auto_close', s.capacity_auto_close, 'review_guests', s.review_guests,
+      'capacity_realtime', s.capacity_realtime, 'capacity_worker_req', s.capacity_worker_req,
+      'worker_req_per_photo', s.worker_req_per_photo,
+      'photo_mb_estimate', s.photo_mb_estimate),
+    'queue', coalesce((select jsonb_agg(q order by q.needs_review desc, q.starts_at nulls last, q.created_at desc)
+      from (select e.id, e.name, e.starts_at, e.created_at, e.max_members, e.max_shots,
+                   e.needs_review, e.reviewed_at, open_now(e) as is_open,
+                   round(event_photo_estimate(e.max_members, e.max_shots) * s.photo_mb_estimate * 1048576) as est_bytes,
+                   (select count(*) from photos p where p.event_id = e.id and p.status = 'ready') as photos,
+                   pr.name as owner_name
+              from events e left join profiles pr on pr.id = e.owner_id
+             where e.needs_review
+                or (e.starts_at >= now() - interval '1 day' and e.starts_at < now() + interval '60 days')
+                or (e.starts_at is null and e.created_at > now() - interval '7 days')
+             order by e.needs_review desc, e.starts_at nulls last
+             limit 50) q), '[]'));
+end $$;
+
+-- Pengaman otomatis: dijalankan cron tiap 5 menit (supabase/cron.sql) dan saat superadmin
+-- membuka halaman Pembuatan acara. Buka lagi saat jadwal tiba, batasi di 85%, tutup di 95%.
+-- Tidak pernah membuka sendiri status yang dipasang superadmin (kecuali lewat jadwal).
+create or replace function capacity_tick() returns text
+language plpgsql security definer set search_path = public as $$
+declare s app_settings%rowtype; v_peak numeric; v_act text := 'tetap';
+begin
+  if auth.uid() is not null then perform assert_superadmin(); end if;
+  select * into s from app_settings for update;
+  if s.creation_mode <> 'open' and s.creation_reopen_at is not null and s.creation_reopen_at <= now() then
+    update app_settings set creation_mode = 'open', creation_reopen_at = null, creation_mode_auto = false,
+                            creation_changed_at = now() where id;
+    perform log_audit('ubah_pembuatan_acara', 'open', '{"auto": "jadwal"}');
+    s.creation_mode := 'open';
+    v_act := 'buka';
+  end if;
+  v_peak := capacity_peak(capacity_meters());
+  if s.capacity_auto_close and v_peak >= 95 and s.creation_mode <> 'closed' then
+    update app_settings set creation_mode = 'closed', creation_mode_auto = true, creation_changed_at = now(),
+      creation_message = coalesce(creation_message, 'Kapasitas sedang penuh. Kami akan membuka lagi secepatnya.')
+     where id;
+    perform log_audit('ubah_pembuatan_acara', 'closed', jsonb_build_object('auto', 'kapasitas', 'peak', v_peak));
+    v_act := 'tutup';
+  elsif s.capacity_auto_limit and v_peak >= 85 and s.creation_mode = 'open' then
+    update app_settings set creation_mode = 'limited', creation_mode_auto = true, creation_changed_at = now()
+     where id;
+    perform log_audit('ubah_pembuatan_acara', 'limited', jsonb_build_object('auto', 'kapasitas', 'peak', v_peak));
+    v_act := 'batasi';
+  end if;
+  return v_act;
+end $$;
+
+-- Tinjau acara besar: tandai sudah dipastikan kapasitasnya pada tanggalnya
+create or replace function review_event(p_event uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform assert_superadmin();
+  update events set needs_review = false, reviewed_at = now() where id = p_event;
+  if not found then raise exception 'ACARA_TIDAK_ADA'; end if;
+  perform log_audit('tinjau_acara', p_event::text, '{}');
+end $$;
+
 revoke execute on all functions in schema public from public, anon;
 
 -- Pembantu internal: hanya dipanggil dari dalam fungsi lain
@@ -1904,7 +2291,8 @@ revoke execute on function
   log_audit(text, text, jsonb), assert_owner(uuid), assert_superadmin(), assert_not_banned(),
   gen_code(), handle_new_user(), visible_photos(uuid), my_verified_email(),
   open_now(events), owner_bytes(uuid), normalize_wa(text),
-  due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]), r2_migration_batch(int)
+  due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]), r2_migration_batch(int),
+  capacity_meters(), due_waitlist_notifications(), mark_waitlist_notified(uuid[])
 from authenticated;
 
 grant execute on function
@@ -1935,14 +2323,17 @@ grant execute on function
   admin_events(text, text, text, int, int), admin_users(text, text, int, int),
   admin_ban(uuid, boolean), admin_audit(int, int, text, text, timestamptz),
   event_stats(uuid), album_progress(uuid), admin_live_events(),
-  admin_overdue_events(), admin_client_errors(int), log_client_error(uuid, text, text, text)
+  admin_overdue_events(), admin_client_errors(int), log_client_error(uuid, text, text, text),
+  valid_ornament(text), creation_state(), can_create_event(int, int),
+  set_creation_mode(text, text, timestamptz, int, int), join_creation_waitlist(boolean),
+  admin_capacity(), capacity_tick(), review_event(uuid)
 to authenticated;
 
 -- Fungsi untuk Edge Function notify-album: hanya service_role
 do $$ begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
     grant execute on function due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]),
-      r2_migration_batch(int) to service_role;
+      r2_migration_batch(int), due_waitlist_notifications(), mark_waitlist_notified(uuid[]) to service_role;
   end if;
 end $$;
 

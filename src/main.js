@@ -12,6 +12,7 @@ import { renderGuestbook } from "./guestbook.js";
 import { openPrivacy } from "./privacy.js";
 import { coverUrl, setStorageBackend } from "./storage.js";
 import { setVapidKey } from "./push.js";
+import { noteEventSize } from "./realtime.js";
 import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial } from "./ui.js";
 import { landingHtml } from "./landing.js";
 import { themeSwitch, bindThemeSwitch } from "./theme.js";
@@ -299,6 +300,7 @@ async function renderEvent(eventId, tab) {
   let status;
   try {
     status = (await rpc("my_status", { p_event: eventId }))[0];
+    if (status) noteEventSize(status.event_id, status.max_members);
   } catch (e) {
     toast(friendly(e));
   }

@@ -208,11 +208,12 @@ export async function renderCamera(root, status, go) {
       : left > 0 ? t("Foto Anda terbuka di album setelah {n} jepretan lagi.", { n: left }) : "";
     note.hidden = waiting === 0;
     note.textContent = t("{n} foto tersimpan di HP dan akan terkirim otomatis saat ada sinyal.", { n: waiting });
-    const blocked = status.blocked || !status.is_open || left <= 0;
+    const blocked = status.blocked || !status.is_open || left <= 0 || status.needs_review;
     shutter.disabled = busy || blocked || (!stream && fileLabel.hidden);
     if (left <= 0 && !status.blocked) showDone(t("Film habis!"), t("Gulunganmu sudah dicuci dan masuk ke album bersama."), true);
     else if (!status.is_open) showDone(t("Acara ditutup"), t("Pemotretan sudah selesai."));
     else if (status.blocked) showDone(t("Akses dihentikan"), t("Pemilik acara menghentikan akses Anda."));
+    else if (status.needs_review) hint.textContent = t("Acara ini masih ditinjau tim Jepretin. Kamera aktif setelah tinjauan selesai.");
   }
 
   // Layar selesai (desain "Film habis"): latar terang, progres gulungan tamu lain, kabar album

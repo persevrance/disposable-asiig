@@ -31,6 +31,12 @@ select cron.schedule(
   $$
 );
 
+-- Pengaman kapasitas: tiap 5 menit hitung meter, buka lagi pembuatan acara saat jadwalnya
+-- tiba, batasi di 85% dan tutup di 95% (bila sakelarnya aktif di Dashboard -> Pembuatan acara).
+-- Tidak butuh nilai rahasia; berjalan langsung di database.
+select cron.unschedule(jobid) from cron.job where jobname = 'pengaman-kapasitas';
+select cron.schedule('pengaman-kapasitas', '*/5 * * * *', $$ select capacity_tick(); $$);
+
 -- Cek jadwal:            select * from cron.job;
 -- Cek hasil terakhir:    select * from cron.job_run_details order by start_time desc limit 5;
 -- Uji sekarang (tanpa menunggu jadwal): jalankan isi blok select net.http_post(...) di atas,

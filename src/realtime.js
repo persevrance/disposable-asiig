@@ -5,6 +5,14 @@ import { supabase } from "./supabase.js";
 
 const channels = new Map(); // eventId -> { ch, ready, listeners:Set }
 
+// Acara di atas 300 tamu tanpa realtime: koneksi serentak tetap di bawah batas paket Supabase
+// (500). Album acara besar memakai polling berjeda acak (album.js). Diisi saat status dimuat.
+export const REALTIME_MAX = 300;
+const large = new Set();
+export function noteEventSize(eventId, maxMembers) {
+  if ((maxMembers || 0) > REALTIME_MAX) large.add(eventId); else large.delete(eventId);
+}
+
 function channel(eventId) {
   let c = channels.get(eventId);
   if (c) return c;
@@ -18,7 +26,7 @@ function channel(eventId) {
 
 // Dengarkan ping; fn({ kind }) untuk ping, fn({ state }) saat status sambungan berubah.
 export function onAlbumPing(eventId, fn) {
-  if (!supabase) return () => {};
+  if (!supabase || large.has(eventId)) return () => {};
   const c = channel(eventId);
   c.listeners.add(fn);
   return () => {
@@ -30,7 +38,7 @@ export const albumLive = (eventId) => Boolean(channels.get(eventId)?.ready);
 
 // Kirim ping (tanpa menunggu); dipakai setelah jepretan terkirim atau acara ditutup
 export function pingAlbum(eventId, kind = "photo") {
-  if (!supabase) return;
+  if (!supabase || large.has(eventId)) return;
   const c = channel(eventId);
   const send = () => c.ch.send({ type: "broadcast", event: "ping", payload: { kind } }).catch(() => {});
   if (c.ready) send(); else setTimeout(send, 1500);
