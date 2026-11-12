@@ -163,7 +163,7 @@ export async function createEventDialog() {
 
       <fieldset class="wiz-step" data-step="1">
         <label>Nama acara <input name="name" required maxlength="80" autofocus placeholder="Contoh: Pernikahan Rani & Bima" /></label>
-        <div class="row">
+        <div class="date-row">
           <label>Mulai <input type="datetime-local" name="starts_at" /></label>
           <label>Selesai <input type="datetime-local" name="ends_at" /></label>
         </div>
@@ -341,17 +341,35 @@ async function ringkasan(body) {
     rpc("admin_client_errors", { p_limit: 20 }), rpc("admin_live_events"),
     rpc("admin_trends", { p_days: 30 }).catch(() => []),
   ]);
-  const quota = Number(o.storage_quota_mb || 1024) * 1024 * 1024;
-  const used = Number(o.photo_bytes) + Number(o.cover_bytes);
-  const usedPct = Math.min(100, (used / quota) * 100);
-  const avg = o.photos ? Number(o.photo_bytes) / o.photos : 0;
-  const left = avg ? Math.max(0, Math.floor((quota - used) / avg)) : null;
+  // Dua tempat penyimpanan, masing-masing dengan kuotanya. Foto baru masuk ke yang aktif.
+  const MB = 1024 * 1024;
+  const r2Active = o.storage_backend === "r2";
+  const sb = { name: "Supabase Storage", used: Number(o.photo_bytes) + Number(o.cover_bytes) + Number(o.voice_bytes || 0),
+    quota: Number(o.storage_quota_mb || 1024) * MB, active: !r2Active };
+  const r2 = { name: "Cloudflare R2", used: Number(o.r2_bytes || 0), quota: Number(o.r2_quota_mb || 10240) * MB, active: r2Active };
+  for (const x of [sb, r2]) x.pct = Math.min(100, (x.used / x.quota) * 100);
+  const act = r2Active ? r2 : sb;
+  const photoBytes = Number(o.photo_bytes) + Number(o.r2_bytes || 0);
+  const avg = o.photos ? photoBytes / o.photos : 0;
+  const left = avg ? Math.max(0, Math.floor((act.quota - act.used) / avg)) : null;
+  const showR2 = r2Active || Number(o.r2_files) > 0;
 
   // Hal yang perlu ditindak, urut dari yang paling mendesak
   const items = [];
-  if (usedPct > 85) items.push([`Storage terpakai ${usedPct.toFixed(0)}%`,
-    left !== null ? `Cukup untuk sekitar ${left.toLocaleString("id-ID")} foto lagi. Turunkan resolusi atau hapus acara lama.` : "Turunkan resolusi atau hapus acara lama.",
-    `<a class="btn small" href="#/admin/pengaturan">Pengaturan</a>`]);
+  for (const x of showR2 ? [sb, r2] : [sb]) {
+    if (x.pct <= 85) continue;
+    items.push([`${x.name} terpakai ${x.pct.toFixed(0)}%`,
+      x.active
+        ? (left !== null ? `Cukup untuk sekitar ${left.toLocaleString("id-ID")} foto lagi. Turunkan resolusi, hapus acara lama, atau naikkan kuota.` : "Turunkan resolusi, hapus acara lama, atau naikkan kuota.")
+        : "Foto baru tidak lagi disimpan di sini. Pindahkan foto lama atau hapus acara lama.",
+      `<a class="btn small" href="#/admin/pengaturan">Pengaturan</a>`]);
+  }
+  const meter = (x) => `
+        <div class="storage-row${x.active ? " active" : ""}">
+          <div class="storage-head"><b>${x.name}</b>${x.active ? `<span class="tag ok">foto baru di sini</span>` : ""}
+            <span>${fmtBytes(x.used)} dari ${fmtBytes(x.quota)} (${x.pct.toFixed(1)}%)</span></div>
+          <div class="meter" role="img" aria-label="${x.name} terpakai ${x.pct.toFixed(0)} persen"><span style="width:${x.pct.toFixed(1)}%" class="${x.pct > 85 ? "hot" : ""}"></span></div>
+        </div>`;
   if (o.reports_open > 0) items.push([`${o.reports_open} foto dilaporkan tamu`,
     "Tinjau dan sembunyikan bila perlu. Foto otomatis disembunyikan setelah tiga laporan.",
     `<a class="btn small" href="#/admin/moderasi">Moderasi</a>`]);
@@ -425,10 +443,10 @@ async function ringkasan(body) {
 
       <div class="card">
         <h3>Storage</h3>
-        <div class="meter" role="img" aria-label="Storage terpakai ${usedPct.toFixed(0)} persen"><span style="width:${usedPct.toFixed(1)}%" class="${usedPct > 85 ? "hot" : ""}"></span></div>
-        <p class="hint">Supabase: ${fmtBytes(used)} dari ${fmtBytes(quota)} (${usedPct.toFixed(1)}%) · foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}</p>
-        ${o.r2_files ? `<p class="hint">Cloudflare R2: ${fmtBytes(o.r2_bytes)} · ${Number(o.r2_files).toLocaleString("id-ID")} file${o.storage_backend === "r2" ? " · foto baru disimpan di R2" : ""}</p>` : ""}
-        ${left !== null ? `<p class="hint">Rata-rata ${fmtBytes(avg)} per foto (3 ukuran). Sisa cukup untuk sekitar <b>${left.toLocaleString("id-ID")}</b> foto lagi.</p>` : ""}
+        ${meter(sb)}
+        <p class="hint">Foto ${fmtBytes(o.photo_bytes)}, sampul ${fmtBytes(o.cover_bytes)}${Number(o.voice_bytes) ? `, rekaman suara ${fmtBytes(o.voice_bytes)}` : ""}</p>
+        ${showR2 ? `${meter(r2)}<p class="hint">${Number(o.r2_files || 0).toLocaleString("id-ID")} file foto</p>` : ""}
+        ${left !== null ? `<p class="hint">Rata-rata ${fmtBytes(avg)} per foto (3 ukuran). Sisa di ${act.name} cukup untuk sekitar <b>${left.toLocaleString("id-ID")}</b> foto lagi.</p>` : ""}
       </div>
 
       <div class="card errors-card">
@@ -1076,9 +1094,6 @@ async function pengaturan(body) {
           <input type="number" name="max_shots_limit" min="1" max="500" value="${s.max_shots_limit}" /></label>
         <label>Maks. peserta per acara
           <input type="number" name="max_members_limit" min="1" max="5000" value="${s.max_members_limit}" /></label>
-        <label>Kuota storage paket Supabase (MB)
-          <input type="number" name="storage_quota_mb" min="100" max="1000000" value="${s.storage_quota_mb}" /></label>
-        <p class="hint">Dipakai meter storage di Ringkasan. Paket gratis 1024 MB (1 GB), paket Pro 102400 MB (100 GB).</p>
       </fieldset>
 
       <fieldset><legend>Batas bawaan pembuat acara baru</legend>
@@ -1105,6 +1120,13 @@ async function pengaturan(body) {
             <option value="supabase" ${s.storage_backend !== "r2" ? "selected" : ""}>Supabase Storage</option>
             <option value="r2" ${s.storage_backend === "r2" ? "selected" : ""}>Cloudflare R2</option>
           </select></label>
+        <div class="date-row quota-row">
+          <label data-quota="supabase">Kuota Supabase (MB) <span class="tag ok quota-active">dipakai foto baru</span>
+            <input type="number" name="storage_quota_mb" min="100" max="1000000" value="${s.storage_quota_mb}" /></label>
+          <label data-quota="r2">Kuota R2 (MB) <span class="tag ok quota-active">dipakai foto baru</span>
+            <input type="number" name="r2_quota_mb" min="100" max="10000000" value="${s.r2_quota_mb ?? 10240}" /></label>
+        </div>
+        <p class="hint">Dipakai meter storage dan perkiraan sisa foto di Ringkasan. Supabase gratis 1024 MB (Pro 102400 MB); R2 gratis 10240 MB (10 GB), lebih dari itu dibayar per GB.</p>
         <p class="hint r2-status">Memeriksa Worker R2…</p>
         <div class="row tight wrap">
           <button type="button" class="btn small" data-act="migrate" disabled>Pindahkan foto lama ke R2</button>
@@ -1139,6 +1161,7 @@ async function pengaturan(body) {
     max_shots_limit: Number(f.max_shots_limit.value),
     max_members_limit: Number(f.max_members_limit.value),
     storage_quota_mb: Number(f.storage_quota_mb.value),
+    r2_quota_mb: Number(f.r2_quota_mb.value),
     creator_event_limit: optNum(f.creator_event_limit.value),
     creator_storage_mb: optNum(f.creator_storage_mb.value),
     photo_max_side: Number(f.photo_max_side.value),
@@ -1150,6 +1173,10 @@ async function pengaturan(body) {
     storage_backend: f.storage_backend.value,
     vapid_public_key: f.vapid_public_key.value.trim() || null,
   });
+  // Tandai kuota yang dipakai foto baru, ikut pilihan lokasi
+  const syncQuota = () => view.querySelectorAll("[data-quota]").forEach((l) => l.classList.toggle("active", l.dataset.quota === f.storage_backend.value));
+  f.storage_backend.addEventListener("change", syncQuota);
+  syncQuota();
   // R2: status Worker dan pemindahan foto lama
   const statusEl = view.querySelector(".r2-status");
   const migrateBtn = view.querySelector('[data-act="migrate"]');
@@ -1184,6 +1211,7 @@ async function pengaturan(body) {
       if (input.type === "checkbox") input.checked = v; else input.value = v ?? "";
     }
     f.jpeg_quality.oninput();
+    syncQuota();
     toast("Nilai bawaan diisi. Periksa lalu Simpan.");
   };
   view.onsubmit = async (e) => {
@@ -1205,7 +1233,7 @@ async function pengaturan(body) {
 
 // Nilai bawaan di supabase/v2.sql (app_settings)
 const SETTING_DEFAULTS = {
-  max_shots_limit: 100, max_members_limit: 300, storage_quota_mb: 1024,
+  max_shots_limit: 100, max_members_limit: 300, storage_quota_mb: 1024, r2_quota_mb: 10240,
   creator_event_limit: null, creator_storage_mb: null,
   photo_max_side: 2560, jpeg_quality: 88, default_film: "senja",
   flash_enabled: true, mirror_preview: true, mirror_photo: false,
@@ -1213,7 +1241,7 @@ const SETTING_DEFAULTS = {
 };
 const SETTING_LABELS = {
   max_shots_limit: "Maks. jepretan per peserta", max_members_limit: "Maks. peserta per acara",
-  storage_quota_mb: "Kuota storage (MB)", creator_event_limit: "Batas acara pembuat baru",
+  storage_quota_mb: "Kuota Supabase (MB)", r2_quota_mb: "Kuota R2 (MB)", creator_event_limit: "Batas acara pembuat baru",
   creator_storage_mb: "Kuota storage pembuat baru (MB)", photo_max_side: "Resolusi foto",
   jpeg_quality: "Kualitas JPEG", default_film: "Efek film bawaan", flash_enabled: "Tombol flash",
   mirror_preview: "Cermin jendela bidik", mirror_photo: "Cermin hasil foto",
@@ -1262,7 +1290,7 @@ const ACTIONS = {
 const MODERATION = { hide: "menyembunyikan foto yang dilaporkan", block: "menyembunyikan foto dan memblokir pemotret", dismiss: "mengabaikan laporan foto" };
 const FIELDS = {
   name: "nama", max_shots: "jatah", max_members: "batas peserta",
-  max_shots_limit: "batas jepretan", max_members_limit: "batas peserta", storage_quota_mb: "kuota storage (MB)",
+  max_shots_limit: "batas jepretan", max_members_limit: "batas peserta", storage_quota_mb: "kuota Supabase (MB)", r2_quota_mb: "kuota R2 (MB)",
   jpeg_quality: "kualitas JPEG", creator_event_limit: "batas acara bawaan", creator_storage_mb: "kuota storage bawaan (MB)",
 };
 function describeChange(k, v) {

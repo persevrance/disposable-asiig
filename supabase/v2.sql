@@ -181,7 +181,9 @@ alter table photo_reports enable row level security;
 alter table app_settings
   add column if not exists storage_backend text not null default 'supabase'
     check (storage_backend in ('supabase', 'r2')),
-  add column if not exists vapid_public_key text check (vapid_public_key is null or length(vapid_public_key) <= 200);
+  add column if not exists vapid_public_key text check (vapid_public_key is null or length(vapid_public_key) <= 200),
+  -- Kuota R2 untuk meter di Ringkasan (paket gratis 10 GB), dalam MB
+  add column if not exists r2_quota_mb int not null default 10240 check (r2_quota_mb between 100 and 10000000);
 
 -- File foto yang tersimpan di R2 (dicatat Worker dengan service key setelah unggah/pindah)
 create table if not exists r2_objects (
@@ -961,7 +963,10 @@ begin
                         from storage.objects where bucket_id = 'photos'),
     'cover_bytes',   (select coalesce(sum((metadata->>'size')::bigint), 0)
                         from storage.objects where bucket_id = 'covers'),
+    'voice_bytes',   (select coalesce(sum((metadata->>'size')::bigint), 0)
+                        from storage.objects where bucket_id = 'voices'),
     'r2_bytes',      (select coalesce(sum(size), 0) from r2_objects),
+    'r2_quota_mb',   (select r2_quota_mb from app_settings),
     'r2_files',      (select count(*) from r2_objects),
     'storage_backend', (select storage_backend from app_settings),
     'data_requests_open', (select count(*) from data_requests where status = 'open'),
@@ -1059,6 +1064,7 @@ begin
     mirror_photo      = coalesce((p_patch->>'mirror_photo')::boolean,   mirror_photo),
     flash_enabled     = coalesce((p_patch->>'flash_enabled')::boolean,  flash_enabled),
     storage_quota_mb  = coalesce((p_patch->>'storage_quota_mb')::int,  storage_quota_mb),
+    r2_quota_mb       = coalesce((p_patch->>'r2_quota_mb')::int,       r2_quota_mb),
     -- Boleh dikosongkan (NULL = tanpa batas), jadi pakai "ada kuncinya" bukan coalesce
     creator_event_limit = case when p_patch ? 'creator_event_limit'
                                then (p_patch->>'creator_event_limit')::int else creator_event_limit end,

@@ -152,7 +152,7 @@ export async function renderPanel(root, status, { reload, home }) {
         <form class="card settings">
           <h3>Pengaturan acara</h3>
           <label>Nama acara <input name="name" required maxlength="80" value="${esc(status.name)}" /></label>
-          <div class="row">
+          <div class="date-row">
             <label>Mulai <input type="datetime-local" name="starts_at" value="${toLocalInput(status.starts_at)}" /></label>
             <label>Selesai <input type="datetime-local" name="ends_at" value="${toLocalInput(status.ends_at)}" /></label>
           </div>

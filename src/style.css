@@ -736,6 +736,17 @@ body.show-page { background: #0d0810; overflow: hidden; }
 .privacy .pv-history li small { grid-column: 1 / -1; color: var(--muted); }
 .album-bar .row.tight { flex-wrap: wrap; justify-content: flex-end; }
 
+/* Dua isian berdampingan yang bertumpuk saat sempit (tanggal mulai/selesai, kuota) */
+.date-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 0 .75rem; }
+.date-row > label { min-width: 0; }
+input[type="datetime-local"], input[type="date"] { min-width: 0; max-width: 100%; }
+.quota-row .quota-active { display: none; margin-left: .35rem; vertical-align: 1px; }
+.quota-row label.active .quota-active { display: inline-block; justify-self: start; }
+.storage-row { display: grid; gap: .35rem; margin-bottom: .35rem; }
+.storage-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; font-size: .9rem; }
+.storage-head span:last-child { margin-left: auto; color: var(--muted); font-size: .85rem; }
+.storage-row:not(.active) .meter span { opacity: .55; }
+
 /* ===================== HP: tabel menjadi kartu bertumpuk ===================== */
 @media (max-width: 640px) {
   table.stack { min-width: 0; }
