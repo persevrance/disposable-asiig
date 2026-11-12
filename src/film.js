@@ -73,14 +73,22 @@ function buildLut(f, c) {
 
 // Terapkan preset ke canvas (di tempat). Diproses per pita supaya memori
 // tetap kecil pada foto resolusi tinggi.
-export function applyFilm(canvas, id) {
+// Kurva per preset disimpan, supaya pratinjau jendela bidik (tiap frame) tidak menghitung ulang
+const LUTS = new Map();
+function luts(id, f) {
+  if (!LUTS.has(id)) LUTS.set(id, [buildLut(f, 0), buildLut(f, 1), buildLut(f, 2)]);
+  return LUTS.get(id);
+}
+
+// preview: true = untuk jendela bidik (tanpa butiran, supaya ringan dan tidak berkedip)
+export function applyFilm(canvas, id, { preview = false } = {}) {
   const f = FILMS[id];
   if (!f || id === "asli") return;
-  const ctx = canvas.getContext("2d");
+  const ctx = canvas.getContext("2d", { willReadFrequently: preview });
   const W = canvas.width, H = canvas.height;
-  const lr = buildLut(f, 0), lg = buildLut(f, 1), lb = buildLut(f, 2);
+  const [lr, lg, lb] = luts(id, f);
   const sat = f.mono ? 0 : (f.sat ?? 1);
-  const grain = (f.grain ?? 0) * 255;
+  const grain = preview ? 0 : (f.grain ?? 0) * 255;
   const vig = f.vignette ?? 0;
   const cx = W / 2, cy = H / 2, inv = 1 / (cx * cx + cy * cy);
   let seed = (Math.random() * 0xffffffff) >>> 0 || 1;

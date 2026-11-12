@@ -40,8 +40,8 @@
   color-scheme: light;
   font-family: "Nunito", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+/* tema gelap (otomatis atau dipilih) */
+  html.dark {
     --bg: #1a1220; --bg-2: #251a2c; --card: #231a2a; --input: #1e1525; --line: #3a2b42;
     --text: #f6eaf0; --muted: #b9a8bf;
     --primary-text: #ff86a8; --primary-soft: #4a2033;
@@ -56,7 +56,7 @@
     --shadow: 0 6px 20px rgba(0, 0, 0, .35);
     color-scheme: dark;
   }
-}
+
 * { box-sizing: border-box; }
 button, a, label, .tile, .chip, input, select, textarea { touch-action: manipulation; }
 /* Fokus keyboard selalu terlihat */
@@ -557,7 +557,7 @@ td.pick input, th.pick input { width: 1.15rem; height: 1.15rem; accent-color: va
 
 /* ===================== Fase 3 ===================== */
 :root { --chart: #c22b60; --chart-grid: #f1dfcf; }
-@media (prefers-color-scheme: dark) { :root { --chart: #e05585; --chart-grid: #3a2b42; } }
+/* tema gelap (otomatis atau dipilih) */ html.dark { --chart: #e05585; --chart-grid: #3a2b42; } 
 
 /* Kamera: tombol suara rana, angka penghitung bergulir */
 .vf-right { display: inline-flex; gap: .4rem; pointer-events: none; }

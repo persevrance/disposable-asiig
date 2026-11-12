@@ -443,6 +443,35 @@ ok((await db.query(`select count(*)::int n from auth.users where id = $1`, [U.c[
 ok((await db.query(`select count(*)::int n from photos where user_id = $1`, [U.c[0]])).rows[0].n === 0, "account deletion cascades photos");
 ok((await as("admin", `select count(*)::int n from admin_audit(50, 0, 'permintaan_data')`))[0].n === 3, "data requests logged");
 
+// ---- data beranda/album dan saringan status ----
+const myEv = await as("host", `select * from my_events()`);
+ok(myEv.length >= 1 && "cover_path" in myEv[0] && typeof myEv[0].photos === "number", "my_events returns cover + photos");
+ok(typeof (await as("host", `select album_progress($1) p`, [ev]))[0].p.photos === "number", "album_progress returns photos");
+for (const s of ["live", "scheduled", "done"])
+  ok(Array.isArray(await as("host", `select * from admin_events(null, $1)`, [s])), `admin_events status ${s}`);
+
+// ---- pengajuan menjadi pembuat acara ----
+ok((await db.query(`select normalize_wa('0812-3456 7890') a, normalize_wa('+62 812 3456 7890') b, normalize_wa('12345') c`)).rows
+  .every((r) => r.a === "6281234567890" && r.b === "6281234567890" && r.c === null), "normalize_wa");
+await expectErr("host", `select request_creator('081234567890', 'Acara')`, [], "SUDAH_PEMBUAT_ACARA");
+await expectErr("evil", `select request_creator('081234567890', 'Acara')`, [], "EMAIL_BELUM_TERVERIFIKASI");
+await expectErr("d", `select request_creator('12345', 'Wisuda')`, [], "NOMOR_WA_TIDAK_VALID");
+await expectErr("d", `select request_creator('081234567890', 'ab')`, [], "NAMA_ACARA_KOSONG");
+const cr = (await as("d", `select request_creator('0812 3456 7890', 'Wisuda Angkatan', '2026-12-01', 40, 'tolong') id`))[0].id;
+await expectErr("d", `select request_creator('081234567890', 'Lagi')`, [], "PENGAJUAN_SUDAH_ADA");
+ok((await as("d", `select * from my_creator_request()`))[0]?.status === "open", "my_creator_request open");
+await expectErr("host", `select * from admin_creator_requests()`, [], "BUKAN_SUPERADMIN");
+const crs = await as("admin", `select * from admin_creator_requests()`);
+ok(crs.length === 1 && crs[0].phone === "6281234567890" && crs[0].user_name === "Dodi", "admin_creator_requests");
+ok((await as("admin", `select admin_overview() o`))[0].o.creator_requests_open === 1, "overview counts creator requests");
+await expectErr("admin", `select admin_resolve_creator_request($1, false, '')`, [cr], "ALASAN_WAJIB");
+await as("admin", `select admin_resolve_creator_request($1, false, 'Lengkapi data acara')`, [cr]);
+ok((await as("d", `select * from my_creator_request()`))[0]?.reply === "Lengkapi data acara", "rejection reason visible");
+const cr2 = (await as("d", `select request_creator('081234567890', 'Wisuda Angkatan 2026') id`))[0].id;
+await as("admin", `select admin_resolve_creator_request($1, true)`, [cr2]);
+ok((await as("d", `select can_create_event() v`))[0].v === true, "approved request grants creator");
+await expectErr("admin", `select admin_resolve_creator_request($1, true)`, [cr2], "PERMINTAAN_SELESAI");
+
 await as("host", `select delete_event($1)`, [ev]);
 ok((await db.query(`select count(*)::int n from photos`)).rows[0].n === 0, "delete_event cascades");
 

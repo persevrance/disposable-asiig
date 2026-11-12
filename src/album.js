@@ -35,7 +35,7 @@ export async function renderAlbum(root, status) {
       <div class="page-head">
         <div class="ph-text">
           <h1>${t("Album")}</h1>
-          <span>${esc(status.name)}</span>
+          <span class="album-sub">${esc(status.name)}</span>
         </div>
         <div class="album-bar ph-actions">
           <button class="round-btn" data-act="collage" aria-label="${t("Kolase")}" title="${t("Kolase")}">${ICON.grid}</button>
@@ -61,6 +61,7 @@ export async function renderAlbum(root, status) {
       <div class="select-bar" hidden>
         <span class="sel-info"></span>
         <button class="btn small ghost" data-act="cancel">${t("Batal")}</button>
+        <button class="btn small" data-act="auto" hidden>${t("Pilihkan otomatis")}</button>
         <button class="btn small" data-act="sel-collage">${t("Kolase")}</button>
         <button class="btn small primary" data-act="get">${t("Unduh")}</button>
       </div>
@@ -87,6 +88,7 @@ export async function renderAlbum(root, status) {
     const mine = status.is_member && progress.my_used !== null && progress.my_used !== undefined;
     progressEl.hidden = false;
     // Strip ringkas: "Gulunganmu 30/30 · 18 dari 42 tamu sudah habis filmnya"
+    if (typeof progress.photos === "number") view.querySelector(".album-sub").textContent = `${status.name} · ${t("{n} foto", { n: progress.photos })}`;
     progressEl.title = reveal ? t("Semua foto terbuka {d}.", { d: fmtDate(status.reveal_at) })
       : t("Foto setiap tamu muncul di sini setelah filmnya habis atau acara ditutup.");
     progressEl.innerHTML = `
@@ -227,7 +229,17 @@ export async function renderAlbum(root, status) {
       : t("Sisa unduhan: {a} dari {b} · foto Anda sendiri gratis", { a: quotaLeft(), b: status.max_shots });
   }
 
+  // Mode pilih: "download" (unduh, memakai kuota) atau "collage" (2–9 foto, tanpa kuota)
+  const COLLAGE_MAX = 9;
+  let selMode = "download";
+  const collageBtn = view.querySelector('[data-act="sel-collage"]');
   function updateSelBar() {
+    if (selMode === "collage") {
+      selInfo.textContent = t("{n}/{max} dipilih", { n: selected.size, max: COLLAGE_MAX });
+      selInfo.classList.remove("warn");
+      collageBtn.disabled = selected.size < 2;
+      return;
+    }
     const c = cost(selected);
     selInfo.textContent = unlimited() || !c
       ? t("{n} dipilih", { n: selected.size })
@@ -235,16 +247,24 @@ export async function renderAlbum(root, status) {
     const over = !unlimited() && c > quotaLeft();
     selInfo.classList.toggle("warn", over);
     view.querySelector('[data-act="get"]').disabled = !selected.size || over;
-    view.querySelector('[data-act="sel-collage"]').disabled = selected.size < 2;
+    collageBtn.disabled = selected.size < 2;
   }
 
-  function setSelecting(on) {
+  function setSelecting(on, mode = "download") {
     selecting = on;
+    selMode = mode;
     selected.clear();
     grid.classList.toggle("selecting", on);
     grid.querySelectorAll(".tile.selected").forEach((t) => t.classList.remove("selected"));
     selBar.hidden = !on;
+    selBar.classList.toggle("collage-mode", mode === "collage");
     selectBtn.hidden = on;
+    view.querySelector('[data-act="collage"]').hidden = on;
+    view.querySelector('[data-act="get"]').hidden = mode === "collage";
+    view.querySelector('[data-act="auto"]').hidden = mode !== "collage";
+    collageBtn.textContent = mode === "collage" ? t("Buat kolase") : t("Kolase");
+    collageBtn.classList.toggle("primary", mode === "collage");
+    if (on && mode === "collage") toast(t("Ketuk 2–9 foto untuk kolase."), 2500);
     updateSelBar();
   }
   selectBtn.onclick = () => setSelecting(true);
@@ -263,12 +283,16 @@ export async function renderAlbum(root, status) {
       openCollage(status, rows.map((r) => ({ url: urls[r.medium_path], owner_name: r.owner_name })).filter((p) => p.url));
     } catch (e) { toast(friendly(e)); }
   }
-  view.querySelector('[data-act="collage"]').onclick = () => {
+  // Tombol kolase di kepala album: masuk mode pilih khusus kolase
+  view.querySelector('[data-act="collage"]').onclick = () => setSelecting(true, "collage");
+  // Pilihkan otomatis: favorit dulu, lalu foto terbaru
+  view.querySelector('[data-act="auto"]').onclick = () => {
     const all = [...items.values()].filter((r) => !r.hidden);
-    const pick = [...all.filter((r) => r.is_fav), ...all.filter((r) => !r.is_fav)].slice(0, 9).map((r) => r.photo_id);
+    const pick = [...all.filter((r) => r.is_fav), ...all.filter((r) => !r.is_fav)].slice(0, COLLAGE_MAX).map((r) => r.photo_id);
+    setSelecting(false);
     collageFrom(pick);
   };
-  view.querySelector('[data-act="sel-collage"]').onclick = () => { collageFrom([...selected]); setSelecting(false); };
+  collageBtn.onclick = () => { const ids = [...selected]; setSelecting(false); collageFrom(ids); };
 
   function emptyText() {
     if (filter.kind === "fav") return t("Belum ada favorit. Ketuk ikon hati saat melihat foto untuk menyimpannya di sini.");
@@ -304,7 +328,9 @@ export async function renderAlbum(root, status) {
         </button>`);
       n.onclick = () => {
         if (!selecting) return openViewer(r.photo_id);
-        if (selected.has(r.photo_id)) selected.delete(r.photo_id); else selected.add(r.photo_id);
+        if (selected.has(r.photo_id)) selected.delete(r.photo_id);
+        else if (selMode === "collage" && selected.size >= COLLAGE_MAX) { toast(t("Kolase paling banyak {n} foto.", { n: COLLAGE_MAX })); return; }
+        else selected.add(r.photo_id);
         n.classList.toggle("selected", selected.has(r.photo_id));
         updateSelBar();
       };

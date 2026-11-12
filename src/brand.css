@@ -5,14 +5,13 @@
 .wordmark { font-family: "Fredoka", "Nunito", system-ui, sans-serif; font-weight: 600; font-size: 1.75rem; letter-spacing: -.01em; line-height: 1; color: var(--text); }
 .home-brand { display: flex; }
 .home-brand .wordmark { font-size: 1.5rem; }
-@media (prefers-color-scheme: dark) {
-  /* Logo versi gelap: badan krem, detail ungu tua */
-  .brand-mark:not(.on-dark) [fill="#2D1B33"] { fill: #FFF8F0; }
-  .brand-mark:not(.on-dark) [fill="#FFF8F0"] { fill: #2D1B33; }
-}
+/* Tema gelap: logo versi gelap (badan krem, detail ungu tua) */
+html.dark .brand-mark:not(.on-dark) [fill="#2D1B33"] { fill: #FFF8F0; }
+html.dark .brand-mark:not(.on-dark) [fill="#FFF8F0"] { fill: #2D1B33; }
+
 
 .landing { --lp-max: 1160px; --how-bg: #2d1b33; --how-card: #3a2541; --how-text: #f6eaf0; --how-muted: #d9c9dd; }
-@media (prefers-color-scheme: dark) { .landing { --how-bg: #2a1d31; --how-card: #382840; } }
+/* tema gelap (otomatis atau dipilih) */ html.dark .landing { --how-bg: #2a1d31; --how-card: #382840; } 
 .landing h1, .landing h2, .landing h3 { font-family: "Fredoka", "Nunito", system-ui, sans-serif; font-weight: 600; margin: 0; }
 .landing p { margin: 0; }
 .lp-inner {
@@ -102,7 +101,7 @@
 .lp-ic.mint { background: var(--mint-soft); color: var(--mint-text); }
 .lp-ic.sky { background: #dcecfa; color: #24679f; }
 .lp-ic.grape { background: var(--grape-soft); color: var(--grape-text); }
-@media (prefers-color-scheme: dark) { .lp-ic.sky { background: #1b3044; color: var(--sky); } }
+/* tema gelap (otomatis atau dipilih) */ html.dark .lp-ic.sky { background: #1b3044; color: var(--sky); } 
 
 /* Cocok untuk */
 .lp-uses { padding-bottom: 6rem; display: flex; flex-direction: column; gap: 1.25rem; }
@@ -184,6 +183,9 @@
 .am-head { display: flex; align-items: center; gap: .75rem; }
 .am-head small { display: block; color: var(--muted); font-size: .8rem; word-break: break-all; }
 .am-lang { display: flex; justify-content: center; }
+.am-row { display: flex; align-items: center; justify-content: space-between; gap: .75rem; flex-wrap: wrap; }
+.am-row > span { font-size: .875rem; font-weight: 800; color: var(--muted); }
+.theme-switch button { padding: .35rem .7rem; }
 
 /* 2 · Setuju dan masuk */
 .join { max-width: 560px; margin: 0 auto; min-height: 100dvh; display: flex; flex-direction: column; }
@@ -328,6 +330,8 @@ select.chip.owner-filter { width: auto; appearance: none; -webkit-appearance: no
 }
 .tile img { aspect-ratio: 3 / 4; height: auto; border-radius: 3px; background: var(--bg-2); }
 .tile .check { top: 10px; left: 10px; }
+html.dark .tile { background: #2e2236; box-shadow: 0 1px 3px rgba(0, 0, 0, .4); }
+html.dark .tile img { background: #251a2c; }
 .tile.selected { outline-offset: 0; }
 .tile-badges { inset: 4px 4px 12px; }
 
@@ -398,7 +402,7 @@ select.chip.owner-filter { width: auto; appearance: none; -webkit-appearance: no
   background: #2d1b33; color: #f6eaf0; border-radius: 22px; padding: 1.1rem; margin-bottom: 1rem;
   display: grid; gap: 1rem;
 }
-@media (prefers-color-scheme: dark) { .status-card { background: #2a1d31; border: 1.5px solid #3a2b42; } }
+/* tema gelap (otomatis atau dipilih) */ html.dark .status-card { background: #2a1d31; border: 1.5px solid #3a2b42; } 
 .status-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; flex-wrap: wrap; }
 .status-head small { font-size: .8rem; color: #bba9c0; }
 .status-live { display: inline-flex; align-items: center; gap: .5rem; font-weight: 800; font-size: .95rem; }
@@ -522,10 +526,10 @@ select.chip.owner-filter { width: auto; appearance: none; -webkit-appearance: no
 .att-mid .att-tag { color: var(--sun-text); }
 .att-info { background: #dcecfa; }
 .att-info .att-tag { color: #24679f; }
-@media (prefers-color-scheme: dark) {
-  .att-crit { background: #3a1a22; } .att-info { background: #1b3044; } .att-tag { background: var(--card); }
-  .att-info .att-tag { color: var(--sky); } .att-crit .att-tag { color: #ff8f9e; }
-}
+/* tema gelap (otomatis atau dipilih) */
+  html.dark .att-crit { background: #3a1a22; } html.dark .att-info { background: #1b3044; } html.dark .att-tag { background: var(--card); }
+  html.dark .att-info .att-tag { color: var(--sky); } html.dark .att-crit .att-tag { color: #ff8f9e; }
+
 .stats { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .875rem; }
 .stat { border-radius: 20px; padding: 1.1rem; box-shadow: none; gap: .3rem; }
 .stat b { order: 2; color: var(--text); font-size: 1.75rem; }
@@ -557,6 +561,58 @@ select.chip.owner-filter { width: auto; appearance: none; -webkit-appearance: no
 .show-qr-card b { font-family: "Nunito", sans-serif; font-weight: 800; font-size: 1rem; }
 .show-qr-card .show-code { font-family: "Fredoka", sans-serif; font-weight: 600; font-size: 1.5rem; color: #2d1b33; letter-spacing: .15em; }
 .show-code-big { font-family: "Fredoka", sans-serif; letter-spacing: .2em; }
+
+/* ===================== Kolase, pengajuan pembuat acara ===================== */
+.he-thumb.has-cover { background-size: cover; background-position: center; }
+
+/* Mode pilih kolase */
+.select-bar.collage-mode { border-color: var(--primary); }
+.select-bar .btn { white-space: nowrap; }
+@media (max-width: 480px) {
+  .select-bar { left: .75rem; right: .75rem; transform: none; width: auto; max-width: none; flex-wrap: wrap; border-radius: 22px; padding: .5rem; }
+  .select-bar .sel-info { flex-basis: 100%; text-align: center; padding: .15rem 0; }
+  .select-bar .btn { flex: 1 1 auto; }
+}
+
+/* Dialog kolase */
+.collage { gap: 1rem; }
+.collage-head { display: flex; align-items: center; justify-content: space-between; }
+.collage-head h3 { font-size: 1.3rem; }
+.collage-preview { background: var(--bg-2); border-radius: 18px; padding: 1rem; min-height: 240px; }
+.collage-preview img { max-height: 52dvh; border-radius: 6px; box-shadow: 0 8px 28px rgba(45, 27, 51, .16); }
+.collage-opts { display: grid; gap: .6rem; }
+.collage-opts .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.collage-opts .chip { flex: none; }
+.theme-chip i { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--line); display: inline-block; }
+.theme-chip.light i { background: #fff8f0; }
+.theme-chip.dark i { background: #1c1220; }
+.collage-actions { display: grid; grid-template-columns: 1fr 2fr; gap: .6rem; }
+.collage-actions .btn { font-weight: 800; min-height: 48px; }
+
+/* Pengajuan pembuat acara (tamu) */
+.req-card { display: grid; gap: .3rem; padding: 1rem; border-radius: 18px; border: 1.5px solid var(--line); background: var(--card); }
+.req-card.open { background: var(--sun-soft); border-color: var(--sun-line); }
+.req-card.rejected { background: var(--danger-soft); border-color: var(--danger-line); }
+.req-card span { font-size: .9rem; line-height: 1.45; }
+.req-card small { color: var(--muted); font-size: .75rem; }
+.req-card .btn { justify-self: start; margin-top: .4rem; }
+.creator-req p { margin: 0; }
+.creator-req .hint { display: block; margin-top: .3rem; font-weight: 500; }
+
+/* Pengajuan pembuat acara (superadmin) */
+.creator-reqs h3 { display: flex; align-items: center; gap: .5rem; }
+.cr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.cr-item { display: flex; flex-wrap: wrap; gap: .75rem; justify-content: space-between; align-items: flex-start; padding: .875rem; border: 1.5px solid var(--line); border-radius: 16px; background: var(--bg); }
+.cr-item.done { opacity: .8; }
+.cr-main { flex: 1 1 280px; display: grid; gap: .4rem; min-width: 0; }
+.cr-who small, .cr-event small { display: block; color: var(--muted); font-size: .8rem; }
+.cr-note { margin: 0; font-size: .875rem; line-height: 1.45; background: var(--card); border-radius: 10px; padding: .5rem .65rem; }
+.cr-result { color: var(--muted); }
+.cr-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.btn.wa { background: #e7f8ee; border-color: #bfe8cf; color: #11663a; }
+/* tema gelap (otomatis atau dipilih) */ html.dark .btn.wa { background: #173a28; border-color: #24563b; color: #8ee0b0; } 
+.cr-history summary { cursor: pointer; font-weight: 700; margin: .75rem 0 .5rem; }
+.nav-count { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: #ff86a8; color: #2d1b33; font-size: .72rem; font-weight: 800; margin-left: .3rem; }
 
 @media (prefers-reduced-motion: reduce) {
   .shutter > span { transition: none; }

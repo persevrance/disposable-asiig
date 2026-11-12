@@ -256,6 +256,25 @@ alter table album_watch        enable row level security;
 alter table guestbook          enable row level security;
 alter table data_requests      enable row level security;
 
+-- Pengajuan menjadi pembuat acara (nomor WhatsApp disimpan dalam format 62xxxxxxxxx)
+create table if not exists creator_requests (
+  id         bigserial primary key,
+  user_id    uuid references profiles(id) on delete cascade,
+  email      text not null,
+  phone      text not null check (phone ~ '^62[0-9]{8,13}$'),
+  event_name text not null check (length(event_name) between 3 and 80),
+  event_date date,
+  guests     int check (guests is null or guests between 1 and 100000),
+  note       text check (note is null or length(note) <= 500),
+  status     text not null default 'open' check (status in ('open', 'approved', 'rejected')),
+  created_at timestamptz not null default now(),
+  done_at    timestamptz,
+  done_by    uuid references profiles(id) on delete set null,
+  reply      text check (reply is null or length(reply) <= 500)
+);
+create index if not exists creator_requests_open on creator_requests (status, created_at desc);
+alter table creator_requests   enable row level security;
+
 -- Rekaman suara buku tamu (privat, kecil)
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('voices', 'voices', false, 2097152, array['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac'])
@@ -589,13 +608,18 @@ language sql stable security definer set search_path = public as $$
      and (e.owner_id = auth.uid() or m.user_id is not null or is_superadmin());
 $$;
 
--- Daftar acara milik / yang diikuti pemanggil (status terbuka memperhitungkan jadwal)
-create or replace function my_events()
+-- Daftar acara milik / yang diikuti pemanggil (status terbuka memperhitungkan jadwal).
+-- Sampul, jadwal, dan jumlah foto yang terlihat oleh pemanggil untuk kartu beranda.
+drop function if exists my_events();
+create function my_events()
 returns table (event_id uuid, name text, is_owner boolean, is_open boolean,
-               max_shots int, shots_used int, created_at timestamptz)
+               max_shots int, shots_used int, created_at timestamptz,
+               cover_path text, starts_at timestamptz, ends_at timestamptz, photos int)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name, e.owner_id = auth.uid(), open_now(e), e.max_shots,
-         coalesce(m.shots_used, 0), e.created_at
+         coalesce(m.shots_used, 0), e.created_at,
+         e.cover_path, e.starts_at, e.ends_at,
+         (select count(*)::int from visible_photos(e.id))
     from events e
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
    where e.owner_id = auth.uid() or m.user_id is not null
@@ -970,6 +994,7 @@ begin
     'r2_files',      (select count(*) from r2_objects),
     'storage_backend', (select storage_backend from app_settings),
     'data_requests_open', (select count(*) from data_requests where status = 'open'),
+    'creator_requests_open', (select count(*) from creator_requests where status = 'open'),
     'storage_quota_mb', (select storage_quota_mb from app_settings),
     'camera_errors_24h', (select count(*) from client_errors where at > now() - interval '24 hours'),
     'overdue_events', (select count(*) from events where purge_at <= now()),
@@ -1127,6 +1152,10 @@ begin
          and (coalesce(p_status, 'all') = 'all'
               or (p_status = 'open' and open_now(e))
               or (p_status = 'closed' and not open_now(e))
+              -- Saringan desain "Acara saya": berlangsung / terjadwal / selesai
+              or (p_status = 'live' and open_now(e) and (e.starts_at is null or e.starts_at <= now()))
+              or (p_status = 'scheduled' and open_now(e) and e.starts_at > now())
+              or (p_status = 'done' and not open_now(e))
               or (p_status = 'overdue' and e.purge_at <= now())
               or (p_status = 'reported' and exists (select 1 from photo_reports r
                                                      where r.event_id = e.id and r.resolved_at is null)))
@@ -1300,7 +1329,8 @@ language sql stable security definer set search_path = public as $$
       'members',    (select count(*) from event_members m where m.event_id = e.id),
       'rolls_done', (select count(*) from event_members m where m.event_id = e.id and m.shots_used >= e.max_shots),
       'my_used',    (select m.shots_used from event_members m where m.event_id = e.id and m.user_id = auth.uid()),
-      'max_shots',  e.max_shots)
+      'max_shots',  e.max_shots,
+      'photos',     (select count(*) from visible_photos(e.id)))
     from events e
    where e.id = p_event
      and (e.owner_id = auth.uid() or is_superadmin()
@@ -1777,13 +1807,103 @@ end $$;
 
 -- ---------- Hak eksekusi --------------------------------------------
 
+-- ---------- Pengajuan menjadi pembuat acara --------------------------
+-- Pengguna yang belum punya peran mengajukan diri (dengan nomor WhatsApp untuk dihubungi);
+-- superadmin menyetujui (peran creator dengan batas bawaan) atau menolak dengan alasan.
+
+create or replace function normalize_wa(p text) returns text
+language sql immutable as $$
+  -- 0812..., +62812..., 62812..., 812... -> 62812...; selain itu NULL
+  select case
+    when d ~ '^628[0-9]{7,12}$' then d
+    when d ~ '^08[0-9]{7,12}$'  then '62' || substr(d, 2)
+    when d ~ '^8[0-9]{7,12}$'   then '62' || d
+  end
+  from (select regexp_replace(coalesce(p, ''), '[^0-9]', '', 'g') as d) x;
+$$;
+
+create or replace function my_creator_request()
+returns table (id bigint, status text, phone text, event_name text, event_date date, guests int,
+               note text, created_at timestamptz, done_at timestamptz, reply text)
+language sql stable security definer set search_path = public as $$
+  select r.id, r.status, r.phone, r.event_name, r.event_date, r.guests, r.note,
+         r.created_at, r.done_at, r.reply
+    from creator_requests r
+   where r.user_id = auth.uid()
+   order by r.created_at desc
+   limit 1;
+$$;
+
+create or replace function request_creator(p_phone text, p_event_name text, p_event_date date default null,
+                                           p_guests int default null, p_note text default null)
+returns bigint
+language plpgsql security definer set search_path = public as $$
+declare v_id bigint; v_email text := my_verified_email(); v_phone text := normalize_wa(p_phone);
+begin
+  if auth.uid() is null then raise exception 'BELUM_LOGIN'; end if;
+  if v_email is null then raise exception 'EMAIL_BELUM_TERVERIFIKASI'; end if;
+  perform assert_not_banned();
+  if can_create_event() then raise exception 'SUDAH_PEMBUAT_ACARA'; end if;
+  if exists (select 1 from creator_requests where user_id = auth.uid() and status = 'open') then
+    raise exception 'PENGAJUAN_SUDAH_ADA';
+  end if;
+  if v_phone is null then raise exception 'NOMOR_WA_TIDAK_VALID'; end if;
+  if length(trim(coalesce(p_event_name, ''))) < 3 then raise exception 'NAMA_ACARA_KOSONG'; end if;
+  if p_guests is not null and (p_guests < 1 or p_guests > 100000) then raise exception 'JUMLAH_TAMU_TIDAK_VALID'; end if;
+  insert into creator_requests (user_id, email, phone, event_name, event_date, guests, note)
+  values (auth.uid(), v_email, v_phone, left(trim(p_event_name), 80), p_event_date, p_guests,
+          nullif(left(trim(coalesce(p_note, '')), 500), ''))
+  returning id into v_id;
+  return v_id;
+end $$;
+
+create or replace function admin_creator_requests(p_status text default 'open')
+returns table (id bigint, user_id uuid, user_name text, email text, phone text, event_name text,
+               event_date date, guests int, note text, status text, created_at timestamptz,
+               done_at timestamptz, reply text)
+language plpgsql stable security definer set search_path = public as $$
+#variable_conflict use_column
+begin
+  perform assert_superadmin();
+  return query
+    select r.id, r.user_id, pr.name, r.email, r.phone, r.event_name, r.event_date, r.guests, r.note,
+           r.status, r.created_at, r.done_at, r.reply
+      from creator_requests r
+      left join profiles pr on pr.id = r.user_id
+     where coalesce(p_status, 'all') = 'all' or r.status = p_status
+     order by (r.status = 'open') desc, r.created_at desc
+     limit 200;
+end $$;
+
+-- p_approve true: beri peran creator (batas bawaan dari pengaturan global). false: tolak, alasan wajib.
+create or replace function admin_resolve_creator_request(p_request bigint, p_approve boolean, p_reply text default null)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare r creator_requests%rowtype;
+begin
+  perform assert_superadmin();
+  select * into r from creator_requests where id = p_request for update;
+  if not found then raise exception 'PERMINTAAN_TIDAK_ADA'; end if;
+  if r.status <> 'open' then raise exception 'PERMINTAAN_SELESAI'; end if;
+  if not p_approve and length(trim(coalesce(p_reply, ''))) = 0 then raise exception 'ALASAN_WAJIB'; end if;
+  if p_approve and not exists (select 1 from user_roles where email = r.email) then
+    perform admin_set_role(r.email, 'creator');
+  end if;
+  update creator_requests
+     set status = case when p_approve then 'approved' else 'rejected' end,
+         done_at = now(), done_by = auth.uid(), reply = nullif(left(trim(coalesce(p_reply, '')), 500), '')
+   where id = p_request;
+  perform log_audit('pengajuan_pembuat', r.email,
+                    jsonb_build_object('approve', p_approve, 'event_name', r.event_name));
+end $$;
+
 revoke execute on all functions in schema public from public, anon;
 
 -- Pembantu internal: hanya dipanggil dari dalam fungsi lain
 revoke execute on function
   log_audit(text, text, jsonb), assert_owner(uuid), assert_superadmin(), assert_not_banned(),
   gen_code(), handle_new_user(), visible_photos(uuid), my_verified_email(),
-  open_now(events), owner_bytes(uuid),
+  open_now(events), owner_bytes(uuid), normalize_wa(text),
   due_album_notifications(), mark_album_notified(uuid[]), drop_push(text[]), r2_migration_batch(int)
 from authenticated;
 
@@ -1802,6 +1922,8 @@ grant execute on function
   can_upload_voice(text), can_hear_voice(text), can_delete_voice(text),
   request_data_deletion(text, uuid, text), my_data_requests(), admin_data_requests(text),
   admin_request_paths(bigint), admin_process_request(bigint, text, text),
+  my_creator_request(), request_creator(text, text, date, int, text),
+  admin_creator_requests(text), admin_resolve_creator_request(bigint, boolean, text),
   claim_downloads(uuid, uuid[]),
   can_upload(text), can_view(text), owns_path(text),
   create_event(text, int, int, boolean, text), set_event(uuid, jsonb), set_cover(uuid, text),

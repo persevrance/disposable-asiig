@@ -14,6 +14,8 @@ import { coverUrl, setStorageBackend } from "./storage.js";
 import { setVapidKey } from "./push.js";
 import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial } from "./ui.js";
 import { landingHtml } from "./landing.js";
+import { themeSwitch, bindThemeSwitch } from "./theme.js";
+import { myCreatorRequest, openCreatorRequest, requestStatusCard } from "./creator-request.js";
 import { t, langSwitch, bindLangSwitch } from "./i18n.js";
 
 const app = document.getElementById("app");
@@ -64,6 +66,12 @@ function takePendingHash() {
   } catch { return null; }
 }
 
+// Maksud dari halaman depan (mis. "create") yang dilanjutkan setelah login
+const INTENT = "intent";
+function takeIntent() {
+  try { const v = localStorage.getItem(INTENT); localStorage.removeItem(INTENT); return v; } catch { return null; }
+}
+
 function setView(node) {
   cleanup(); cleanup = () => {};
   document.body.classList.remove("cam-page", "has-bottom-nav", "show-page");
@@ -85,7 +93,11 @@ function renderLogin() {
     });
     if (error) toast(friendly(error));
   };
-  app.querySelectorAll('[data-act="google"]').forEach((b) => (b.onclick = login));
+  app.querySelectorAll('[data-act="google"]').forEach((b) => (b.onclick = () => {
+    // Ingat maksud "buat acara" melewati login Google
+    if (b.dataset.intent) { try { localStorage.setItem(INTENT, b.dataset.intent); } catch { /* abaikan */ } }
+    login();
+  }));
   // Bukan link #anchor: router berbasis hash akan merender ulang halaman
   app.querySelectorAll("[data-scroll]").forEach((b) => (b.onclick = () =>
     document.getElementById(b.dataset.scroll)?.scrollIntoView({ behavior: "smooth", block: "start" })));
@@ -193,6 +205,7 @@ async function renderHome() {
         <div class="events"></div>
       </section>
       <div class="events-empty empty-home" hidden><p>${t("Belum ada acara di perangkat ini.")}<br>${t("Masukkan kode di atas untuk mulai memotret.")}</p></div>
+      <div class="req-slot"></div>
       <p class="home-create" hidden>${t("Mau bikin acara sendiri?")} <button type="button" class="linklike" data-act="create">${t("Buat acara")}</button></p>
     </main>`);
   setView(view);
@@ -209,9 +222,11 @@ async function renderHome() {
           <a class="btn" href="/privacy.html">${ICON.lock} ${t("Kebijakan privasi")}</a>
           <button class="btn danger" data-act="logout">${t("Keluar")}</button>
         </div>
-        <div class="am-lang">${langSwitch()}</div>
+        <div class="am-row"><span>${t("Tema")}</span>${themeSwitch()}</div>
+        <div class="am-row"><span>${t("Bahasa")}</span>${langSwitch()}</div>
       </div>`);
     bindLangSwitch(box);
+    bindThemeSwitch(box);
     box.querySelector('a[href="#/admin"]')?.addEventListener("click", close);
     box.querySelector('[data-act="privacy"]').onclick = () => { close(); openPrivacy(); };
     box.querySelector('[data-act="logout"]').onclick = async () => {
@@ -224,27 +239,50 @@ async function renderHome() {
     e.preventDefault();
     renderJoin(e.target.elements.code.value.trim().toUpperCase());
   };
-  view.querySelector('[data-act="create"]').onclick = () => createEventDialog();
+  // Buat acara: pembuat acara langsung ke wizard; yang lain mengajukan diri (atau melihat status pengajuan)
+  let canCreate = false, request = null;
+  const reqSlot = view.querySelector(".req-slot");
+  const createBtn = view.querySelector('[data-act="create"]');
+  const showRequest = () => {
+    const card = requestStatusCard(request, { onRetry: () => openCreatorRequest({ prev: request, onDone: refreshRequest }) });
+    reqSlot.replaceChildren(...(card ? [card] : []));
+    view.querySelector(".home-create").hidden = !canCreate && request?.status === "open";
+  };
+  async function refreshRequest() { request = await myCreatorRequest(); showRequest(); }
+  const startCreate = () => {
+    if (canCreate) createEventDialog();
+    else if (request?.status === "open") toast(t("Pengajuan Anda masih ditinjau."));
+    else openCreatorRequest({ prev: request, onDone: refreshRequest });
+  };
+  createBtn.onclick = startCreate;
 
   try {
-    const [events, canCreate, myRole] = await Promise.all([
+    const [events, can, myRole] = await Promise.all([
       rpc("my_events"), rpc("can_create_event"), rpc("my_role"),
     ]);
     role = myRole;
+    canCreate = can;
+    if (!canCreate) request = await myCreatorRequest();
+    showRequest();
+    // Datang dari tombol "Buat acara" di halaman depan: lanjutkan maksudnya setelah login
+    if (takeIntent() === "create") startCreate();
     const here = joinedHere();
     const shown = events.filter((ev) => ev.is_owner || here.includes(ev.event_id));
     view.querySelector(".home-events").hidden = !shown.length;
     view.querySelector(".events-empty").hidden = shown.length > 0;
-    view.querySelector(".home-create").hidden = !canCreate;
     view.querySelector(".events").replaceChildren(...shown.map((ev) => {
       const left = Math.max(0, ev.max_shots - ev.shots_used);
-      const sub = ev.is_owner && !ev.shots_used ? t("Acara Anda")
-        : !ev.is_open ? t("Album")
+      const photos = ev.photos ? ` · ${t("{n} foto", { n: ev.photos })}` : "";
+      const sub = ev.is_owner && !ev.shots_used ? t("Acara Anda") + photos
+        : !ev.is_open ? t("Album terbuka") + photos
         : left > 0 ? t("{n} jepretan tersisa", { n: left }) : t("Film habis · lihat album");
       const tag = ev.is_open ? `<span class="tag ok">${t("Berlangsung")}</span>` : `<span class="tag hot">${t("Album")}</span>`;
+      const thumb = ev.cover_path
+        ? `<span class="he-thumb has-cover" style="background-image:url('${esc(coverUrl(ev.cover_path))}')" aria-hidden="true"></span>`
+        : `<span class="he-thumb" aria-hidden="true">${ICON.film}</span>`;
       return el(`
         <a class="home-event" href="#/e/${ev.event_id}${ev.is_open && left > 0 ? "" : "/album"}">
-          <span class="he-thumb" aria-hidden="true">${ICON.film}</span>
+          ${thumb}
           <span class="he-text"><b>${esc(ev.name)}</b><small>${sub}</small></span>
           ${tag}
         </a>`);

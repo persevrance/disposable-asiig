@@ -46,7 +46,7 @@ export function landingHtml({ code, shareLink }) {
   // Datang lewat undangan: satu tombol saja, langsung login lalu masuk acara
   const cta = code
     ? `<button type="button" class="btn primary lp-big" data-act="google">${t("Masuk dengan Google")}</button>`
-    : `<button type="button" class="btn primary lp-big" data-act="google">${t("Buat acara")}</button>
+    : `<button type="button" class="btn primary lp-big" data-act="google" data-intent="create">${t("Buat acara")}</button>
        <button type="button" class="btn lp-big" data-act="show-code" aria-expanded="false" aria-controls="lp-code">${t("Gabung pakai kode")}</button>`;
 
   return `
@@ -122,7 +122,7 @@ export function landingHtml({ code, shareLink }) {
         <div class="lp-final">
           <h2>${t("Siap jepret momen berikutnya?")}</h2>
           <p>${t("Buat acaramu, cetak kartu QR-nya, dan biarkan tamu yang memotret.")}</p>
-          <button type="button" class="btn primary lp-big" data-act="google">${t("Buat acara")}</button>
+          <button type="button" class="btn primary lp-big" data-act="google" data-intent="create">${t("Buat acara")}</button>
         </div>
       </section>
 

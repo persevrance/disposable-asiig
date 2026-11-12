@@ -15,6 +15,9 @@ Supabase (login Google, database, penyimpanan foto) + Cloudflare Pages
   album dengan saringan dan favorit, laporan foto + moderasi, duplikat acara, kuota storage per pembuat acara.
 - Buku tamu (teks + rekaman suara), kolase untuk Instagram, album realtime, notifikasi "album terbuka",
   tampilan tamu dalam bahasa Inggris, permintaan hapus foto/akun (UU PDP), ekspor CSV, dan foto di Cloudflare R2.
+- Pengajuan menjadi pembuat acara (dengan nomor WhatsApp) yang disetujui superadmin, kolase 2–9 foto pilihan
+  dengan logo dan nama acara, dan pratinjau efek film langsung di jendela bidik.
+  Setelah memperbarui aplikasi, jalankan ulang `supabase/v2.sql` di SQL Editor (aman diulang).
 
 ## Susunan
 

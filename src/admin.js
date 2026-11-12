@@ -1,7 +1,8 @@
 // Dashboard: #/admin/<tab>. Superadmin melihat semua tab;
 // pembuat acara hanya tab Acara (acaranya sendiri), yang menjadi pusat kerjanya.
 import QRCode from "qrcode";
-import { rpc, friendly } from "./supabase.js";
+import { supabase, rpc, friendly } from "./supabase.js";
+import { themeSwitch, bindThemeSwitch } from "./theme.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData, resizeImage } from "./owner.js";
 import { uploadCover, coverUrl, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
@@ -52,7 +53,7 @@ export async function renderAdmin(app, tab, { setView, me }) {
           <nav class="admin-nav" aria-label="Navigasi dashboard">
             ${tabs.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}" ${t === tab ? 'aria-current="page"' : ""}>${label(t, n)}</a>`).join("")}
           </nav>
-          <a class="avatar-btn" href="#/" aria-label="Beranda (${esc(who)})">${initial(who)}</a>
+          <button type="button" class="avatar-btn" data-act="account" aria-label="Akun: ${esc(who)}" aria-haspopup="dialog">${initial(who)}</button>
         </div>
       </header>
       <main class="page admin wide">
@@ -65,6 +66,34 @@ export async function renderAdmin(app, tab, { setView, me }) {
     </div>`);
   setView(view);
   const body = view.querySelector(".admin-body");
+  // Menu akun: kembali ke beranda, tema tampilan, keluar
+  view.querySelector('[data-act="account"]').onclick = () => {
+    const { box, close } = modal(`
+      <div class="account-menu">
+        <div class="am-head"><span class="avatar-btn">${initial(who)}</span><div><b>${esc(who)}</b><small>${esc(me?.email || "")}</small></div></div>
+        <div class="sheet-actions">
+          <a class="btn" href="#/">${ICON.back} Ke beranda</a>
+          <button class="btn danger" data-act="logout">Keluar</button>
+        </div>
+        <div class="am-row"><span>Tema</span>${themeSwitch()}</div>
+      </div>`);
+    bindThemeSwitch(box);
+    box.querySelector('a[href="#/"]').addEventListener("click", close);
+    box.querySelector('[data-act="logout"]').onclick = async () => {
+      close();
+      try { localStorage.removeItem(`joined:${me?.id}`); } catch { /* abaikan */ }  // sama seperti keluar dari beranda
+      await supabase.auth.signOut();
+      location.hash = "#/";
+    };
+  };
+  // Angka yang menunggu tindakan di menu: laporan foto, pengajuan pembuat acara, permintaan data
+  if (superadmin) rpc("admin_overview").then((o) => {
+    const set = (t, n) => {
+      const a = view.querySelector(`.admin-nav a[href="#/admin/${t}"]`);
+      if (a && n > 0) a.insertAdjacentHTML("beforeend", ` <span class="nav-count" aria-label="${n} menunggu">${n}</span>`);
+    };
+    set("moderasi", o.reports_open); set("pengguna", o.creator_requests_open); set("privasi", o.data_requests_open);
+  }).catch(() => {});
   const render = { ringkasan, acara, pengguna, moderasi, privasi, pengaturan, log }[tab];
   try { await render(body, me, role); }
   catch (e) { body.replaceChildren(el(`<p class="hint">${esc(friendly(e))}</p>`)); }
@@ -414,6 +443,9 @@ async function ringkasan(body) {
   if (o.data_requests_open > 0) items.push([`${o.data_requests_open} permintaan hapus data`,
     "Permintaan dari pengguna (UU PDP). Proses atau tolak dengan alasan.",
     `<a class="btn small" href="#/admin/privasi">Privasi</a>`]);
+  if (o.creator_requests_open > 0) items.push([`${o.creator_requests_open} pengajuan pembuat acara`,
+    "Hubungi lewat WhatsApp bila perlu, lalu setujui atau tolak dengan alasan.",
+    `<a class="btn small" href="#/admin/pengguna">Tinjau</a>`]);
   if (overdue.length) items.push([`${overdue.length} acara lewat tanggal hapus`,
     overdue.slice(0, 3).map((e) => e.name).join(", ") + (overdue.length > 3 ? ", …" : ""),
     `<button class="btn small danger" data-act="purge">Hapus sekarang</button>`]);
@@ -748,7 +780,7 @@ async function acara(body, me, role) {
     finally { b.disabled = false; }
   };
   view.querySelector(".filter-slot").append(chips(
-    [["all", "Semua"], ["open", "Terbuka"], ["closed", "Ditutup"], ["reported", "Ada laporan"], ...(admin ? [["overdue", "Lewat tanggal hapus"]] : [])],
+    [["all", "Semua"], ["live", "Berlangsung"], ["scheduled", "Terjadwal"], ["done", "Selesai"], ["reported", "Ada laporan"], ...(admin ? [["overdue", "Lewat tanggal hapus"]] : [])],
     st.status, (v) => { st.status = v; st.offset = 0; load(); }, "Saring status"));
   let timer;
   search.oninput = () => { clearTimeout(timer); timer = setTimeout(() => { st.q = search.value.trim(); st.offset = 0; load(); }, 300); };
@@ -938,10 +970,72 @@ const limitText = (r) => (r.event_limit === null || r.event_limit === undefined
     ? ` · storage ${r.storage_bytes !== undefined ? fmtBytes(r.storage_bytes) : "?"}${r.storage_limit_mb ? ` dari ${fmtBytes(r.storage_limit_mb * 1048576)}` : ""}`
     : "");
 
+// ---------- Pengajuan menjadi pembuat acara ----------
+// Kartu di atas tab Pengguna & peran: pengajuan terbuka (setujui / tolak + hubungi via WhatsApp),
+// riwayat yang sudah diputuskan di bawah lipatan.
+const waLink = (phone, name, event) =>
+  `https://wa.me/${encodeURIComponent(phone)}?text=${encodeURIComponent(`Halo ${name || ""}, kami dari Jepretin tentang pengajuan pembuat acara untuk "${event}".`)}`;
+const waShow = (p) => `0${String(p).replace(/^62/, "")}`.replace(/(\d{4})(\d{4})(\d+)/, "$1 $2 $3");
+
+async function loadCreatorRequests(slot, onChange) {
+  let rows = [];
+  try { rows = await rpc("admin_creator_requests", { p_status: "all" }); } catch { slot.replaceChildren(); return; }
+  const open = rows.filter((r) => r.status === "open");
+  const done = rows.filter((r) => r.status !== "open").slice(0, 20);
+  if (!rows.length) { slot.replaceChildren(); return; }
+  const item = (r) => `
+    <li class="cr-item${r.status === "open" ? "" : " done"}" data-id="${r.id}">
+      <div class="cr-main">
+        <div class="cr-who"><b>${esc(r.user_name || r.email)}</b><small>${esc(r.email)}</small></div>
+        <div class="cr-event"><b>${esc(r.event_name)}</b>
+          <small>${[r.event_date ? esc(new Date(r.event_date + "T00:00").toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" })) : "", r.guests ? `±${r.guests} tamu` : "", `diajukan ${esc(fmtDate(r.created_at))}`].filter(Boolean).join(" · ")}</small></div>
+        ${r.note ? `<p class="cr-note">${esc(r.note)}</p>` : ""}
+        ${r.status === "open" ? "" : `<small class="cr-result"><span class="tag ${r.status === "approved" ? "ok" : "bad"}">${r.status === "approved" ? "disetujui" : "ditolak"}</span>${r.reply ? ` ${esc(r.reply)}` : ""}</small>`}
+      </div>
+      <div class="cr-actions">
+        <a class="btn small wa" href="${waLink(r.phone, r.user_name, r.event_name)}" target="_blank" rel="noopener">WhatsApp ${esc(waShow(r.phone))}</a>
+        ${r.status === "open" ? `<button class="btn small primary" data-act="approve">Setujui</button>
+        <button class="btn small ghost danger" data-act="reject">Tolak</button>` : ""}
+      </div>
+    </li>`;
+  const card = el(`
+    <div class="card creator-reqs">
+      <h3>Pengajuan pembuat acara ${open.length ? `<span class="tab-count">${open.length}</span>` : ""}</h3>
+      ${open.length ? `<ul class="cr-list">${open.map(item).join("")}</ul>` : `<p class="hint">Tidak ada pengajuan yang menunggu.</p>`}
+      ${done.length ? `<details class="cr-history"><summary>Riwayat (${done.length})</summary><ul class="cr-list">${done.map(item).join("")}</ul></details>` : ""}
+    </div>`);
+  card.querySelectorAll('[data-act="approve"]').forEach((b) => (b.onclick = async () => {
+    const r = rows.find((x) => String(x.id) === b.closest("[data-id]").dataset.id);
+    if (!(await confirmDialog({ title: `Setujui ${r.user_name || r.email}?`, text: `${r.email} menjadi pembuat acara dengan batas bawaan dari Pengaturan.`, ok: "Setujui" }))) return;
+    try { await rpc("admin_resolve_creator_request", { p_request: r.id, p_approve: true }); toast("Pengajuan disetujui."); loadCreatorRequests(slot, onChange); onChange?.(); }
+    catch (e) { toast(friendly(e)); }
+  }));
+  card.querySelectorAll('[data-act="reject"]').forEach((b) => (b.onclick = () => {
+    const r = rows.find((x) => String(x.id) === b.closest("[data-id]").dataset.id);
+    const { box, close } = modal(`
+      <form class="dialog">
+        <h3>Tolak pengajuan ${esc(r.user_name || r.email)}?</h3>
+        <label>Alasan (ditampilkan ke pengaju)
+          <textarea name="reply" rows="3" maxlength="500" required autofocus placeholder="Contoh: Mohon lengkapi tanggal dan jumlah tamu."></textarea></label>
+        <div class="dialog-actions"><button type="button" class="btn ghost" data-act="cancel">Batal</button><button class="btn danger-fill">Tolak</button></div>
+      </form>`);
+    box.querySelector('[data-act="cancel"]').onclick = close;
+    box.querySelector("form").onsubmit = async (e) => {
+      e.preventDefault();
+      const reply = e.target.elements.reply.value.trim();
+      if (!reply) { toast("Tulis alasan penolakan."); return; }
+      try { await rpc("admin_resolve_creator_request", { p_request: r.id, p_approve: false, p_reply: reply }); close(); toast("Pengajuan ditolak."); loadCreatorRequests(slot, onChange); }
+      catch (err) { toast(friendly(err)); }
+    };
+  }));
+  slot.replaceChildren(card);
+}
+
 async function pengguna(body, me) {
   const st = { q: "", filter: "all", offset: 0 };
   const view = el(`
     <div>
+      <div class="creator-req-slot"></div>
       <form class="card add-role">
         <h3>Beri peran lewat email</h3>
         <p class="hint">Pembuat acara bisa membuat dan mengelola acaranya sendiri. Superadmin bisa mengelola semuanya. Email tidak harus sudah pernah login.</p>
@@ -960,6 +1054,7 @@ async function pengguna(body, me) {
     </div>`);
   body.replaceChildren(view);
   const results = view.querySelector(".results");
+  loadCreatorRequests(view.querySelector(".creator-req-slot"), () => refresh());
 
   // Ubah peran / batas / blokir
   async function setRole(email, role, limit) {

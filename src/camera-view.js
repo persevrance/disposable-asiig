@@ -3,12 +3,13 @@ import {
   openCamera, stopCamera, grabFrame, captureFromCanvas, captureFromFile, CAMERA_HELP,
   cameraCount, hasTorch, setTorch,
 } from "./camera.js";
-import { FILMS, filmName } from "./film.js";
+import { FILMS, filmName, applyFilm } from "./film.js";
 import { shoot, flushQueue } from "./shoot.js";
 import { queue } from "./queue.js";
 import { rpc, friendly, errorCode } from "./supabase.js";
 import { pushSupport, enableAlbumNotify, albumNotifyOn } from "./push.js";
-import { el, esc, toast, confetti, modal, fmtDate, ICON, badge } from "./ui.js";
+import { promptInstall } from "./install.js";
+import { el, esc, toast, confetti, fmtDate, ICON, badge } from "./ui.js";
 import { t } from "./i18n.js";
 
 // Gulungan film untuk layar "Film habis"
@@ -153,13 +154,15 @@ export async function renderCamera(root, status, go) {
     }
     filmChips.innerHTML = Object.entries(FILMS).map(([id, f]) =>
       `<button type="button" class="film-chip" data-id="${id}" aria-pressed="${id === now}" title="${esc(t(f.desc))}">${esc(t(f.name))}</button>`).join("");
-    filmChips.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "center" });
+    const on = filmChips.querySelector('[aria-pressed="true"]');
+    if (on) filmChips.scrollLeft = on.offsetLeft - (filmChips.clientWidth - on.offsetWidth) / 2;
   }
   filmChips.onclick = (e) => {
     const b = e.target.closest("button.film-chip");
     if (!b || !status.allow_film_choice) return;
     saveFilm(status.event_id, b.dataset.id);
     updateFilmBtn();
+    toast(t("Efek: {f}", { f: t(filmName(b.dataset.id)) }), 1500);
   };
 
   // Pengaturan efektif dari server (global + per acara)
@@ -271,6 +274,12 @@ export async function renderCamera(root, status, go) {
           nb.hidden = true;
         } catch (err) { toast(err?.message?.length < 120 ? err.message : friendly(err)); nb.disabled = false; }
       };
+    } else if (status.is_open && !revealed && pushSupport() === "ios-install") {
+      // iPhone: notifikasi hanya bisa setelah aplikasi dipasang di layar utama
+      const nb = view.querySelector('[data-act="notify"]');
+      nb.hidden = false;
+      nb.querySelector("span").textContent = t("Pasang aplikasi untuk dapat kabar album");
+      nb.onclick = () => promptInstall();
     }
   }
 
@@ -343,6 +352,28 @@ export async function renderCamera(root, status, go) {
   probe.width = probe.height = 16;
   const pctx = probe.getContext("2d", { willReadFrequently: true });
 
+  // Pratinjau efek film: frame diperkecil (sisi panjang 480 px), diolah dengan kurva film
+  // tanpa butiran, lalu diperbesar ke jendela bidik. Bila HP lambat, diolah tiap 2–3 frame.
+  const fx = document.createElement("canvas");
+  const fxctx = fx.getContext("2d", { willReadFrequently: true });
+  let fxEvery = 1, fxTick = 0, fxAvg = 0, fxFilm = null;
+  function filmFrame(vw, vh) {
+    const film = currentFilm();
+    if (!film || film === "asli") return null;
+    const k = 480 / Math.max(vw, vh);
+    const pw = Math.round(vw * Math.min(1, k)), ph = Math.round(vh * Math.min(1, k));
+    if (fx.width !== pw || fx.height !== ph) { fx.width = pw; fx.height = ph; fxFilm = null; }
+    if (film !== fxFilm || fxTick++ % fxEvery === 0) {
+      const t0 = performance.now();
+      fxctx.drawImage(video, 0, 0, pw, ph);
+      applyFilm(fx, film, { preview: true });
+      fxFilm = film;
+      fxAvg = fxAvg * 0.9 + (performance.now() - t0) * 0.1;
+      fxEvery = fxAvg > 28 ? 3 : fxAvg > 14 ? 2 : 1;
+    }
+    return fx;
+  }
+
   function drawLoop() {
     raf = requestAnimationFrame(drawLoop);
     if (video.readyState < 2 || !video.videoWidth) return;
@@ -358,7 +389,9 @@ export async function renderCamera(root, status, go) {
     cctx.fillRect(0, 0, w, h);
     cctx.save();
     if (mirrorPreview()) { cctx.translate(w, 0); cctx.scale(-1, 1); }
-    cctx.drawImage(video, dx, dy, dw, dh);
+    let src = video;
+    try { src = filmFrame(vw, vh) || video; } catch { src = video; }
+    cctx.drawImage(src, dx, dy, dw, dh);
     cctx.restore();
     if (++frames % 30 === 0) checkDark();
   }
@@ -488,60 +521,18 @@ export async function renderCamera(root, status, go) {
     if (f) take(() => { developing.hidden = false; return captureFromFile(f, devOpts(false)); });
   };
 
-  // Pertama kali di acara ini: kenalkan aturan main. Tombol terakhir adalah ketukan
-  // pengguna, jadi kamera boleh langsung dibuka (iOS mewajibkan ketukan).
-  // Berikutnya: buka kamera otomatis bila izin kamera sudah diberikan.
+  // Aturan main sudah tampil di layar "Setuju dan masuk", jadi tanpa pop-up pengenalan.
+  // Pertama kali di acara ini: langsung minta izin kamera. Berikutnya: buka otomatis bila
+  // izin sudah diberikan. (iOS yang menahan pemutaran tetap meminta satu ketukan "Mulai".)
   async function maybeAutoStart() {
     const key = `intro:${status.event_id}`;
     let seen = false;
-    try { seen = localStorage.getItem(key) === "1"; } catch { seen = true; }
-    if (!seen) {
-      try { localStorage.setItem(key, "1"); } catch { /* abaikan */ }
-      if ((await showIntro()) && !done && !stream) start();
-      return;
-    }
+    try { seen = localStorage.getItem(key) === "1"; localStorage.setItem(key, "1"); } catch { seen = true; }
+    if (!seen) { if (!done && !stream) start(); return; }
     try {
       const perm = await navigator.permissions?.query({ name: "camera" });
       if (perm?.state === "granted" && !done && !stream) start();
     } catch { /* browser tanpa Permissions API: tunggu ketukan Buka kamera */ }
-  }
-
-  function showIntro() {
-    const reveal = status.reveal_at && new Date(status.reveal_at) > new Date();
-    const steps = [
-      [badge("film", "coral", "lg"), t("{n} jepretan", { n: status.max_shots }), t("Anda punya satu gulungan berisi {n} jepretan. Pilih momen terbaik.", { n: status.max_shots })],
-      [badge("lock", "grape", "lg"), t("Tanpa hapus, tanpa ulang"), t("Seperti kamera film: setiap jepretan langsung tercetak dan tidak bisa dilihat dulu.")],
-      [badge("sparkle", "mint", "lg"), reveal ? t("Terbuka bersamaan") : t("Terbuka setelah film habis"),
-        reveal ? t("Semua foto tamu muncul di album {d}.", { d: fmtDate(status.reveal_at) })
-               : t("Foto Anda muncul di album setelah jepretan terakhir, bersama foto tamu lain.")],
-    ];
-    return new Promise((resolve) => {
-      let i = 0, go = false;
-      const { box, close } = modal(`
-        <div class="intro" aria-live="polite">
-          <div class="intro-art" aria-hidden="true"></div>
-          <h3></h3>
-          <p></p>
-          <div class="intro-dots" aria-hidden="true">${steps.map(() => "<i></i>").join("")}</div>
-          <div class="dialog-actions">
-            <button class="btn ghost" data-act="skip">${t("Lewati")}</button>
-            <button class="btn primary" data-act="next" autofocus>${t("Lanjut")}</button>
-          </div>
-        </div>`, { onClose: () => resolve(go) });
-      const show = () => {
-        const [art, title, text] = steps[i];
-        box.querySelector(".intro-art").innerHTML = art;
-        box.querySelector("h3").textContent = title;
-        box.querySelector("p").textContent = text;
-        box.querySelectorAll(".intro-dots i").forEach((d, n) => d.classList.toggle("on", n === i));
-        box.querySelector('[data-act="next"]').textContent = i === steps.length - 1 ? t("Mulai memotret") : t("Lanjut");
-      };
-      box.querySelector('[data-act="next"]').onclick = () => {
-        if (i < steps.length - 1) { i++; show(); } else { go = true; close(); }
-      };
-      box.querySelector('[data-act="skip"]').onclick = () => { go = true; close(); };
-      show();
-    });
   }
 
   // Ambil ulang jatah dari server (diam saja jika sedang offline)

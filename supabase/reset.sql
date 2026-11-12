@@ -19,7 +19,7 @@ drop policy if exists "suara: dengar"            on storage.objects;
 drop policy if exists "suara: hapus"             on storage.objects;
 
 drop view if exists stored_objects;
-drop table if exists data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
+drop table if exists creator_requests, data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
   photo_reports, favorites, client_errors, downloads, audit_log, user_roles, app_settings,
   photos, event_members, event_invites, events, event_creators, profiles cascade;
 
@@ -63,5 +63,8 @@ drop function if exists
   hide_message(uuid, boolean), delete_message(uuid), owner_voice_paths(uuid),
   can_upload_voice(text), can_hear_voice(text), can_delete_voice(text),
   request_data_deletion(text, uuid, text), my_data_requests(), admin_data_requests(text),
-  admin_request_paths(bigint), admin_process_request(bigint, text, text)
+  admin_request_paths(bigint), admin_process_request(bigint, text, text),
+  -- pengajuan pembuat acara
+  normalize_wa(text), my_creator_request(), request_creator(text, text, date, int, text),
+  admin_creator_requests(text), admin_resolve_creator_request(bigint, boolean, text)
 cascade;
