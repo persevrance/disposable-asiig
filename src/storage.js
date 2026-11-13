@@ -86,7 +86,7 @@ export async function getUrls(paths) {
 // Ubin album diambil per 60 dalam satu request Worker (/api/r2/thumbs), lalu disimpan di
 // Cache Storage HP. Nama file foto unik dan isinya tak pernah berubah, jadi membuka album lagi
 // tidak memakai kuota Worker sama sekali. Cache dibatasi umur dan jumlahnya, dihapus saat keluar.
-export const THUMB_CACHE = "asiig-thumbs-v1";
+export const THUMB_CACHE = "titippotret-thumbs-v1";
 const THUMB_MAX_AGE = 14 * 864e5;
 const THUMB_MAX_ITEMS = 4000;
 const thumbKey = (p) => `/__thumb/${p}`;

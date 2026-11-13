@@ -6,7 +6,7 @@ import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const target = env.VITE_API_PROXY || "https://disposable-asiig.my.id";
+  const target = env.VITE_API_PROXY || "https://titippotret.my.id";
   return {
     server: {
       proxy: {

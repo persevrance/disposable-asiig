@@ -77,7 +77,7 @@ export async function openCamera(video, facing = "environment", maxSide = 2560) 
 }
 
 export const CAMERA_HELP = {
-  NOT_HTTPS: "Kamera hanya bisa dibuka lewat alamat HTTPS. Buka https://disposable-asiig.my.id.",
+  NOT_HTTPS: "Kamera hanya bisa dibuka lewat alamat HTTPS. Buka https://titippotret.my.id.",
   IN_APP: "Link ini terbuka di browser bawaan aplikasi, yang memblokir kamera. Ketuk menu (⋯ atau ⋮) lalu pilih \"Buka di Safari\" / \"Open in browser\".",
   UNSUPPORTED: "Browser ini tidak mendukung kamera web. Di iPhone, pakai Safari (iOS 14.3 ke atas).",
   DENIED: "Izin kamera ditolak. Di iPhone: ketuk \"aA\" di bilah alamat Safari -> Pengaturan Situs Web -> Kamera -> Izinkan, lalu muat ulang. Atau Pengaturan iPhone -> Safari -> Kamera -> Tanya/Izinkan.",

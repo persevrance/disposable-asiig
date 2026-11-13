@@ -264,7 +264,7 @@ export default {
   "Link foto kedaluwarsa. Muat ulang halaman.": "Photo link expired. Reload the page.",
 
   // Bantuan kamera
-  "Kamera hanya bisa dibuka lewat alamat HTTPS. Buka https://disposable-asiig.my.id.": "The camera only works over HTTPS. Open https://disposable-asiig.my.id.",
+  "Kamera hanya bisa dibuka lewat alamat HTTPS. Buka https://titippotret.my.id.": "The camera only works over HTTPS. Open https://titippotret.my.id.",
   "Link ini terbuka di browser bawaan aplikasi, yang memblokir kamera. Ketuk menu (⋯ atau ⋮) lalu pilih \"Buka di Safari\" / \"Open in browser\".": "This link opened in an in-app browser, which blocks the camera. Tap the menu (⋯ or ⋮) and choose \"Open in Safari\" / \"Open in browser\".",
   "Browser ini tidak mendukung kamera web. Di iPhone, pakai Safari (iOS 14.3 ke atas).": "This browser doesn't support the web camera. On iPhone, use Safari (iOS 14.3 or later).",
   "Izin kamera ditolak. Di iPhone: ketuk \"aA\" di bilah alamat Safari -> Pengaturan Situs Web -> Kamera -> Izinkan, lalu muat ulang. Atau Pengaturan iPhone -> Safari -> Kamera -> Tanya/Izinkan.": "Camera permission denied. On iPhone: tap \"aA\" in Safari's address bar -> Website Settings -> Camera -> Allow, then reload. Or iPhone Settings -> Safari -> Camera -> Ask/Allow.",

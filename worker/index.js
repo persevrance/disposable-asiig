@@ -1,4 +1,4 @@
-// Worker situs disposable-asiig.my.id: menyajikan aplikasi (static assets) dan API foto
+// Worker situs titippotret.my.id: menyajikan aplikasi (static assets) dan API foto
 // di Cloudflare R2 pada /api/r2/*. Hak akses tidak diputuskan di sini: setiap permintaan
 // dicek ke fungsi database Supabase memakai JWT pengguna (can_upload, r2_viewable, ...).
 //

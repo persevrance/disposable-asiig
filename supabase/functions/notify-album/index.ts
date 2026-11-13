@@ -19,7 +19,7 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   const pub = Deno.env.get("VAPID_PUBLIC_KEY"), priv = Deno.env.get("VAPID_PRIVATE_KEY");
   if (!pub || !priv) return json({ error: "VAPID belum diatur" }, 500);
-  webpush.setVapidDetails(Deno.env.get("VAPID_SUBJECT") || "mailto:admin@disposable-asiig.my.id", pub, priv);
+  webpush.setVapidDetails(Deno.env.get("VAPID_SUBJECT") || "mailto:halo@titippotret.my.id", pub, priv);
 
   const supa = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
     auth: { persistSession: false },

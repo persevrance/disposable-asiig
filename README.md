@@ -1,8 +1,8 @@
-# Disposable Asiig
+# TitipPotret
 
 Kamera sekali pakai berbasis web dengan album bersama. Opsi B1, paket P1:
-Supabase (login Google, database, penyimpanan foto) + Cloudflare Pages
-(tampilan) di `disposable-asiig.my.id`.
+Supabase (login Google, database) + Cloudflare Workers (tampilan, API foto R2, pembayaran)
+di `titippotret.my.id`.
 
 - Jatah potretan per acara (batas maksimum diatur superadmin), dijaga di server dengan kunci baris.
 - Tanpa hapus, tanpa ulang. Foto peserta tampil di album setelah jatahnya habis,
@@ -68,20 +68,24 @@ Login dengan Google, buat acara di beranda, lalu cek tabel `profiles` dan `event
 Untuk mencoba dari HP di WiFi yang sama: `npm run dev -- --host`
 (kamera di HP baru bisa dibuka setelah aplikasi berjalan di HTTPS, langkah 4).
 
-### 4. Cloudflare Pages + domain
+### 4. Cloudflare Workers + domain
+
+Situs berjalan sebagai satu Worker dengan static assets (`wrangler.jsonc`): hasil build Vite di
+`dist` ditambah API `/api/*` (`worker/index.js`). Nama Worker (`disposable-asiig`) dan bucket R2
+(`disposable-asiig-photos`) adalah nama internal peninggalan nama lama; tidak terlihat pengguna.
 
 1. Push repositori ini ke GitHub (`persevrance/disposable-asiig`).
-2. Cloudflare -> Workers & Pages -> Create -> Pages -> Connect to Git -> pilih repositori.
-   - Build command: `npm run build`
-   - Build output directory: `dist`
-   - Environment variables: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
-3. Setelah terpasang: proyek Pages -> Custom domains -> `disposable-asiig.my.id`.
+2. Cloudflare -> Workers & Pages -> Create -> Import a repository -> pilih repositori.
+   - Build command: `npm run build`, deploy command: `npx wrangler deploy`
+   - Variabel build: `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`
+3. Domain: `titippotret.my.id` harus sudah aktif di Cloudflare (nameserver ke Cloudflare).
+   Worker -> **Domains** -> **Add Domain** -> `titippotret.my.id`.
 4. Supabase -> Authentication -> URL Configuration:
-   - Site URL: `https://disposable-asiig.my.id`
-   - Redirect URLs: `https://disposable-asiig.my.id`, `http://localhost:5173`,
-     dan alamat `https://<nama>.pages.dev` jika ingin menguji di sana.
+   - Site URL: `https://titippotret.my.id`
+   - Redirect URLs: `https://titippotret.my.id`, `https://titippotret.my.id/**`,
+     `http://localhost:5173`
 
-Link undangan: `https://disposable-asiig.my.id/?kode=ABC123` (ada tombol salin dan QR di Panel).
+Link undangan: `https://titippotret.my.id/?kode=ABC123` (ada tombol salin dan QR di Panel).
 
 ### 5. Pembayaran Midtrans
 
@@ -137,11 +141,11 @@ pukul 07.00 WIB. Bila hari itu sudah terkirim sebanyak **Batas email per hari**,
 ke hari berikutnya, sedangkan email langsung tetap terkirim.
 
 1. Jalankan ulang `supabase/v2.sql`.
-2. Resend: daftar, verifikasi domain pengirim (catatan DNS di Cloudflare), buat API key.
+2. Resend: daftar, verifikasi domain pengirim `send.titippotret.my.id` (catatan DNS di Cloudflare), buat API key.
 3. Supabase -> Edge Functions -> deploy `supabase/functions/send-email` (atau
    `npx supabase functions deploy send-email --no-verify-jwt`), lalu matikan **Verify JWT**.
-4. Edge Functions -> Secrets: `RESEND_API_KEY`, `EMAIL_FROM` (mis. `TitipPotret <notifikasi@domain-anda.id>`),
-   `APP_URL` (mis. `https://domain-anda.id`), dan `CRON_SECRET` (sama dengan purge-events).
+4. Edge Functions -> Secrets: `RESEND_API_KEY`, `EMAIL_FROM` (mis. `TitipPotret <notifikasi@send.titippotret.my.id>`),
+   `APP_URL` (`https://titippotret.my.id`), dan `CRON_SECRET` (sama dengan purge-events).
 5. SQL Editor: simpan URL fungsi dan `CRON_SECRET` di Vault, lalu pasang tiga jadwal email.
    Keduanya ada di bagian "Notifikasi email" pada `supabase/cron.sql`.
 6. Dashboard -> Pengaturan -> **Notifikasi email**: nyalakan sakelarnya. Selama mati, tidak ada

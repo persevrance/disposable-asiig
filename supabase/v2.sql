@@ -1,5 +1,5 @@
 -- =====================================================================
--- Disposable Asiig v2 — jalankan SETELAH schema.sql.
+-- TitipPotret v2 — jalankan SETELAH schema.sql.
 -- Aman dijalankan ulang, dan aman untuk database yang sudah berisi data.
 -- Isi: peran (superadmin/creator), pengaturan global, efek film,
 -- resolusi, sembunyikan nama, gulungan per tamu, unduh untuk tamu

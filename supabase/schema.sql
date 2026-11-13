@@ -1,5 +1,5 @@
 -- =====================================================================
--- Disposable Asiig — skema lengkap untuk Supabase (Opsi B1, paket P1)
+-- TitipPotret — skema lengkap untuk Supabase (Opsi B1, paket P1)
 -- Jalankan SEKALI di Supabase: SQL Editor -> New query -> tempel -> Run.
 -- Isi: tabel (langkah 2), fungsi server (langkah 3), penyimpanan foto
 -- (langkah 4), dan fungsi panel pemilik (langkah 8).

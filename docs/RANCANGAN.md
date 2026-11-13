@@ -1,4 +1,4 @@
-# Rancangan Disposable Asiig v2
+# Rancangan TitipPotret v2
 
 Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman diulang).
 

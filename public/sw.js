@@ -1,7 +1,7 @@
 // Service worker: menyimpan kerangka aplikasi di HP supaya aplikasi tetap terbuka
 // saat sinyal hilang (foto yang dipotret offline tetap masuk antrean IndexedDB).
 // Tidak menyimpan data Supabase maupun /api/*: foto, album, dan login selalu lewat jaringan
-// (foto R2 memakai cache browser biasa; thumbnail album di cache "asiig-thumbs-v1" milik aplikasi).
+// (foto R2 memakai cache browser biasa; thumbnail album di cache "titippotret-thumbs-v1" milik aplikasi).
 //
 // Strategi:
 //   halaman (navigasi)   jaringan dulu, cadangan dari cache
@@ -9,10 +9,10 @@
 //   file lain di situs   cache, diperbarui di belakang layar
 //   Google Fonts         cache dulu
 
-const SHELL = "asiig-shell-v2"; // v2: buang foto /api/r2/o yang dulu ikut tersimpan
-const ASSETS = "asiig-assets-v1";
-const FONTS = "asiig-fonts-v1";
-const THUMBS = "asiig-thumbs-v1"; // diisi aplikasi (src/storage.js), jangan dihapus di sini
+const SHELL = "titippotret-shell-v2"; // v2: buang foto /api/r2/o yang dulu ikut tersimpan
+const ASSETS = "titippotret-assets-v1";
+const FONTS = "titippotret-fonts-v1";
+const THUMBS = "titippotret-thumbs-v1"; // diisi aplikasi (src/storage.js), jangan dihapus di sini
 const KEEP = [SHELL, ASSETS, FONTS, THUMBS];
 
 self.addEventListener("install", (event) => {
