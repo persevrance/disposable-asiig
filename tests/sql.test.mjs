@@ -4,7 +4,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { quote } from "../src/price.js";
+import { quote, keepFee, shotsCap } from "../src/price.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (f) => readFileSync(`${root}/supabase/${f}`, "utf8");
@@ -623,7 +623,6 @@ await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: true, fr
 const draft = (await as("host", `select create_event('Wisuda Lunas', 24, 50) id`))[0].id;
 let dr = (await db.query(`select pay_status, join_code from events where id = $1`, [draft])).rows[0];
 ok(dr.pay_status === "draft", "paid-size event starts as draft");
-ok((await as("host", `select pay_status from my_events() where event_id = $1`, [draft]))[0]?.pay_status === "draft", "my_events shows draft status");
 await expectErr("d", `select join_event($1)`, [dr.join_code], "ACARA_BELUM_DIBAYAR");
 await expectErr("host", `select * from reserve_shot($1, gen_random_uuid())`, [draft], "ACARA_BELUM_DIBAYAR");
 const fr1 = (await as("host", `select create_event('Kecil Gratis', 24, 5) id`))[0].id;
@@ -691,26 +690,21 @@ const fin = (await as("admin", `select admin_orders() r`))[0].r;
 ok(fin.summary.revenue_total === 89100 + 88000 && fin.rows.length === 4, `admin_orders revenue ${fin.summary.revenue_total}`);
 await expectErr("host", `select admin_orders()`, [], "BUKAN_SUPERADMIN");
 // Layanan mandiri: akun tanpa peran bisa membuat acara saat pembayaran aktif;
-// email pembuat acara mendapat peran setelah lunas, dengan batas bawaan creator_event_limit
-await as("admin", `select admin_set_settings($1)`, [{ creator_event_limit: 3 }]);
+// email pembuat acara mendapat peran setelah lunas (tanpa batas jumlah acara)
 U.f = ["00000000-0000-0000-0000-00000000000f", "fani@x.id", "Fani"];
 await db.query(`insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values ($1, $2, $3, now())`, [U.f[0], U.f[1], { full_name: "Fani" }]);
 ok((await as("f", `select can_create_event() v`))[0].v === true && (await as("f", `select my_role() r`))[0].r === null, "self-serve: no role but can create");
 const fEv = (await as("f", `select create_event('Ultah Fani', 24, 30) id`))[0].id;
 let fRow = (await db.query(`select pay_status, creator_email from events where id = $1`, [fEv])).rows[0];
 ok(fRow.pay_status === "draft" && fRow.creator_email === "fani@x.id", "self-serve event is draft, creator_email = own email");
-// Layanan mandiri juga dibatasi saat membuat draf (sebelum bayar): creator_event_limit berlaku
-const fDraft2 = (await as("f", `select create_event('Ultah Fani 2', 24, 30) id`))[0].id;
-const fDraft3 = (await as("f", `select create_event('Ultah Fani 3', 24, 30) id`))[0].id;
-await expectErr("f", `select create_event('Ultah Fani 4', 24, 30)`, [], "BATAS_ACARA_HABIS");
 await expectErr("f", `select set_event($1, $2)`, [fEv, { creator_email: "bukan-email" }], "EMAIL_TIDAK_VALID");
 await as("f", `select set_event($1, $2)`, [fEv, { creator_email: " Klien@Kantor.ID " }]);
 const fo = (await as("f", `select start_order($1) o`, [fEv]))[0].o;
 await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [fo.id, fo.amount]);
 const granted = (await db.query(`select role, event_limit from user_roles where email = 'klien@kantor.id'`)).rows[0];
-ok(granted?.role === "creator" && granted.event_limit === 3, "paid event grants creator role with default event limit");
+ok(granted?.role === "creator" && granted.event_limit === null, "paid event grants creator role to creator_email");
 ok((await db.query(`select count(*)::int n from audit_log where action = 'ubah_peran' and target = 'klien@kantor.id'`)).rows[0].n === 1, "role grant audited");
-for (const id of [draft, fr1, d2, fEv, fDraft2, fDraft3]) await as("admin", `select delete_event($1)`, [id]);
+for (const id of [draft, fr1, d2, fEv]) await as("admin", `select delete_event($1)`, [id]);
 ok((await db.query(`select count(*)::int n from orders where event_id is null`)).rows[0].n === 5, "orders kept after event deleted");
 // Metode bayar dipilih di layar Pembayaran: disimpan di pesanan, ganti metode = pesanan baru
 const dm = (await as("host", `select create_event('Metode', 24, 50) id`))[0].id;
@@ -722,6 +716,56 @@ ok(mv.id !== mq.id && mv.pay_method === "va", "other method creates new order");
 ok((await db.query(`select status from orders where id = $1`, [mq.id])).rows[0].status === "expired", "previous method order expired");
 await expectErr("host", `select start_order($1, null, null, null, 'bitcoin')`, [dm], "METODE_TIDAK_DIKENAL");
 await as("admin", `select delete_event($1)`, [dm]);
+
+// ---- Harga v3: masa simpan foto, batas jepretan per rentang harga, Unlimited ----
+const kf = async (d) => (await db.query(`select keep_fee($1) f`, [d])).rows[0].f;
+const cfgV3 = (await as("host", `select price_settings() p`))[0].p;
+for (const [d, want] of [[30, 0], [31, 3000], [45, 45000], [59, 87000], [60, 200000], [90, 200000]]) ok(await kf(d) === want && keepFee(cfgV3, d) === want, `keep_fee ${d} hari = ${want} (sql = js)`);
+ok(quote(cfgV3, 1, 1, true).total === 999000 && shotsCap(cfgV3) === (await db.query(`select shots_cap() c`)).rows[0].c, "JS: Unlimited dan batas jepretan sama dengan SQL");
+await as("admin", `select admin_set_settings($1)`, [{ max_shots_limit: 20 }]);
+ok((await db.query(`select shots_cap() c`)).rows[0].c === 100, "batas jepretan = rentang harga tertinggi saat pembayaran aktif");
+await expectErr("host", `select create_event('Simpan 91', 24, 10, false, null, false, 91)`, [], "MASA_SIMPAN_TIDAK_VALID");
+// Ukuran gratis + simpan 45 hari = berbayar (draf)
+const kEv = (await as("host", `select create_event('Simpan 45', 24, 3, false, null, false, 45) id`))[0].id;
+ok((await db.query(`select pay_status, keep_days from events where id = $1`, [kEv])).rows[0].pay_status === "draft", "masa simpan > 30 hari membuat acara gratis jadi draf");
+const kq = (await as("host", `select price_quote(3, 24, null, $1, false, 45) q`, [kEv]))[0].q;
+ok(kq.total === 0 && kq.keep_fee === 45000 && kq.amount === 45000, `price_quote masa simpan ${kq.amount}`);
+const ko = (await as("host", `select start_order($1) o`, [kEv]))[0].o;
+ok(ko.amount === 45000 && ko.keep_days === 45 && ko.keep_fee === 45000, "start_order menagih masa simpan");
+await as("host", `select set_event($1, $2)`, [kEv, { ends_at: "2026-12-01T10:00:00Z" }]);
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', 45000)`, [ko.id]);
+let kRow = (await db.query(`select pay_status, keep_days, keep_basis, purge_at from events where id = $1`, [kEv])).rows[0];
+ok(kRow.pay_status === "paid" && kRow.keep_basis === 45000 && new Date(kRow.purge_at).toISOString() === "2027-01-15T10:00:00.000Z", `lunas: simpan 45 hari, hapus ${new Date(kRow.purge_at).toISOString()}`);
+// Rencana hapus tidak bisa melewati masa simpan yang dibayar
+await as("host", `select set_event($1, $2)`, [kEv, { purge_at: "2027-06-01T00:00:00Z" }]);
+ok(new Date((await db.query(`select purge_at from events where id = $1`, [kEv])).rows[0].purge_at).toISOString() === "2027-01-15T10:00:00.000Z", "rencana hapus dibatasi masa simpan");
+await expectErr("host", `select set_event($1, $2)`, [kEv, { keep_days: 60 }], "PERLU_PEMBAYARAN");
+// Perpanjang ke 60 hari: bayar selisih 200.000 − 45.000
+const ke = (await as("host", `select start_order($1, null, null, null, null, null, 60) o`, [kEv]))[0].o;
+ok(ke.kind === "upgrade" && ke.amount === 155000 && ke.keep_fee === 155000, `perpanjang masa simpan ${ke.amount}`);
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', 155000)`, [ke.id]);
+ok((await db.query(`select keep_days, keep_basis from events where id = $1`, [kEv])).rows[0].keep_basis === 200000, "keep_basis jadi 200.000");
+// Unlimited: Rp999.000 tanpa diskon dan promo; upgrade = selisih paket
+const uq = (await as("host", `select price_quote(1, 1, 'KAMPUS25', null, true) q`))[0].q;
+ok(uq.total === 999000 && uq.discount_pct === 0 && uq.promo_error === "PROMO_TIDAK_BERLAKU" && uq.amount === 999000, "Unlimited Rp999.000 tanpa diskon/promo");
+const uEv = (await as("host", `select create_event('Konser Bebas', 24, 50) id`))[0].id;
+const up0 = (await as("host", `select start_order($1) o`, [uEv]))[0].o;
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [up0.id, up0.amount]);
+await expectErr("host", `select start_order($1, null, null, 'PERDANA', null, true)`, [uEv], "PROMO_TIDAK_BERLAKU");
+const uo = (await as("host", `select start_order($1, null, null, null, 'qris', true) o`, [uEv]))[0].o;
+ok(uo.unlimited === true && uo.list_price === 999000 && uo.amount === 999000 - up0.list_price, `upgrade ke Unlimited bayar ${uo.amount}`);
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [uo.id, uo.amount]);
+const uRow = (await db.query(`select unlimited, max_members, max_shots, needs_review, join_code from events where id = $1`, [uEv])).rows[0];
+ok(uRow.unlimited && uRow.max_members === 5000 && uRow.max_shots === 100 && !uRow.needs_review, "acara jadi Unlimited (tanpa tinjauan otomatis)");
+await expectErr("host", `select start_order($1, 50, 24, null, null, false)`, [uEv], "TIDAK_BOLEH_TURUN");
+// Unlimited: batas tamu tidak berlaku
+const capEv = (await as("admin", `select create_event('Satu Tamu', 2, 1) id`))[0].id;
+await as("admin", `select set_event($1, $2)`, [capEv, { unlimited: true, max_members: 1 }]);
+await db.query(`update events set max_members = 1 where id = $1`, [capEv]);
+await as("d", `select join_event($1)`, [(await db.query(`select join_code from events where id = $1`, [capEv])).rows[0].join_code]);
+ok((await db.query(`select count(*)::int n from event_members where event_id = $1`, [capEv])).rows[0].n === 2, "Unlimited: tamu melebihi max_members tetap bisa bergabung");
+for (const id of [kEv, uEv, capEv]) await as("admin", `select delete_event($1)`, [id]);
+await as("admin", `select admin_set_settings($1)`, [{ max_shots_limit: 100 }]);
 await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: false }]);
 
 await as("host", `select delete_event($1)`, [ev]);

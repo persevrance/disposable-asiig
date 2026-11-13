@@ -30,7 +30,7 @@ drop function if exists
   my_status(uuid), my_events(), can_create_event(),
   can_upload(text), can_view(text), owns_path(text), viewable_paths(text[]),
   create_event(text, int, int, boolean),
-  create_event(text, int, int, boolean, text),
+  create_event(text, int, int, boolean, text), create_event(text, int, int, boolean, text, boolean, int),
   set_event(uuid, text, boolean, timestamptz, timestamptz, int, boolean),
   set_event(uuid, jsonb),
   rotate_code(uuid), get_invites(uuid), set_invites(uuid, text[]),
@@ -76,6 +76,8 @@ drop function if exists
   -- pembayaran
   valid_price_steps(jsonb, int), price_settings(), price_quote_raw(int, int), promo_discount(text, int),
   price_quote(int, int, text, uuid), apply_order_paid(text, text), start_order(uuid, int, int, text), start_order(uuid, int, int, text, text),
+  start_order(uuid, int, int, text, text, boolean, int), shots_cap(), keep_fee(int),
+  price_quote_raw(int, int, boolean), price_quote(int, int, text, uuid, boolean, int),
   set_order_snap(text, text, text), midtrans_notify(text, text, text, text, numeric), order_status(text),
   event_orders(uuid), admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text),

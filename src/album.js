@@ -333,6 +333,7 @@ export async function renderAlbum(root, status) {
     if (filter.owner) return t("Belum ada foto dari tamu ini.");
     if (status.reveal_at && new Date(status.reveal_at) > new Date())
       return t("Mode cuci film: semua foto tampil pada {d}.", { d: fmtDate(status.reveal_at) });
+    if (status.unlimited) return t("Semua foto tampil setelah acara selesai.");
     return t("Foto tampil setelah pemotretnya menghabiskan {n} jepretan atau saat acara ditutup.", { n: status.max_shots });
   }
 

@@ -218,6 +218,12 @@ alter table events
   add column if not exists allow_front boolean not null default true,     -- kamera depan / selfie
   -- Kamera baru aktif saat acara mulai (starts_at); sebelumnya tamu melihat hitung mundur
   add column if not exists lock_until_start boolean not null default false,
+  -- Paket Unlimited: tamu dan jepretan tanpa batas (max_members/max_shots diisi batas sistem)
+  add column if not exists unlimited boolean not null default false,
+  -- Masa simpan foto (hari setelah acara); di atas batas gratis dibayar saat pembayaran.
+  -- keep_basis = biaya masa simpan yang sudah dibayar (dasar selisih saat diperpanjang).
+  add column if not exists keep_days int not null default 30 check (keep_days between 1 and 3650),
+  add column if not exists keep_basis int not null default 0 check (keep_basis >= 0),
   -- Email yang otomatis menjadi pembuat acara (user_roles) begitu pesanan acara ini lunas
   add column if not exists creator_email text
     check (creator_email is null or creator_email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$');
@@ -441,7 +447,7 @@ begin
     end if;
 
     perform 1 from events where id = v_ev.id for update;
-    if (select count(*) from event_members where event_id = v_ev.id) >= v_ev.max_members then
+    if not v_ev.unlimited and (select count(*) from event_members where event_id = v_ev.id) >= v_ev.max_members then
       raise exception 'ACARA_PENUH';
     end if;
   end if;
@@ -455,10 +461,10 @@ drop function if exists event_preview(text);
 create function event_preview(p_code text)
 returns table (name text, cover_path text, welcome_text text, is_open boolean, max_shots int,
                starts_at timestamptz, ends_at timestamptz, host_name text, album_private boolean,
-               lock_until_start boolean)
+               lock_until_start boolean, unlimited boolean)
 language sql stable security definer set search_path = public as $$
   select e.name, e.cover_path, e.welcome_text, open_now(e), e.max_shots, e.starts_at, e.ends_at,
-         e.host_name, e.album_private, e.lock_until_start
+         e.host_name, e.album_private, e.lock_until_start, e.unlimited
     from events e
    where auth.uid() is not null and e.join_code = upper(trim(p_code));
 $$;
@@ -503,7 +509,9 @@ begin
   if exists (select 1 from events where id = p_event and lock_until_start and starts_at > now()) then
     raise exception 'ACARA_BELUM_MULAI';
   end if;
-  if v_used >= v_max then raise exception 'FILM_HABIS'; end if;
+  if v_used >= v_max and not exists (select 1 from events where id = p_event and unlimited) then
+    raise exception 'FILM_HABIS';
+  end if;
 
   select coalesce(max(p.seq), 0) + 1 into v_seq
     from photos p where p.event_id = p_event and p.user_id = v_uid;
@@ -560,7 +568,7 @@ language sql stable security definer set search_path = public as $$
          and (not e.album_private or p.user_id = auth.uid())
          and case
                when e.reveal_at is not null then now() >= e.reveal_at
-               else m.shots_used >= e.max_shots or not open_now(e)
+               else (not e.unlimited and m.shots_used >= e.max_shots) or not open_now(e)
              end
        )
      );
@@ -646,7 +654,7 @@ returns table (event_id uuid, name text, join_code text, max_shots int, max_memb
                starts_at timestamptz, ends_at timestamptz, collage_theme jsonb, needs_review boolean,
                pay_status text, price_basis int, event_type text, host_name text, slug text,
                album_private boolean, date_stamp boolean, allow_gallery boolean, allow_front boolean,
-               lock_until_start boolean)
+               lock_until_start boolean, unlimited boolean, keep_days int, keep_basis int)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name,
          case when can_manage(e.id) then e.join_code end,
@@ -665,7 +673,8 @@ language sql stable security definer set search_path = public as $$
          s.max_shots_limit, s.max_members_limit, e.allow_film_choice,
          e.starts_at, e.ends_at, e.collage_theme, e.needs_review,
          e.pay_status, e.price_basis, e.event_type, e.host_name, e.slug,
-         e.album_private, e.date_stamp, e.allow_gallery, e.allow_front, e.lock_until_start
+         e.album_private, e.date_stamp, e.allow_gallery, e.allow_front, e.lock_until_start,
+         e.unlimited, e.keep_days, e.keep_basis
     from events e
     cross join app_settings s
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
@@ -679,13 +688,12 @@ drop function if exists my_events();
 create function my_events()
 returns table (event_id uuid, name text, is_owner boolean, is_open boolean,
                max_shots int, shots_used int, created_at timestamptz,
-               cover_path text, starts_at timestamptz, ends_at timestamptz, photos int,
-               pay_status text)
+               cover_path text, starts_at timestamptz, ends_at timestamptz, photos int)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name, e.owner_id = auth.uid(), open_now(e), e.max_shots,
          coalesce(m.shots_used, 0), e.created_at,
          e.cover_path, e.starts_at, e.ends_at,
-         (select count(*)::int from visible_photos(e.id)), e.pay_status
+         (select count(*)::int from visible_photos(e.id))
     from events e
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
    where e.owner_id = auth.uid() or m.user_id is not null
@@ -790,51 +798,53 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 drop function if exists create_event(text, int, int, boolean);
+drop function if exists create_event(text, int, int, boolean, text);
 create or replace function create_event(p_name text, p_max_shots int default 30,
                              p_max_members int default 60,
                              p_invite_only boolean default false,
-                             p_film text default null)
+                             p_film text default null,
+                             p_unlimited boolean default false,
+                             p_keep_days int default 30)
 returns uuid
 language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_try int := 0; s app_settings%rowtype; r user_roles%rowtype; v_gate jsonb;
-        v_pay text := 'free'; v_limit int; v_used int;
+        v_pay text := 'free';
+        v_unl boolean := coalesce(p_unlimited, false); v_keep int := coalesce(p_keep_days, 30);
 begin
   perform assert_not_banned();
   if not can_create_event() then raise exception 'TIDAK_BOLEH_MEMBUAT'; end if;
+  select * into s from app_settings;
+  if v_keep < 1 or v_keep > s.keep_max_days then raise exception 'MASA_SIMPAN_TIDAK_VALID'; end if;
+  -- Unlimited: batas sistem untuk hitungan; join_event/reserve_shot tidak membatasi
+  if v_unl then
+    if not s.payments_enabled and not is_superadmin() then raise exception 'PEMBAYARAN_NONAKTIF'; end if;
+    p_max_members := 5000; p_max_shots := 100;
+  end if;
   -- Status pembuatan acara (Buka / Hanya acara kecil / Tutup) dari superadmin
   v_gate := can_create_event(p_max_members, p_max_shots);
   if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
   -- Kunci baris peran supaya dua permintaan bersamaan tidak melewati batas
   select * into r from user_roles where email = my_verified_email() for update;
-  select * into s from app_settings;
-  -- Batas jumlah acara berlaku juga untuk layanan mandiri (belum punya peran):
-  -- pakai batas bawaan creator_event_limit, dihitung dari semua acara miliknya (termasuk draf).
-  if coalesce(r.role, '') <> 'superadmin' then
-    if r.role is null then
-      v_limit := s.creator_event_limit;
-      v_used := (select count(*)::int from events e where e.owner_id = auth.uid());
-    else
-      v_limit := r.event_limit;
-      v_used := r.events_created;
-    end if;
-    if v_limit is not null and v_used >= v_limit then
-      raise exception 'BATAS_ACARA_HABIS';
-    end if;
-    if r.storage_limit_mb is not null
-       and owner_bytes(auth.uid()) >= r.storage_limit_mb::bigint * 1048576 then
-      raise exception 'BATAS_STORAGE_HABIS';
-    end if;
+  if r.role <> 'superadmin' and r.event_limit is not null
+     and r.events_created >= r.event_limit then
+    raise exception 'BATAS_ACARA_HABIS';
   end if;
-  if p_max_shots is null or p_max_shots < 1 or p_max_shots > s.max_shots_limit then
+  if r.role <> 'superadmin' and r.storage_limit_mb is not null
+     and owner_bytes(auth.uid()) >= r.storage_limit_mb::bigint * 1048576 then
+    raise exception 'BATAS_STORAGE_HABIS';
+  end if;
+  select * into s from app_settings;
+  -- Batas jepretan mengikuti rentang harga tertinggi saat pembayaran aktif (shots_cap)
+  if not v_unl and (p_max_shots is null or p_max_shots < 1 or p_max_shots > shots_cap()) then
     raise exception 'JATAH_MELEBIHI_BATAS';
   end if;
-  if p_max_members is null or p_max_members < 1 or p_max_members > s.max_members_limit then
+  if not v_unl and (p_max_members is null or p_max_members < 1 or p_max_members > s.max_members_limit) then
     raise exception 'PESERTA_MELEBIHI_BATAS';
   end if;
   if p_film is not null and not valid_film(p_film) then raise exception 'FILM_TIDAK_DIKENAL'; end if;
   -- Pembayaran aktif: acara berbayar tersimpan sebagai draf sampai lunas; gratis dibatasi per akun
   if s.payments_enabled and coalesce(r.role, '') <> 'superadmin' then
-    if (price_quote_raw(p_max_members, p_max_shots)->>'total')::int > 0 then
+    if (price_quote_raw(p_max_members, p_max_shots, v_unl)->>'total')::int + keep_fee(v_keep) > 0 then
       v_pay := 'draft';
     elsif (select count(*) from events e where e.owner_id = auth.uid() and e.pay_status = 'free'
               and open_now(e)) >= s.free_events_per_user then
@@ -844,9 +854,9 @@ begin
   loop
     begin
       insert into events (owner_id, name, join_code, max_shots, max_members, invite_only, film, pay_status,
-                          creator_email)
+                          creator_email, unlimited, keep_days)
       values (auth.uid(), trim(p_name), gen_code(), p_max_shots, p_max_members, p_invite_only,
-              coalesce(p_film, s.default_film), v_pay, my_verified_email())
+              coalesce(p_film, s.default_film), v_pay, my_verified_email(), v_unl, v_keep)
       returning id into v_id;
       exit;
     exception when unique_violation then
@@ -856,9 +866,9 @@ begin
   end loop;
   insert into event_members (event_id, user_id) values (v_id, auth.uid());
   -- Acara besar masuk "Perlu ditinjau" supaya superadmin memastikan kapasitas pada tanggalnya
-  if coalesce(r.role, '') <> 'superadmin' and (p_max_members >= s.review_guests
-       or event_photo_estimate(p_max_members, p_max_shots) * s.photo_mb_estimate
-          >= s.capacity_storage_gb * 1024 * 0.05) then
+  if coalesce(r.role, '') <> 'superadmin' and ((not v_unl and p_max_members >= s.review_guests)
+       or (case when v_unl then s.unlimited_est_photos else event_photo_estimate(p_max_members, p_max_shots) end)
+          * s.photo_mb_estimate >= s.capacity_storage_gb * 1024 * 0.05) then
     update events set needs_review = true where id = v_id;
   end if;
   update user_roles set events_created = events_created + 1 where email = r.email;
@@ -875,7 +885,7 @@ begin
   perform assert_owner(p_event);
   select * into e from events where id = p_event;
   v_id := create_event(left(e.name, 69) || ' (salinan)', e.max_shots, e.max_members,
-                       e.invite_only, e.film);
+                       e.invite_only, e.film, e.unlimited, e.keep_days);
   update events set hide_names = e.hide_names, allow_film_choice = e.allow_film_choice,
                     welcome_text = e.welcome_text, mirror_preview = e.mirror_preview,
                     mirror_photo = e.mirror_photo, photo_max_side = e.photo_max_side,
@@ -959,7 +969,7 @@ begin
 
   if p_patch ? 'max_shots' then
     v := (p_patch->>'max_shots')::int;
-    if v is null or v < 1 or v > s.max_shots_limit then raise exception 'JATAH_MELEBIHI_BATAS'; end if;
+    if v is null or v < 1 or v > shots_cap() then raise exception 'JATAH_MELEBIHI_BATAS'; end if;
     if v < e.max_shots and not v_admin then raise exception 'JATAH_TIDAK_BOLEH_TURUN'; end if;
     if v < (select coalesce(max(shots_used), 0) from event_members where event_id = p_event) then
       raise exception 'JATAH_DI_BAWAH_PEMAKAIAN';
@@ -973,7 +983,7 @@ begin
     v_gate := can_create_event(e.max_members, e.max_shots);
     if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
     if s.payments_enabled and not v_admin and e.pay_status <> 'draft'
-       and (price_quote_raw(e.max_members, e.max_shots)->>'total')::int > e.price_basis then
+       and (price_quote_raw(e.max_members, e.max_shots, e.unlimited)->>'total')::int > e.price_basis then
       raise exception 'PERLU_PEMBAYARAN';
     end if;
     if not v_admin and e.max_members >= s.review_guests and v_old_members < s.review_guests then
@@ -994,6 +1004,27 @@ begin
   if p_patch ? 'allow_gallery' then e.allow_gallery := (p_patch->>'allow_gallery')::boolean; end if;
   if p_patch ? 'allow_front' then e.allow_front := (p_patch->>'allow_front')::boolean; end if;
   if p_patch ? 'lock_until_start' then e.lock_until_start := (p_patch->>'lock_until_start')::boolean; end if;
+  -- Unlimited dan masa simpan: bebas diubah saat draf (dihitung ulang saat bayar) atau oleh superadmin;
+  -- acara yang sudah aktif menambahnya lewat pesanan (start_order). Masa simpan boleh dikurangi.
+  if p_patch ? 'unlimited' and (p_patch->>'unlimited')::boolean is distinct from e.unlimited then
+    if not (v_admin or e.pay_status = 'draft' or not s.payments_enabled) then raise exception 'PERLU_PEMBAYARAN'; end if;
+    e.unlimited := (p_patch->>'unlimited')::boolean;
+    if e.unlimited then e.max_members := 5000; e.max_shots := 100; end if;
+  end if;
+  if p_patch ? 'keep_days' then
+    v := (p_patch->>'keep_days')::int;
+    if v is null or v < 1 or v > s.keep_max_days then raise exception 'MASA_SIMPAN_TIDAK_VALID'; end if;
+    if v > e.keep_days and s.payments_enabled and not v_admin and e.pay_status <> 'draft'
+       and keep_fee(v) > e.keep_basis then
+      raise exception 'PERLU_PEMBAYARAN';
+    end if;
+    e.keep_days := v;
+  end if;
+  -- Hapus otomatis wajib: rencana hapus paling lambat (selesai / mulai / dibuat) + masa simpan
+  if not v_admin and (e.purge_at is null
+       or e.purge_at > coalesce(e.ends_at, e.starts_at, e.created_at) + make_interval(days => e.keep_days)) then
+    e.purge_at := coalesce(e.ends_at, e.starts_at, e.created_at) + make_interval(days => e.keep_days);
+  end if;
   if p_patch ? 'slug' then
     e.slug := nullif(lower(trim(coalesce(p_patch->>'slug', ''))), '');
     if e.slug is not null and not valid_slug(e.slug) then raise exception 'TAUTAN_TIDAK_VALID'; end if;
@@ -1041,7 +1072,8 @@ begin
                     event_type = e.event_type, host_name = e.host_name, slug = e.slug,
                     album_private = e.album_private, date_stamp = e.date_stamp,
                     allow_gallery = e.allow_gallery, allow_front = e.allow_front,
-                    creator_email = e.creator_email, lock_until_start = e.lock_until_start
+                    creator_email = e.creator_email, lock_until_start = e.lock_until_start,
+                    unlimited = e.unlimited, keep_days = e.keep_days
    where id = p_event;
   perform log_audit('ubah_acara', p_event::text, p_patch);
 end $$;
@@ -1298,6 +1330,13 @@ begin
     price_min           = coalesce((p_patch->>'price_min')::int, price_min),
     free_events_per_user = coalesce((p_patch->>'free_events_per_user')::int, free_events_per_user),
     payment_window_min  = coalesce((p_patch->>'payment_window_min')::int, payment_window_min),
+    price_unlimited     = coalesce((p_patch->>'price_unlimited')::int, price_unlimited),
+    unlimited_est_photos = coalesce((p_patch->>'unlimited_est_photos')::int, unlimited_est_photos),
+    keep_free_days      = coalesce((p_patch->>'keep_free_days')::int, keep_free_days),
+    keep_per_day        = coalesce((p_patch->>'keep_per_day')::int, keep_per_day),
+    keep_flat_days      = coalesce((p_patch->>'keep_flat_days')::int, keep_flat_days),
+    keep_flat           = coalesce((p_patch->>'keep_flat')::int, keep_flat),
+    keep_max_days       = coalesce((p_patch->>'keep_max_days')::int, keep_max_days),
     photo_mb_estimate   = coalesce((p_patch->>'photo_mb_estimate')::numeric, photo_mb_estimate),
     updated_at = now(), updated_by = auth.uid()
   where id;
@@ -1681,7 +1720,7 @@ begin
       join profiles pr     on pr.id = p.user_id
      where p.event_id = p_event and p.status = 'ready' and not p.hidden
        and case when e.reveal_at is not null then now() >= e.reveal_at
-                else m.shots_used >= e.max_shots or not open_now(e) end
+                else (not e.unlimited and m.shots_used >= e.max_shots) or not open_now(e) end
      order by p.taken_at desc
      limit least(greatest(coalesce(p_limit, 300), 1), 500);
 end $$;
@@ -2266,8 +2305,8 @@ declare
 begin
   select * into s from app_settings;
   select count(*), coalesce(sum(e.max_members), 0),
-         coalesce(sum(event_photo_estimate(e.max_members, e.max_shots)), 0),
-         coalesce(sum(event_photo_estimate(e.max_members, e.max_shots))
+         coalesce(sum(case when e.unlimited then s.unlimited_est_photos else event_photo_estimate(e.max_members, e.max_shots) end), 0),
+         coalesce(sum(case when e.unlimited then s.unlimited_est_photos else event_photo_estimate(e.max_members, e.max_shots) end)
                     filter (where e.starts_at < date_trunc('month', now()) + interval '1 month'), 0)
     into v_events, v_guests, v_photos, v_month_photos
     from events e
@@ -2342,7 +2381,8 @@ begin
     'queue', coalesce((select jsonb_agg(q order by q.needs_review desc, q.starts_at nulls last, q.created_at desc)
       from (select e.id, e.name, e.starts_at, e.created_at, e.max_members, e.max_shots,
                    e.needs_review, e.reviewed_at, open_now(e) as is_open,
-                   round(event_photo_estimate(e.max_members, e.max_shots) * s.photo_mb_estimate * 1048576) as est_bytes,
+                   round(case when e.unlimited then s.unlimited_est_photos else event_photo_estimate(e.max_members, e.max_shots) end
+                         * s.photo_mb_estimate * 1048576) as est_bytes, e.unlimited,
                    (select count(*) from photos p where p.event_id = e.id and p.status = 'ready') as photos,
                    pr.name as owner_name
               from events e left join profiles pr on pr.id = e.owner_id
@@ -2429,7 +2469,16 @@ alter table app_settings
   add column if not exists price_free_shots int not null default 36 check (price_free_shots between 0 and 500),
   add column if not exists price_min int not null default 25000 check (price_min between 0 and 100000000),
   add column if not exists free_events_per_user int not null default 2 check (free_events_per_user between 0 and 1000),
-  add column if not exists payment_window_min int not null default 15 check (payment_window_min between 5 and 1440);
+  add column if not exists payment_window_min int not null default 15 check (payment_window_min between 5 and 1440),
+  -- Paket Unlimited tamu & jepretan: harga tetap, tanpa diskon jumlah tamu dan kode promo
+  add column if not exists price_unlimited int not null default 999000 check (price_unlimited between 0 and 1000000000),
+  add column if not exists unlimited_est_photos int not null default 21000 check (unlimited_est_photos between 1 and 10000000),
+  -- Masa simpan foto: <= keep_free_days gratis; sampai keep_flat_days per hari; >= keep_flat_days flat
+  add column if not exists keep_free_days int not null default 30 check (keep_free_days between 1 and 3650),
+  add column if not exists keep_per_day int not null default 3000 check (keep_per_day between 0 and 10000000),
+  add column if not exists keep_flat_days int not null default 60 check (keep_flat_days between 1 and 3650),
+  add column if not exists keep_flat int not null default 200000 check (keep_flat between 0 and 1000000000),
+  add column if not exists keep_max_days int not null default 90 check (keep_max_days between 1 and 3650);
 
 create table if not exists promo_codes (
   code         text primary key check (code ~ '^[A-Z0-9_-]{3,30}$'),
@@ -2470,6 +2519,13 @@ create table if not exists orders (
   paid_at         timestamptz,
   updated_at      timestamptz not null default now()
 );
+-- Paket dan masa simpan yang dibeli lewat pesanan ini. keep_total = biaya masa simpan penuh
+-- (dasar keep_basis acara), keep_fee = yang ditagih di pesanan ini (selisih bila diperpanjang).
+alter table orders
+  add column if not exists unlimited boolean not null default false,
+  add column if not exists keep_days int,
+  add column if not exists keep_fee int not null default 0 check (keep_fee >= 0),
+  add column if not exists keep_total int not null default 0 check (keep_total >= 0);
 -- Metode yang dipilih di layar Pembayaran; token Snap dibuat khusus untuk metode ini
 alter table orders add column if not exists pay_method text
   check (pay_method is null or pay_method in ('qris', 'gopay', 'shopeepay', 'va'));
@@ -2477,6 +2533,26 @@ create index if not exists orders_event on orders (event_id, created_at desc);
 create index if not exists orders_status on orders (status, created_at desc);
 alter table promo_codes enable row level security;
 alter table orders enable row level security;
+
+-- Batas jepretan per tamu: saat pembayaran aktif = rentang harga tertinggi (maks. 100, batas kolom);
+-- kalau tidak, pengaturan global max_shots_limit
+create or replace function shots_cap() returns int
+language sql stable security definer set search_path = public as $$
+  select case when s.payments_enabled
+              then least(100, coalesce((s.price_roll_tiers->(jsonb_array_length(s.price_roll_tiers) - 1)->>0)::int, s.max_shots_limit))
+              else s.max_shots_limit end
+    from app_settings s;
+$$;
+
+-- Biaya masa simpan foto: <= hari gratis = 0; sampai hari flat = per hari di atas gratis; >= hari flat = flat.
+-- Pembayaran mati = gratis.
+create or replace function keep_fee(p_days int) returns int
+language sql stable security definer set search_path = public as $$
+  select case when not s.payments_enabled or p_days <= s.keep_free_days then 0
+              when p_days >= s.keep_flat_days then s.keep_flat
+              else (p_days - s.keep_free_days) * s.keep_per_day end
+    from app_settings s;
+$$;
 
 -- Pengaturan harga untuk halaman harga publik, wizard, dan pembayaran (juga tanpa login)
 create or replace function price_settings() returns jsonb
@@ -2487,16 +2563,25 @@ language sql stable security definer set search_path = public as $$
     'free_shots', s.price_free_shots, 'min', s.price_min,
     'free_events_per_user', s.free_events_per_user, 'payment_window_min', s.payment_window_min,
     'max_shots_limit', s.max_shots_limit, 'max_members_limit', s.max_members_limit,
-    'midtrans_client_key', s.midtrans_client_key, 'midtrans_production', s.midtrans_production)
+    'midtrans_client_key', s.midtrans_client_key, 'midtrans_production', s.midtrans_production,
+    'price_unlimited', s.price_unlimited, 'keep_free_days', s.keep_free_days, 'keep_per_day', s.keep_per_day,
+    'keep_flat_days', s.keep_flat_days, 'keep_flat', s.keep_flat, 'keep_max_days', s.keep_max_days,
+    'shots_cap', shots_cap())
     from app_settings s;
 $$;
 
--- Harga daftar untuk tamu × roll: { rate, subtotal, discount_pct, volume_discount, total, free }
-create or replace function price_quote_raw(p_guests int, p_shots int) returns jsonb
+-- Harga daftar untuk tamu × roll: { rate, subtotal, discount_pct, volume_discount, total, free, unlimited }
+-- Unlimited: harga tetap price_unlimited, tanpa diskon jumlah tamu.
+drop function if exists price_quote_raw(int, int);
+create or replace function price_quote_raw(p_guests int, p_shots int, p_unlimited boolean default false) returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare s app_settings%rowtype; v_rate int; v_pct int; v_sub bigint; v_total bigint; v_free boolean;
 begin
   select * into s from app_settings;
+  if coalesce(p_unlimited, false) then
+    return jsonb_build_object('rate', null, 'subtotal', s.price_unlimited, 'discount_pct', 0,
+      'volume_discount', 0, 'total', s.price_unlimited, 'free', false, 'unlimited', true);
+  end if;
   select (t->>1)::int into v_rate
     from jsonb_array_elements(s.price_roll_tiers) with ordinality x(t, i)
    where p_shots <= (t->>0)::int order by i limit 1;
@@ -2513,7 +2598,7 @@ begin
                   else greatest(s.price_min, ceil((v_sub * (100 - v_pct))::numeric / 100000) * 1000) end;
   return jsonb_build_object('rate', v_rate, 'subtotal', v_sub, 'discount_pct', v_pct,
     'volume_discount', v_sub - round((v_sub * (100 - v_pct))::numeric / 100),
-    'total', v_total, 'free', v_free);
+    'total', v_total, 'free', v_free, 'unlimited', false);
 end $$;
 
 -- Potongan kode promo untuk nominal p_base. Galat bila kode tidak berlaku.
@@ -2536,26 +2621,44 @@ end $$;
 
 -- Rincian harga untuk layar: ukuran baru, kredit (tambah tamu acara lunas), promo.
 -- Kode promo yang tidak berlaku tidak menggagalkan: dikembalikan sebagai promo_error.
+-- Masa simpan: keep_fee = biaya penuh p_keep_days, keep_credit = yang sudah dibayar, keep_due = selisihnya.
+-- Kode promo hanya untuk paket tamu × roll (bukan Unlimited, bukan masa simpan).
+drop function if exists price_quote(int, int, text, uuid);
 create or replace function price_quote(p_guests int, p_shots int, p_promo text default null,
-                                       p_event uuid default null)
+                                       p_event uuid default null, p_unlimited boolean default false,
+                                       p_keep_days int default null)
 returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare q jsonb; e events%rowtype; v_credit int := 0; v_sub int; v_disc int := 0; v_err text;
+        v_keep int; v_keep_fee int; v_keep_credit int := 0; v_paid boolean := false;
 begin
-  q := price_quote_raw(p_guests, p_shots);
+  q := price_quote_raw(p_guests, p_shots, p_unlimited);
   if p_event is not null then
     select * into e from events where id = p_event;
-    if found and can_manage(p_event) and e.pay_status = 'paid' then v_credit := e.price_basis; end if;
+    if found and can_manage(p_event) and e.pay_status <> 'draft' then
+      v_paid := true;
+      if e.pay_status = 'paid' then v_credit := e.price_basis; end if;
+      v_keep_credit := e.keep_basis;
+    end if;
   end if;
+  v_keep := coalesce(p_keep_days, e.keep_days, 30);
+  v_keep_fee := keep_fee(v_keep);
   v_sub := greatest(0, (q->>'total')::int - v_credit);
   if nullif(trim(coalesce(p_promo, '')), '') is not null and v_sub > 0 then
-    begin
-      v_disc := promo_discount(p_promo, v_sub);
-    exception when others then v_err := sqlerrm;
-    end;
+    if coalesce(p_unlimited, false) then
+      v_err := 'PROMO_TIDAK_BERLAKU';
+    else
+      begin
+        v_disc := promo_discount(p_promo, v_sub);
+      exception when others then v_err := sqlerrm;
+      end;
+    end if;
   end if;
   return q || jsonb_build_object('credit', v_credit, 'due', v_sub, 'promo_discount', v_disc,
-                                 'promo_error', v_err, 'amount', v_sub - v_disc);
+                                 'promo_error', v_err, 'keep_days', v_keep, 'keep_fee', v_keep_fee,
+                                 'keep_credit', v_keep_credit,
+                                 'keep_due', greatest(0, v_keep_fee - v_keep_credit),
+                                 'amount', v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit));
 end $$;
 
 -- Boleh membuat acara: punya peran, atau pembayaran aktif (layanan mandiri). Akun diblokir dan
@@ -2581,16 +2684,9 @@ begin
    where id = p_order;
   if o.event_id is not null then
     select * into e from events where id = o.event_id for update;
-    if o.list_price > 0 and coalesce(e.creator_email, '') <> '' then
-      -- Pembuat acara baru lewat pembayaran ikut batas bawaan (creator_event_limit),
-      -- sama seperti ditambahkan manual di Dashboard; bukan tanpa batas. events_created
-      -- diisi jumlah acara milik email tersebut supaya hitungan batas tetap konsisten
-      -- (akun yang membuat acara untuk dirinya sendiri tidak mulai dari nol lagi).
-      insert into user_roles (email, role, added_by, event_limit, storage_limit_mb, events_created)
-      select e.creator_email, 'creator', o.user_id, s.creator_event_limit, s.creator_storage_mb,
-             (select count(*)::int from events ev
-               where ev.owner_id = (select au.id from auth.users au
-                                     where lower(au.email) = lower(e.creator_email)))
+    if (o.list_price > 0 or o.keep_total > 0) and coalesce(e.creator_email, '') <> '' then
+      insert into user_roles (email, role, added_by, event_limit, storage_limit_mb)
+      values (e.creator_email, 'creator', o.user_id, null, s.creator_storage_mb)
       on conflict (email) do nothing;
       if found then
         insert into audit_log (actor_id, action, target, detail)
@@ -2601,26 +2697,35 @@ begin
     update events set
       max_members = greatest(max_members, o.guests),
       max_shots   = greatest(max_shots, o.shots),
-      pay_status  = case when o.list_price = 0 and pay_status <> 'paid' then 'free' else 'paid' end,
+      unlimited   = unlimited or o.unlimited,
+      keep_days   = greatest(keep_days, coalesce(o.keep_days, keep_days)),
+      keep_basis  = greatest(keep_basis, o.keep_total),
+      purge_at    = coalesce(ends_at, starts_at, created_at)
+                    + make_interval(days => greatest(keep_days, coalesce(o.keep_days, keep_days))),
+      pay_status  = case when o.list_price = 0 and o.keep_total = 0 and pay_status <> 'paid' then 'free' else 'paid' end,
       price_basis = greatest(price_basis, o.list_price),
       needs_review = needs_review
-        or (o.guests >= s.review_guests and (e.reviewed_at is null or e.max_members < s.review_guests))
+        or (not o.unlimited and o.guests >= s.review_guests
+            and (e.reviewed_at is null or e.max_members < s.review_guests))
      where id = o.event_id;
   end if;
   if o.promo_code is not null then update promo_codes set used = used + 1 where code = o.promo_code; end if;
   insert into audit_log (actor_id, actor_email, action, target, detail)
   values (o.user_id, null, 'bayar_acara', coalesce(o.event_id::text, o.event_name),
           jsonb_build_object('order', o.id, 'amount', o.amount, 'kind', o.kind, 'guests', o.guests,
-                             'shots', o.shots, 'name', o.event_name, 'via', coalesce(p_type, o.payment_type)));
+                             'shots', o.shots, 'name', o.event_name, 'via', coalesce(p_type, o.payment_type),
+                             'unlimited', o.unlimited, 'keep_days', o.keep_days));
   return true;
 end $$;
 
 -- Buat pesanan untuk acara: draf (bayar pertama) atau tambah tamu/roll acara yang sudah aktif.
 -- Dipanggil Worker (/api/pay/checkout) dengan sesi pengguna. Pesanan tertunda yang sama (termasuk
--- metode bayarnya) dipakai ulang; ganti metode = pesanan baru, karena token Snap terikat ke metode.
+-- metode bayar, paket, dan masa simpan) dipakai ulang; ganti metode = pesanan baru (token Snap terikat).
 drop function if exists start_order(uuid, int, int, text);
+drop function if exists start_order(uuid, int, int, text, text);
 create or replace function start_order(p_event uuid, p_guests int default null, p_shots int default null,
-                                       p_promo text default null, p_method text default null)
+                                       p_promo text default null, p_method text default null,
+                                       p_unlimited boolean default null, p_keep_days int default null)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -2628,6 +2733,7 @@ declare
   v_g int; v_r int; v_kind text; v_credit int := 0; v_list int; v_sub int; v_disc int := 0;
   v_code text := nullif(upper(trim(coalesce(p_promo, ''))), ''); v_gate jsonb; v_id text;
   v_method text := nullif(lower(trim(coalesce(p_method, ''))), '');
+  v_unl boolean; v_keep int; v_keep_total int; v_keep_due int;
 begin
   perform assert_not_banned();
   select * into s from app_settings;
@@ -2638,31 +2744,49 @@ begin
   select * into e from events where id = p_event for update;
   if not found then raise exception 'ACARA_TIDAK_ADA'; end if;
   if e.owner_id <> auth.uid() and not is_superadmin() then raise exception 'BUKAN_PEMILIK'; end if;
-  v_g := coalesce(p_guests, e.max_members);
-  v_r := coalesce(p_shots, e.max_shots);
-  if v_g < 1 or v_g > s.max_members_limit then raise exception 'PESERTA_MELEBIHI_BATAS'; end if;
-  if v_r < 1 or v_r > s.max_shots_limit then raise exception 'JATAH_MELEBIHI_BATAS'; end if;
+  v_unl := coalesce(p_unlimited, e.unlimited);
+  v_keep := coalesce(p_keep_days, e.keep_days);
+  if v_keep < 1 or v_keep > s.keep_max_days then raise exception 'MASA_SIMPAN_TIDAK_VALID'; end if;
+  if v_unl then
+    v_g := 5000; v_r := 100;
+  else
+    v_g := coalesce(p_guests, e.max_members);
+    v_r := coalesce(p_shots, e.max_shots);
+    if v_g < 1 or v_g > s.max_members_limit then raise exception 'PESERTA_MELEBIHI_BATAS'; end if;
+    if v_r < 1 or v_r > shots_cap() then raise exception 'JATAH_MELEBIHI_BATAS'; end if;
+  end if;
+  v_keep_total := keep_fee(v_keep);
   if e.pay_status = 'draft' then
     v_kind := 'new';
+    v_keep_due := v_keep_total;
   else
     v_kind := 'upgrade';
-    if v_g < e.max_members or v_r < e.max_shots then raise exception 'TIDAK_BOLEH_TURUN'; end if;
-    if v_g = e.max_members and v_r = e.max_shots then raise exception 'TIDAK_ADA_PERUBAHAN'; end if;
+    if (e.unlimited and not v_unl) or (not v_unl and (v_g < e.max_members or v_r < e.max_shots)) then
+      raise exception 'TIDAK_BOLEH_TURUN';
+    end if;
+    if v_unl = e.unlimited and v_g = e.max_members and v_r = e.max_shots and v_keep <= e.keep_days then
+      raise exception 'TIDAK_ADA_PERUBAHAN';
+    end if;
+    if v_keep < e.keep_days then v_keep := e.keep_days; v_keep_total := keep_fee(v_keep); end if;
     if e.pay_status = 'paid' then v_credit := e.price_basis; end if;
+    v_keep_due := greatest(0, v_keep_total - e.keep_basis);
   end if;
   -- Status pembuatan acara (Tutup / Hanya acara kecil) juga menahan pembayaran
   v_gate := can_create_event(v_g, v_r);
   if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
-  v_list := (price_quote_raw(v_g, v_r)->>'total')::int;
+  v_list := (price_quote_raw(v_g, v_r, v_unl)->>'total')::int;
   v_sub := greatest(0, v_list - v_credit);
+  -- Kode promo tidak berlaku untuk Unlimited
+  if v_code is not null and v_unl then raise exception 'PROMO_TIDAK_BERLAKU'; end if;
   if v_code is not null and v_sub > 0 then v_disc := promo_discount(v_code, v_sub); end if;
   if v_disc = 0 then v_code := null; end if;
 
   select * into o from orders
    where event_id = p_event and status = 'pending' and expires_at > now() + interval '1 minute'
-     and guests = v_g and shots = v_r and amount = v_sub - v_disc
-     and coalesce(promo_code, '') = coalesce(v_code, '')
+     and guests = v_g and shots = v_r and amount = v_sub - v_disc + v_keep_due
+     and unlimited = v_unl and keep_days is not distinct from v_keep
      and coalesce(pay_method, '') = coalesce(v_method, '')
+     and coalesce(promo_code, '') = coalesce(v_code, '')
    order by created_at desc limit 1;
   if not found then
     update orders set status = 'expired', updated_at = now() where event_id = p_event and status = 'pending';
@@ -2672,9 +2796,11 @@ begin
       exit when not exists (select 1 from orders where id = v_id);
     end loop;
     insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, credit,
-                        promo_code, promo_discount, amount, expires_at, pay_method)
+                        promo_code, promo_discount, amount, expires_at, pay_method,
+                        unlimited, keep_days, keep_fee, keep_total)
     values (v_id, p_event, auth.uid(), e.name, v_kind, v_g, v_r, v_list, v_credit,
-            v_code, v_disc, v_sub - v_disc, now() + make_interval(mins => s.payment_window_min), v_method)
+            v_code, v_disc, v_sub - v_disc + v_keep_due, now() + make_interval(mins => s.payment_window_min), v_method,
+            v_unl, v_keep, v_keep_due, v_keep_total)
     returning * into o;
     if o.amount = 0 then
       perform apply_order_paid(o.id, 'tanpa_biaya');
@@ -2770,6 +2896,7 @@ begin
                       or o.event_name ilike '%' || p_search || '%')),
     'rows', coalesce((select jsonb_agg(r) from (
         select o.id, o.event_id, o.event_name, o.kind, o.guests, o.shots, o.list_price, o.credit,
+               o.unlimited, o.keep_days, o.keep_fee,
                o.promo_code, o.promo_discount, o.amount, o.status, o.payment_type, o.midtrans_status,
                o.created_at, o.paid_at, o.expires_at, pr.name as user_name, u.email::text as user_email
           from orders o
@@ -2867,7 +2994,7 @@ grant execute on function
   admin_creator_requests(text), admin_resolve_creator_request(bigint, boolean, text),
   claim_downloads(uuid, uuid[]),
   can_upload(text), can_view(text), owns_path(text),
-  create_event(text, int, int, boolean, text), set_event(uuid, jsonb), set_cover(uuid, text),
+  create_event(text, int, int, boolean, text, boolean, int), set_event(uuid, jsonb), set_cover(uuid, text),
   get_roll(uuid, uuid), rotate_code(uuid), get_invites(uuid), set_invites(uuid, text[]),
   hide_photo(uuid, boolean), block_member(uuid, uuid, boolean),
   release_pending(uuid, uuid), list_members(uuid), owner_paths(uuid), delete_event(uuid),
@@ -2880,14 +3007,16 @@ grant execute on function
   valid_ornament(text), creation_state(), can_create_event(int, int),
   set_creation_mode(text, text, timestamptz, int, int), join_creation_waitlist(boolean),
   admin_capacity(), capacity_tick(), review_event(uuid),
-  price_settings(), price_quote_raw(int, int), price_quote(int, int, text, uuid),
-  start_order(uuid, int, int, text, text), order_status(text), event_orders(uuid),
+  price_settings(), price_quote_raw(int, int, boolean), price_quote(int, int, text, uuid, boolean, int),
+  shots_cap(), keep_fee(int),
+  start_order(uuid, int, int, text, text, boolean, int), order_status(text), event_orders(uuid),
   admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text), valid_slug(text), slug_available(text, uuid), resolve_slug(text)
 to authenticated;
 
 -- Halaman harga publik bisa dibuka tanpa login
-grant execute on function price_settings(), price_quote_raw(int, int), resolve_slug(text) to anon;
+grant execute on function price_settings(), price_quote_raw(int, int, boolean), shots_cap(), keep_fee(int),
+  resolve_slug(text) to anon;
 
 -- Fungsi untuk Edge Function notify-album: hanya service_role
 do $$ begin

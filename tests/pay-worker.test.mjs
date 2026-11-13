@@ -76,6 +76,15 @@ await worker.fetch(req("/api/pay/checkout", { event_id: "e1" }, { Authorization:
 ok(JSON.stringify(calls.find((c) => c.url.includes("/snap/v1/transactions")).body.enabled_payments) === '["other_qris","gopay"]', "no method uses env list");
 order = { ...order, snap_token: null };
 
+// Unlimited dan masa simpan diteruskan ke start_order; nama item menyebutkannya
+order = { ...order, snap_token: null, pay_method: "qris", unlimited: true, keep_days: 60, keep_fee: 200000 };
+calls = [];
+[s, b] = await call("/api/pay/checkout", { event_id: "e1", method: "qris", unlimited: true, keep_days: 60 }, { Authorization: "Bearer user-jwt" });
+const so3 = calls.find((c) => c.url.endsWith("/rpc/start_order"));
+const sn3 = calls.find((c) => c.url.includes("/snap/v1/transactions"));
+ok(so3.body.p_unlimited === true && so3.body.p_keep_days === 60 && /Unlimited/.test(sn3.body.item_details[0].name) && sn3.body.item_details[0].name.length <= 50 && b.unlimited === true, `unlimited + simpan diteruskan ("${sn3.body.item_details[0].name}")`);
+order = { ...order, snap_token: null, unlimited: false, keep_days: 30, keep_fee: 0, pay_method: null };
+
 // Mode berbeda antara pengaturan dan Worker
 order = { ...order, production: true };
 [s, b] = await call("/api/pay/checkout", { event_id: "e1" }, { Authorization: "Bearer user-jwt" });

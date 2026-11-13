@@ -75,6 +75,14 @@ export async function renderPricing(setView, { loggedIn }) {
           <p>${t("Gratis untuk {g} tamu dengan roll sampai {r}.", { g: cfg.free_guests, r: cfg.free_shots })}</p>
           <p>${t("Pembayaran minimum {m}, dibulatkan ke atas per Rp1.000.", { m: rp(cfg.min) })}</p>
           <p>${t("Semua fitur termasuk di setiap acara.")}</p></div>
+        <div class="card pr-unl"><b>${t("Unlimited tamu & jepretan")}</b>
+          <span class="pr-unl-price">${rp(cfg.price_unlimited)}</span>
+          <p>${t("Tanpa batas tamu dan jepretan, harga tetap tanpa diskon. Album dibuka setelah acara selesai.")}</p></div>
+        <div class="card"><b>${t("Masa simpan foto")}</b>
+          <div class="pr-line"><span>${t("Sampai {d} hari", { d: cfg.keep_free_days })}</span><b>${t("Gratis")}</b></div>
+          <div class="pr-line"><span>${t("{a}–{b} hari", { a: cfg.keep_free_days + 1, b: cfg.keep_flat_days - 1 })}</span><b>${t("{x}/hari", { x: rp(cfg.keep_per_day) })}</b></div>
+          <div class="pr-line"><span>${t("{a}–{b} hari", { a: cfg.keep_flat_days, b: cfg.keep_max_days })}</span><b>${rp(cfg.keep_flat)}</b></div>
+          <p>${t("Setelah masa simpan, foto dihapus otomatis.")}</p></div>
       </div>
     </section>
     <section class="pr-faq">

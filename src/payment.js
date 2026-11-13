@@ -2,7 +2,7 @@
 // pembayaran", "Tambah tamu"). Harga dihitung ulang server (price_quote / start_order);
 // token Snap dibuat Worker (/api/pay/checkout). Server Key tidak pernah sampai ke browser.
 import { supabase, rpc, friendly } from "./supabase.js";
-import { quote, rp } from "./price.js";
+import { quote, rp, keepFee, shotsCap, tiers } from "./price.js";
 import { el, esc, toast, modal, fmtRange, ICON } from "./ui.js";
 
 let cfgCache = null;
@@ -62,6 +62,8 @@ const metaLine = (ev) => [fmtRange(ev.starts_at, ev.ends_at), `${ev.max_shots} j
 // guests/shots kosong = ukuran acara sekarang (bayar draf).
 export function mountPayment(host, ev, opts = {}) {
   const guests = opts.guests ?? ev.max_members, shots = opts.shots ?? ev.max_shots;
+  const unlimited = opts.unlimited ?? Boolean(ev.unlimited);
+  const keepDays = opts.keepDays ?? ev.keep_days ?? 30;
   const upgrade = ev.pay_status !== "draft";
   let promo = "", order = null, timer = 0, poll = 0, stopped = false, method = loadMethod();
   const stop = () => { stopped = true; clearInterval(timer); clearInterval(poll); };
@@ -70,7 +72,7 @@ export function mountPayment(host, ev, opts = {}) {
     stop(); stopped = false;
     host.innerHTML = `<p class="hint">Menghitung harga…</p>`;
     let q;
-    try { q = await rpc("price_quote", { p_guests: guests, p_shots: shots, p_promo: promo || null, p_event: ev.event_id }); }
+    try { q = await rpc("price_quote", { p_guests: guests, p_shots: shots, p_promo: promo || null, p_event: ev.event_id, p_unlimited: unlimited, p_keep_days: keepDays }); }
     catch (e) { host.innerHTML = `<p class="hint">${esc(friendly(e))}</p>`; return; }
     const cfg = await priceSettings();
     host.innerHTML = `
@@ -84,12 +86,15 @@ export function mountPayment(host, ev, opts = {}) {
           <div><b>${esc(ev.name)}</b><small>${esc(metaLine({ ...ev, max_shots: shots }))}</small></div>
         </div>
         <div class="pay-card pay-lines">
-          <div><span>${guests} tamu × ${rp(q.rate)} <small>(${shots} jepretan)</small></span><span>${rp(q.subtotal)}</span></div>
+          ${q.unlimited ? `<div><span>Unlimited tamu & jepretan <small>(tanpa diskon)</small></span><span>${rp(q.subtotal)}</span></div>`
+            : `<div><span>${guests} tamu × ${rp(q.rate)} <small>(${shots} jepretan)</small></span><span>${rp(q.subtotal)}</span></div>`}
           ${q.discount_pct ? `<div class="minus"><span>Diskon jumlah tamu (${q.discount_pct}%)</span><span>−${rp(q.volume_discount)}</span></div>` : ""}
           ${q.free ? `<div class="minus"><span>Gratis (sampai ${cfg.free_guests} tamu × ${cfg.free_shots} jepretan)</span><span>−${rp(q.subtotal)}</span></div>` : ""}
           ${!q.free && q.total > q.subtotal - q.volume_discount ? `<div><span>Pembayaran minimum</span><span>${rp(q.total)}</span></div>` : ""}
           ${q.credit ? `<div class="minus"><span>Sudah dibayar (sebelum promo)</span><span>−${rp(q.credit)}</span></div>` : ""}
           ${q.promo_discount ? `<div class="minus"><span>Kode promo ${esc(promo.toUpperCase())}</span><span>−${rp(q.promo_discount)}</span></div>` : ""}
+          ${q.keep_fee ? `<div><span>Simpan foto ${q.keep_days} hari <small>(${q.keep_days >= cfg.keep_flat_days ? "paket" : `${q.keep_days - cfg.keep_free_days} hari × ${rp(cfg.keep_per_day)}`})</small></span><span>${rp(q.keep_fee)}</span></div>` : `<div><span>Simpan foto ${q.keep_days} hari</span><span>Gratis</span></div>`}
+          ${q.keep_credit ? `<div class="minus"><span>Masa simpan sudah dibayar</span><span>−${rp(Math.min(q.keep_credit, q.keep_fee))}</span></div>` : ""}
           <div class="pay-total"><span>Total</span><b>${rp(q.amount)}</b></div>
           <form class="pay-promo" novalidate>
             <label class="sr-only" for="pay-promo">Kode promo</label>
@@ -143,7 +148,7 @@ export function mountPayment(host, ev, opts = {}) {
   async function pay(btn, cfg, amount) {
     btn.disabled = true; btn.textContent = "Menyiapkan pembayaran…";
     try {
-      order = await payFetch("checkout", { event_id: ev.event_id, guests, shots, promo: promo || null, method: amount ? method : null });
+      order = await payFetch("checkout", { event_id: ev.event_id, guests, shots, promo: promo || null, method: amount ? method : null, unlimited, keep_days: keepDays });
       if (order.status === "paid") return done();
       await openSnap(cfg);
       waiting();
@@ -243,53 +248,77 @@ export function openPayment(ev, opts = {}) {
   obs.observe(document.body, { childList: true });
 }
 
-// "Tambah tamu atau jepretan": pilih ukuran baru, lihat selisih, lalu bayar
+// Upgrade acara aktif: tamu, jepretan per rentang harga (bertahap), Unlimited, perpanjang masa simpan.
+// Semua dibayar sebagai selisih dari yang sudah dibayar.
 export async function openUpgrade(ev, { members = null, onPaid } = {}) {
   const cfg = await priceSettings();
-  const st = { g: ev.max_members, r: ev.max_shots };
+  const cap = shotsCap(cfg);
+  const T = tiers(cfg);
+  const curTier = T.findIndex((t) => ev.max_shots <= t.to);
+  const keepOpts = [...new Set([ev.keep_days, cfg.keep_free_days, Math.min(45, cfg.keep_max_days), cfg.keep_flat_days, cfg.keep_max_days])]
+    .filter((d) => d >= ev.keep_days && d <= cfg.keep_max_days).sort((a, b) => a - b);
+  const st = { g: ev.max_members, r: ev.max_shots, unl: Boolean(ev.unlimited), keep: ev.keep_days || cfg.keep_free_days };
   const { box, close } = modal(`<div class="dialog pay-host"></div>`);
   const host = box.querySelector(".pay-host");
   function render() {
-    const q = quote(cfg, st.g, st.r);
+    const q = quote(cfg, st.g, st.r, st.unl);
     const credit = ev.pay_status === "paid" ? ev.price_basis : 0;
-    const diff = Math.max(0, q.total - credit);
-    const same = st.g === ev.max_members && st.r === ev.max_shots;
+    const keepDue = Math.max(0, keepFee(cfg, st.keep) - (ev.keep_basis || 0));
+    const diff = Math.max(0, q.total - credit) + keepDue;
+    const same = st.unl === Boolean(ev.unlimited) && st.g === ev.max_members && st.r === ev.max_shots && st.keep === ev.keep_days;
+    const tierBtn = (t, i) => {
+      const now = i === curTier, below = i < curTier;
+      const target = Math.max(t.to, ev.max_shots);
+      return `<button type="button" class="up-tier" role="radio" data-tier="${target}" aria-checked="${!st.unl && st.r === target}" ${below || st.unl ? "disabled" : ""}>
+        <b>${t.from}–${t.to} jepretan</b><small>${rp(t.rate)}/tamu${now ? " · sekarang" : ""}</small></button>`;
+    };
     host.innerHTML = `
       <div class="pay upgrade">
-        ${members !== null && members >= ev.max_members ? `<p class="pay-warn" role="status">${ICON.bell}<span><b>Peserta sudah penuh (${members}/${ev.max_members}).</b> Tamu baru tertahan di layar gabung.</span></p>` : ""}
-        <h3>Tambah tamu atau jepretan</h3>
+        ${!ev.unlimited && members !== null && members >= ev.max_members ? `<p class="pay-warn" role="status">${ICON.bell}<span><b>Peserta sudah penuh (${members}/${ev.max_members}).</b> Tamu baru tertahan di layar gabung.</span></p>` : ""}
+        <h3>Upgrade acara</h3>
+        ${ev.unlimited ? `<p class="hint">Acara ini sudah Unlimited tamu & jepretan.</p>` : `
         <div class="pay-card steppers">
           <div class="stepper">
             <span><b>Jumlah tamu</b><small>sekarang ${ev.max_members}</small></span>
-            <div><button type="button" data-step="g" data-by="-10" aria-label="Kurangi tamu" ${st.g <= ev.max_members ? "disabled" : ""}>−</button>
-              <output aria-live="polite">${st.g}</output>
-              <button type="button" data-step="g" data-by="10" aria-label="Tambah tamu" ${st.g >= cfg.max_members_limit ? "disabled" : ""}>+</button></div>
-          </div>
-          <div class="stepper">
-            <span><b>Jepretan per tamu</b><small>sekarang ${ev.max_shots}, berlaku juga untuk tamu lama</small></span>
-            <div><button type="button" data-step="r" data-by="-1" aria-label="Kurangi jepretan" ${st.r <= ev.max_shots ? "disabled" : ""}>−</button>
-              <output aria-live="polite">${st.r}</output>
-              <button type="button" data-step="r" data-by="1" aria-label="Tambah jepretan" ${st.r >= cfg.max_shots_limit ? "disabled" : ""}>+</button></div>
+            <div><button type="button" data-step="g" data-by="-10" aria-label="Kurangi tamu" ${st.unl || st.g <= ev.max_members ? "disabled" : ""}>−</button>
+              <output aria-live="polite">${st.unl ? "∞" : st.g}</output>
+              <button type="button" data-step="g" data-by="10" aria-label="Tambah tamu" ${st.unl || st.g >= cfg.max_members_limit ? "disabled" : ""}>+</button></div>
           </div>
         </div>
+        <div class="up-section">
+          <b id="up-tier-l">Jepretan per tamu</b>
+          <div class="up-tiers" role="radiogroup" aria-labelledby="up-tier-l">${T.map(tierBtn).join("")}</div>
+          <small class="hint">Naik ke rentang berikutnya; berlaku juga untuk tamu lama. Maksimal ${cap} jepretan.</small>
+        </div>
+        <button type="button" class="up-unl" role="switch" data-act="unl" aria-checked="${st.unl}">
+          <span><b>Unlimited tamu & jepretan</b><small>${rp(cfg.price_unlimited)} · tanpa diskon & promo · album dibuka setelah acara selesai</small></span>
+          <span class="switch bare" aria-hidden="true"><span class="knob"></span></span></button>`}
+        ${keepOpts.length > 1 ? `
+        <div class="up-section">
+          <label for="up-keep"><b>Simpan foto</b></label>
+          <select id="up-keep" data-act="keep">${keepOpts.map((d) => `<option value="${d}" ${d === st.keep ? "selected" : ""}>${d} hari${d === ev.keep_days ? " (sekarang)" : ` · ${keepFee(cfg, d) ? rp(keepFee(cfg, d)) : "gratis"}`}</option>`).join("")}</select>
+        </div>` : ""}
         <div class="pay-card pay-lines soft">
-          <div><span>Harga baru (${st.g} × ${st.r})</span><span>${q.total ? rp(q.total) : "Gratis"}</span></div>
+          <div><span>${st.unl ? "Unlimited" : `Paket baru (${st.g} × ${st.r})`}</span><span>${q.total ? rp(q.total) : "Gratis"}</span></div>
           ${credit ? `<div><span>Sudah dibayar (sebelum promo)</span><span>−${rp(credit)}</span></div>` : ""}
+          ${keepDue ? `<div><span>Perpanjang simpan ke ${st.keep} hari</span><span>${rp(keepDue)}</span></div>` : ""}
           <div class="pay-total"><span>Bayar selisih</span><b>${rp(diff)}</b></div>
         </div>
         <div class="pay-actions">
-          <button type="button" class="btn primary" data-act="next" ${same ? "disabled" : ""}>${same ? "Pilih ukuran baru" : diff ? `Lanjut bayar ${rp(diff)}` : "Simpan tanpa biaya"}</button>
+          <button type="button" class="btn primary" data-act="next" ${same ? "disabled" : ""}>${same ? "Pilih upgrade" : diff ? `Lanjut bayar ${rp(diff)}` : "Simpan tanpa biaya"}</button>
           <button type="button" class="btn ghost" data-act="close">Nanti saja</button>
         </div>
       </div>`;
     host.querySelectorAll("[data-step]").forEach((b) => (b.onclick = () => {
-      const k = b.dataset.step, min = k === "g" ? ev.max_members : ev.max_shots, max = k === "g" ? cfg.max_members_limit : cfg.max_shots_limit;
-      st[k] = Math.min(max, Math.max(min, st[k] + Number(b.dataset.by)));
+      st.g = Math.min(cfg.max_members_limit, Math.max(ev.max_members, st.g + Number(b.dataset.by)));
       render();
     }));
+    host.querySelectorAll("[data-tier]").forEach((b) => (b.onclick = () => { st.r = Number(b.dataset.tier); render(); }));
+    host.querySelector('[data-act="unl"]')?.addEventListener("click", () => { st.unl = !st.unl; render(); });
+    host.querySelector('[data-act="keep"]')?.addEventListener("change", (e) => { st.keep = Number(e.target.value); render(); });
     host.querySelector('[data-act="close"]').onclick = close;
     host.querySelector('[data-act="next"]').onclick = () => {
-      mountPayment(host, ev, { guests: st.g, shots: st.r, onBack: render, onPaid: (o) => { close(); onPaid?.(o); } });
+      mountPayment(host, ev, { guests: st.g, shots: st.r, unlimited: st.unl, keepDays: st.keep, onBack: render, onPaid: (o) => { close(); onPaid?.(o); } });
     };
   }
   render();

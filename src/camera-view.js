@@ -211,6 +211,7 @@ export async function renderCamera(root, status, go) {
   }
 
   async function remaining() {
+    if (status.unlimited) return Infinity;   // paket Unlimited: jepretan tanpa batas
     const local = (await queue.forEvent(status.event_id)).filter((j) => !j.reserved).length;
     return Math.max(0, status.max_shots - status.shots_used - local);
   }
@@ -224,7 +225,7 @@ export async function renderCamera(root, status, go) {
       counter.classList.add("tick");
     }
     shown = n;
-    counter.textContent = n;
+    counter.textContent = n === Infinity ? "∞" : n;
   }
 
   async function refresh() {
@@ -233,6 +234,7 @@ export async function renderCamera(root, status, go) {
     setCounter(left);
     hint.textContent = revealLater()
       ? t("Semua foto terbuka dalam {x}.", { x: fmtCountdown(new Date(status.reveal_at) - Date.now()) })
+      : status.unlimited ? t("Jepretan tanpa batas. Foto terbuka di album setelah acara selesai.")
       : left > 0 ? t("Foto Anda terbuka di album setelah {n} jepretan lagi.", { n: left }) : "";
     showWait();
     note.hidden = waiting === 0;

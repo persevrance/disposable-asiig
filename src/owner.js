@@ -64,6 +64,9 @@ export async function duplicateEvent(ev) {
 }
 
 export async function renderPanel(root, status, { reload, home }) {
+  // Batas tanggal hapus = (selesai / mulai / dibuat) + masa simpan yang dibayar (server ikut membatasi)
+  const keepBase = new Date(status.ends_at || status.starts_at || Date.now());
+  const keepLimit = toLocalInput(new Date(keepBase.getTime() + (status.keep_days || 30) * 86400e3).toISOString()).slice(0, 10);
   const theme = status.collage_theme || {};
   const link = inviteLink(status);
   const tabKey = `panelTab:${status.event_id}`;
@@ -96,7 +99,7 @@ export async function renderPanel(root, status, { reload, home }) {
         </div>
         <h2 class="status-name">${esc(status.name)}</h2>
         <div class="status-stats">
-          <div class="sstat"><b><span data-s="members">–</span><small>/${status.max_members}</small></b><span>peserta</span></div>
+          <div class="sstat"><b><span data-s="members">–</span><small>/${status.unlimited ? "∞" : status.max_members}</small></b><span>peserta</span></div>
           <div class="sstat"><b data-s="photos">–</b><span>foto</span></div>
           <div class="sstat"><b data-s="rolls">–</b><span>film habis</span></div>
           <div class="sstat pending-stat" hidden><b data-s="pending">–</b><span>belum terunggah</span></div>
@@ -106,7 +109,7 @@ export async function renderPanel(root, status, { reload, home }) {
           <button class="btn sc-outline" data-act="toggle-open">${status.is_open ? "Tutup acara" : "Buka acara"}</button>
         </div>
         <div class="status-more">
-          <button class="linklike" data-act="upgrade" hidden>${ICON.people} Tambah tamu atau jepretan</button>
+          <button class="linklike" data-act="upgrade" hidden>${ICON.people} Upgrade: tamu, jepretan, masa simpan</button>
           <button class="linklike" data-act="share">${ICON.link} Salin link undangan</button>
           <a class="linklike" href="#/e/${status.event_id}/layar">${ICON.play} Mode layar</a>
         </div>
@@ -213,7 +216,8 @@ export async function renderPanel(root, status, { reload, home }) {
             <summary>Pengaturan lanjutan</summary>
             <label class="check"><input type="checkbox" name="reveal" ${status.reveal_at ? "checked" : ""}/> Mode cuci film: semua foto tampil bersamaan pada</label>
             <input type="datetime-local" name="reveal_at" aria-label="Waktu cuci film" value="${toLocalInput(status.reveal_at)}" />
-            <label style="margin-top:.75rem">Rencana hapus foto <input type="date" name="purge_at" value="${status.purge_at ? toLocalInput(status.purge_at).slice(0, 10) : ""}" /></label>
+            <label style="margin-top:.75rem">Rencana hapus foto <input type="date" name="purge_at" value="${status.purge_at ? toLocalInput(status.purge_at).slice(0, 10) : ""}" ${status.is_admin ? "" : `max="${keepLimit}"`} /></label>
+            <p class="hint">${status.is_admin ? "Superadmin bebas mengatur tanggal hapus." : `Masa simpan ${status.keep_days || 30} hari: paling lambat ${keepLimit}. Lebih lama dari itu lewat Upgrade.`}</p>
             <label class="check"><input type="checkbox" name="invite_only" ${status.invite_only ? "checked" : ""}/> Hanya email di daftar undangan</label>
             <textarea name="invites" rows="4" placeholder="Satu email per baris" aria-label="Daftar email undangan" ${status.invite_only ? "" : "hidden"}></textarea>
             ${status.is_admin ? `

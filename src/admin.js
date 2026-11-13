@@ -854,6 +854,25 @@ async function keuangan(body) {
             </div>
             <label>Batas waktu bayar (menit)<input type="number" name="payment_window_min" min="5" max="1440" value="${cfg.payment_window_min}" /></label>
           </fieldset>
+          <fieldset><legend>Paket Unlimited tamu & jepretan</legend>
+            <div class="date-row">
+              <label>Harga Unlimited (Rp)<input type="number" name="price_unlimited" min="0" step="1000" value="${cfg.price_unlimited}" /></label>
+              <label>Perkiraan foto per acara (kapasitas)<input type="number" name="unlimited_est_photos" min="1" value="${cfg.unlimited_est_photos}" /></label>
+            </div>
+            <p class="hint">Harga tetap, tanpa diskon jumlah tamu dan kode promo. Perkiraan foto dipakai meter kapasitas dan tinjauan acara besar.</p>
+          </fieldset>
+          <fieldset><legend>Masa simpan foto</legend>
+            <div class="date-row">
+              <label>Gratis sampai (hari)<input type="number" name="keep_free_days" min="1" max="3650" value="${cfg.keep_free_days}" /></label>
+              <label>Biaya per hari di atasnya (Rp)<input type="number" name="keep_per_day" min="0" step="500" value="${cfg.keep_per_day}" /></label>
+            </div>
+            <div class="date-row">
+              <label>Paket mulai (hari)<input type="number" name="keep_flat_days" min="1" max="3650" value="${cfg.keep_flat_days}" /></label>
+              <label>Harga paket (Rp)<input type="number" name="keep_flat" min="0" step="1000" value="${cfg.keep_flat}" /></label>
+            </div>
+            <label>Masa simpan maksimal (hari)<input type="number" name="keep_max_days" min="1" max="3650" value="${cfg.keep_max_days}" /></label>
+            <p class="hint">Foto dihapus otomatis setelah masa simpan. Di antara hari gratis dan hari paket dihitung per hari; mulai hari paket memakai harga paket.</p>
+          </fieldset>
           <button type="button" class="btn primary" data-act="save-price">Simpan harga</button>
         </section>
         <aside class="card sim-card" aria-labelledby="h-sim">
@@ -979,7 +998,9 @@ async function keuangan(body) {
     st.tiers.sort((a, b) => a[0] - b[0]); st.disc.sort((a, b) => a[0] - b[0]);
     renderPriceRows();
     const patch = { price_roll_tiers: st.tiers, price_discounts: st.disc };
-    for (const k of ["price_free_guests", "price_free_shots", "price_min", "free_events_per_user", "payment_window_min"]) patch[k] = Number(fv(k).value);
+    for (const k of ["price_free_guests", "price_free_shots", "price_min", "free_events_per_user", "payment_window_min",
+      "price_unlimited", "unlimited_est_photos", "keep_free_days", "keep_per_day", "keep_flat_days", "keep_flat", "keep_max_days"]) patch[k] = Number(fv(k).value);
+    if (patch.keep_flat_days <= patch.keep_free_days || patch.keep_max_days < patch.keep_free_days) return toast("Atur masa simpan: hari paket harus lebih dari hari gratis, dan maksimal tidak kurang dari hari gratis.", 6000);
     btn.disabled = true;
     try { await rpc("admin_set_settings", { p_patch: patch }); toast("Harga disimpan."); }
     catch (err) { toast(friendly(err), 6000); }
@@ -1054,7 +1075,7 @@ async function keuangan(body) {
       return `<tr>
         <td><code>${esc(o.id)}</code><br><small class="hint">${esc(fmtDate(o.paid_at || o.created_at))}</small></td>
         <td>${o.event_id ? `<a href="#/e/${o.event_id}/panel">${esc(o.event_name)}</a>` : esc(o.event_name)}<br><small class="hint">${esc(o.user_name || "")} ${esc(o.user_email || "")}</small></td>
-        <td class="num">${o.kind === "upgrade" ? "+ " : ""}${o.guests} × ${o.shots}</td>
+        <td class="num">${o.kind === "upgrade" ? "+ " : ""}${o.unlimited ? "Unlimited" : `${o.guests} × ${o.shots}`}${o.keep_fee ? `<br><small class="hint">simpan ${o.keep_days} hari +${rp(o.keep_fee)}</small>` : ""}</td>
         <td class="num"><b>${rp(o.amount)}</b>${o.promo_code ? `<br><small class="hint">${esc(o.promo_code)} −${rp(o.promo_discount)}</small>` : ""}${o.credit ? `<br><small class="hint">selisih dari ${rp(o.list_price)}</small>` : ""}</td>
         <td>${esc(o.payment_type || "–")}</td>
         <td><span class="tag ${tone}">${label}</span></td>
@@ -1850,7 +1871,7 @@ function describe(r) {
       return `${d.auto ? "pengaman otomatis " : ""}mengubah status pembuatan acara menjadi ${m}${d.auto === "jadwal" ? " (jadwal buka lagi)" : d.peak ? ` (perkiraan ${Math.round(d.peak)}%)` : ""}`;
     }
     case "tinjau_acara": return `menandai acara “${t}” sudah ditinjau`;
-    case "bayar_acara": return `membayar ${rp(d.amount)} untuk acara “${d.name || t}” (${d.kind === "upgrade" ? "tambah" : "baru"} ${d.guests} tamu × ${d.shots}, ${d.order})`;
+    case "bayar_acara": return `membayar ${rp(d.amount)} untuk acara “${d.name || t}” (${d.kind === "upgrade" ? "upgrade" : "baru"} ${d.unlimited ? "Unlimited" : `${d.guests} tamu × ${d.shots}`}${d.keep_days ? `, simpan ${d.keep_days} hari` : ""}, ${d.order})`;
     case "refund_acara": return `pengembalian dana ${rp(d.amount)} untuk acara “${d.name || t}” (${d.order})`;
     case "kode_promo": return `menyimpan kode promo ${r.target}`;
     case "ubah_status_bayar": return `mengubah status bayar acara “${t}” menjadi ${({ free: "gratis", draft: "draf", paid: "lunas" })[d.status] || d.status}`;

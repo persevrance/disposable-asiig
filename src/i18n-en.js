@@ -517,6 +517,18 @@ export default {
   "Album sudah terbuka.": "The album is open.",
   "{d} hari {h} jam": "{d} d {h} h",
 
+  // Harga v3: Unlimited dan masa simpan
+  "Jepretan tanpa batas": "Unlimited shots",
+  "Jepretan tanpa batas. Foto terbuka di album setelah acara selesai.": "Unlimited shots. Photos appear in the album after the event ends.",
+  "Semua foto tampil setelah acara selesai.": "All photos appear after the event ends.",
+  "Unlimited tamu & jepretan": "Unlimited guests & shots",
+  "Tanpa batas tamu dan jepretan, harga tetap tanpa diskon. Album dibuka setelah acara selesai.": "No limit on guests or shots, one fixed price with no discounts. The album opens after the event ends.",
+  "Masa simpan foto": "Photo storage",
+  "Sampai {d} hari": "Up to {d} days",
+  "{a}–{b} hari": "{a}–{b} days",
+  "{x}/hari": "{x}/day",
+  "Setelah masa simpan, foto dihapus otomatis.": "Photos are deleted automatically when storage ends.",
+
   // Pengajuan pembuat acara
   "Pengajuan pembuat acara sedang ditinjau": "Your host request is under review",
   "Pengajuan pembuat acara ditolak": "Your host request was declined",

@@ -167,7 +167,7 @@ async function renderJoin(code) {
         ${ev?.is_open && ev.lock_until_start && ev.starts_at && new Date(ev.starts_at) > new Date()
           ? `<p class="join-wait">${ICON.clock}<span>${t("Kamera aktif dalam")} <b></b></span></p>` : ""}
         <ul class="join-rules">
-          <li><span class="jr-ic coral jr-num">${ev ? ev.max_shots : ICON.film}</span><div><b>${ev ? t("{n} jepretan untukmu", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Nggak bisa dihapus, nggak bisa diulang.")}</span></div></li>
+          <li><span class="jr-ic coral jr-num">${ev?.unlimited ? "∞" : ev ? ev.max_shots : ICON.film}</span><div><b>${ev?.unlimited ? t("Jepretan tanpa batas") : ev ? t("{n} jepretan untukmu", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Nggak bisa dihapus, nggak bisa diulang.")}</span></div></li>
           <li><span class="jr-ic sun">${ICON.clock}</span><div><b>${t("Hasil terlihat setelah film habis")}</b><span>${t("Seperti kamera film, fotonya dicuci dulu.")}</span></div></li>
           ${ev?.album_private
             ? `<li><span class="jr-ic mint">${ICON.lock}</span><div><b>${t("Album khusus penyelenggara")}</b><span>${t("Kamu melihat fotomu sendiri; semua foto dikumpulkan untuk penyelenggara.")}</span></div></li>`

@@ -112,6 +112,9 @@ Jalankan ulang `supabase/v2.sql`; untuk R2 dan notifikasi ikuti README bagian 1c
 - [x] Timer jepret 3/10 detik di kamera (sebelah tukar kamera), bisa dibatalkan, jatah baru terpakai saat foto diambil
 - [x] Kunci kamera sampai acara mulai (opsional, `events.lock_until_start`, dijaga di `reserve_shot`): hitung mundur di layar gabung dan kamera
 - [x] Hitung mundur sampai album terbuka (mode cuci film) di album, kamera, dan layar "Film habis"
+- [x] Masa simpan foto berbayar (`events.keep_days`, `keep_fee()`): sampai 30 hari gratis, 31–59 hari Rp3.000/hari, 60–90 hari Rp200.000; hapus otomatis wajib (rencana hapus dibatasi masa simpan); perpanjang lewat Upgrade (bayar selisih)
+- [x] Batas jepretan per tamu mengikuti rentang harga tertinggi (`shots_cap()`); Upgrade bertahap per rentang di Panel
+- [x] Paket Unlimited tamu & jepretan Rp999.000 tanpa diskon/promo (`events.unlimited`); album dibuka setelah acara selesai
 - [x] Realtime hanya untuk acara sampai 300 tamu; di atasnya album memakai polling 30–60 detik dengan jeda acak
 - [x] Foto di Cloudflare R2 lewat Worker situs (`worker/index.js`); hak akses tetap dari fungsi database; foto lama dipindah otomatis saat dibaca atau sekaligus dari Pengaturan (`r2_objects`, `stored_objects`)
 - [x] Album realtime: broadcast Supabase per acara, polling jadi cadangan 60 detik

@@ -1060,3 +1060,30 @@ html.dark .tile img { background: #251a2c; }
 .reveal-card span { font-size: .85rem; font-weight: 700; }
 .reveal-card b { font-family: "Fredoka", system-ui, sans-serif; font-size: 1.6rem; font-weight: 600; line-height: 1.1; color: var(--text); font-variant-numeric: tabular-nums; }
 .reveal-card small { font-size: .78rem; }
+
+/* ===================== Harga v3: Unlimited, masa simpan, upgrade bertahap ===================== */
+.cr-unl, .up-unl { font: inherit; color: var(--text); text-align: left; display: flex; align-items: center; gap: .75rem; width: 100%; padding: .8rem .9rem; border-radius: 16px; cursor: pointer; background: var(--card); border: 1.5px solid var(--line); }
+.cr-unl[aria-checked="true"], .up-unl[aria-checked="true"] { background: var(--primary-soft); border: 2px solid var(--primary); }
+.cr-unl > span:first-child, .up-unl > span:first-child { display: grid; gap: 2px; flex: 1; }
+.cr-unl small, .up-unl small { font-size: .78rem; color: var(--muted); }
+.cr-unl .switch.bare, .up-unl .switch.bare { pointer-events: none; }
+.cr-unl[aria-checked="true"] .knob, .up-unl[aria-checked="true"] .knob { background: #11735b; }
+.cr-unl[aria-checked="true"] .knob::after, .up-unl[aria-checked="true"] .knob::after { transform: translateX(18px); }
+.cr-unl-on { background: var(--mint-soft); border-color: transparent; color: var(--mint-text); }
+.cr-keep .cr-radio em { font-style: normal; font-size: .78rem; font-weight: 800; color: var(--primary-text); margin-left: .25rem; }
+.cr-keep-custom { display: grid; gap: .35rem; font-weight: 800; font-size: .9rem; padding: .25rem .25rem 0; }
+.cr-keep-custom input { max-width: 9rem; }
+.cr-radio:disabled { opacity: .5; cursor: not-allowed; }
+.cr-sum-total { border-top: 1.5px dashed var(--line); padding-top: .4rem; margin-top: .15rem; align-items: baseline; }
+.cr-sum-total b { font-family: "Fredoka", system-ui, sans-serif; font-size: 1.25rem; font-weight: 600; }
+.up-section { display: grid; gap: .45rem; }
+.up-section select { width: 100%; }
+.up-tiers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.up-tier { font: inherit; color: var(--text); text-align: left; display: grid; gap: 2px; padding: .6rem .7rem; min-height: 52px; border-radius: 14px; cursor: pointer; background: var(--card); border: 1.5px solid var(--line); }
+.up-tier b { font-size: .88rem; }
+.up-tier small { font-size: .74rem; color: var(--muted); }
+.up-tier[aria-checked="true"] { background: var(--primary-soft); border: 2px solid var(--primary); }
+.up-tier:disabled { opacity: .45; cursor: not-allowed; }
+.pr-unl { background: #2d1b33; color: #f6eaf0; border-color: #2d1b33; }
+.pr-unl p { color: #d9c9dd !important; }
+.pr-unl-price { font-family: "Fredoka", system-ui, sans-serif; font-size: 1.8rem; font-weight: 600; }

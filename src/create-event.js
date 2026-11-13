@@ -11,7 +11,7 @@ import { duplicateEvent, cardData, inviteLink } from "./owner.js";
 import { downloadQrCard } from "./qrcard.js";
 import { creationClosedDialog } from "./admin.js";
 import { priceSettings, mountPayment } from "./payment.js";
-import { quote, rp } from "./price.js";
+import { quote, rp, keepFee, shotsCap } from "./price.js";
 import { el, esc, toast, fmtBytes, confirmDialog, actionSheet, copyText, ICON, fromLocalInput, fmtRange } from "./ui.js";
 
 const DRAFT = "createDraft";
@@ -29,7 +29,6 @@ const OPEN_MODES = [
   { id: "delay", name: "Cuci film dulu", desc: (d) => `Terbuka ${d.delayH} jam setelah acara selesai` },
   { id: "time", name: "Waktu tertentu", desc: () => "Pilih tanggal dan jam sendiri" },
 ];
-const KEEP = [[30, "30 hari"], [90, "90 hari"], [0, "Tidak dihapus otomatis"]];
 const G_PRESETS = [5, 25, 50, 100, 200, 300];
 const R_PRESETS = [[12, "12"], [24, "24"], [27, "27 · klasik"], [36, "36"], [50, "50"]];
 
@@ -61,9 +60,15 @@ export async function renderCreate(setView, { me } = {}) {
     return;
   }
   const small = Boolean(gate && !gate.bypass && gate.mode === "limited");
-  const maxShots = small ? Math.min(settings.max_shots_limit, gate.max_shots) : settings.max_shots_limit;
-  const maxGuests = small ? Math.min(settings.max_members_limit, gate.max_guests) : settings.max_members_limit;
   const paid = Boolean(price?.payments_enabled && !gate?.bypass);
+  // Batas jepretan mengikuti rentang harga tertinggi saat pembayaran aktif
+  const capShots = paid ? shotsCap(price) : settings.max_shots_limit;
+  const maxShots = small ? Math.min(capShots, gate.max_shots) : capShots;
+  const maxGuests = small ? Math.min(settings.max_members_limit, gate.max_guests) : settings.max_members_limit;
+  // Masa simpan foto: gratis sampai keep_free_days, lalu per hari / paket (keepFee); maks. keep_max_days
+  const pc = Object.assign({ keep_free_days: 30, keep_per_day: 3000, keep_flat_days: 60, keep_flat: 200000, keep_max_days: 90, price_unlimited: 999000 }, price || {});
+  const feeOf = (d) => (paid ? keepFee(pc, d) : 0);
+  const canUnlimited = paid && !small;
   const defFilm = FILMS[settings.default_film] ? settings.default_film : "asli";
 
   // Isian: dari sesi sebelumnya, atau ukuran yang dipilih di halaman harga
@@ -74,10 +79,17 @@ export async function renderCreate(setView, { me } = {}) {
   const meta = me?.user_metadata || {};
   const D = Object.assign({
     step: 1, type: "", name: "", host: meta.full_name || meta.name || "", starts: "", ends: "",
-    lockStart: false, open: "roll", delayH: 2, openAt: "", keepDays: 30, film: defFilm, shots: Math.min(24, maxShots),
+    lockStart: false, open: "roll", delayH: 2, openAt: "", keepDays: pc.keep_free_days, keepMode: "free", unlimited: false, film: defFilm, shots: Math.min(24, maxShots),
     creatorEmail: me?.email || "", dateStamp: true, gallery: false, front: true, filmChoice: true, inviteOnly: false, guests: Math.min(50, maxGuests),
     albumPrivate: false, showNames: true, welcome: "", slug: "", slugTouched: false,
   }, saved || {}, preset ? { guests: Math.min(preset.guests, maxGuests), shots: Math.min(preset.shots, maxShots) } : {});
+  // Isian lama (sebelum masa simpan berbayar): sesuaikan ke pilihan yang ada
+  if (!saved?.keepMode || D.keepDays < 1 || D.keepDays > pc.keep_max_days) {
+    D.keepDays = D.keepDays > 0 ? Math.min(D.keepDays, pc.keep_max_days) : pc.keep_free_days;
+    if (D.keepDays <= pc.keep_free_days) D.keepDays = pc.keep_free_days;
+    D.keepMode = D.keepDays === pc.keep_free_days ? "free" : D.keepDays === pc.keep_flat_days ? "flat" : D.keepDays === pc.keep_max_days ? "max" : "custom";
+  }
+  if (!canUnlimited) D.unlimited = false;
   let coverFile = null, coverUrl = "", slugState = { ok: true }, slugTimer = 0;
   const save = () => { try { sessionStorage.setItem(DRAFT, JSON.stringify(D)); } catch { /* abaikan */ } };
   const touched = () => Boolean(D.name || D.welcome || D.starts);
@@ -164,9 +176,17 @@ export async function renderCreate(setView, { me } = {}) {
     return null;
   }
   function purgeIso() {
-    if (!D.keepDays) return null;
+    if (!D.keepDays) D.keepDays = pc.keep_free_days;
     const base = fromLocalInput(D.ends) || fromLocalInput(D.starts) || new Date().toISOString();
     return new Date(new Date(base).getTime() + D.keepDays * 86400e3).toISOString();
+  }
+  // Pilihan masa simpan: gratis, paket flat, maksimal, dan custom (per hari)
+  function keepChoices() {
+    const c = [{ id: "free", days: pc.keep_free_days, label: `${pc.keep_free_days} hari`, fee: 0, desc: `Gratis, lalu dihapus otomatis` }];
+    if (pc.keep_flat_days <= pc.keep_max_days) c.push({ id: "flat", days: pc.keep_flat_days, label: `${pc.keep_flat_days} hari`, fee: feeOf(pc.keep_flat_days), desc: "Paket masa simpan panjang" });
+    if (pc.keep_max_days > pc.keep_flat_days) c.push({ id: "max", days: pc.keep_max_days, label: `${pc.keep_max_days} hari`, fee: feeOf(pc.keep_max_days), desc: "Masa simpan terpanjang" });
+    c.push({ id: "custom", days: null, label: "Custom", fee: D.keepMode === "custom" ? feeOf(D.keepDays) : 0, desc: `${pc.keep_free_days + 1}–${pc.keep_max_days} hari, ${rp(pc.keep_per_day)} per hari di atas ${pc.keep_free_days} hari` });
+    return c;
   }
   function step2() {
     const rev = revealIso(), purge = purgeIso();
@@ -179,7 +199,7 @@ export async function renderCreate(setView, { me } = {}) {
       <div class="cr-toggles">${sw("lockStart", "Kamera aktif saat acara dimulai", D.starts ? `Sebelum ${hhmm(fromLocalInput(D.starts))}, tamu yang sudah bergabung melihat hitung mundur` : "Butuh waktu mulai. Sebelum itu tamu melihat hitung mundur")}</div>
       <fieldset class="cr-radios"><legend>Kapan album dibuka?</legend>
         ${OPEN_MODES.map((m) => `
-          <button type="button" class="cr-radio" role="radio" aria-checked="${D.open === m.id}" data-set="open" data-v="${m.id}">
+          <button type="button" class="cr-radio" role="radio" aria-checked="${D.open === m.id}" data-set="open" data-v="${m.id}" ${D.unlimited && m.id === "roll" ? 'disabled title="Tidak tersedia untuk Unlimited"' : ""}>
             <i aria-hidden="true"></i><span><b>${m.name}${m.tag ? ` <em>${m.tag}</em>` : ""}</b><small>${esc(m.desc(D))}</small></span></button>`).join("")}
       </fieldset>
       ${D.open === "delay" ? `<label>Durasi cuci film<select name="delayH">${[1, 2, 3, 6, 12, 24].map((h) => `<option value="${h}" ${D.delayH === h ? "selected" : ""}>${h} jam setelah selesai</option>`).join("")}</select></label>` : ""}
@@ -190,8 +210,23 @@ export async function renderCreate(setView, { me } = {}) {
         <span role="listitem" class="hot"><b>${D.open === "roll" ? "per tamu" : rev ? hhmm(rev) : "–"}</b>${D.open === "roll" ? "film habis = terbuka" : `album dibuka${rev && D.ends && dayMon(rev) !== dayMon(fromLocalInput(D.ends)) ? ` ${dayMon(rev)}` : ""}`}</span>
         <span role="listitem"><b>${purge ? dayMon(purge) : "–"}</b>hapus otomatis</span>
       </div>
-      <label>Simpan foto selama<select name="keepDays">${KEEP.map(([v, l]) => `<option value="${v}" ${D.keepDays === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>`);
+      <fieldset class="cr-radios cr-keep"><legend>Simpan foto selama</legend>
+        ${keepChoices().map((k) => `
+          <button type="button" class="cr-radio" role="radio" aria-checked="${D.keepMode === k.id}" data-keep="${k.id}">
+            <i aria-hidden="true"></i><span><b>${k.label} <em>${k.fee ? `+${rp(k.fee)}` : "Gratis"}</em></b><small>${k.desc}</small></span></button>`).join("")}
+        ${D.keepMode === "custom" ? `<label class="cr-keep-custom">Jumlah hari (${pc.keep_free_days + 1}–${pc.keep_max_days})
+          <input type="number" name="keepCustom" inputmode="numeric" min="${pc.keep_free_days + 1}" max="${pc.keep_max_days}" value="${D.keepDays}" />
+          <small class="hint">${feeOf(D.keepDays) ? `+${rp(feeOf(D.keepDays))}` : "Gratis"} · ${D.keepDays >= pc.keep_flat_days ? `${pc.keep_flat_days} hari ke atas memakai paket ${rp(pc.keep_flat)}` : `${rp(pc.keep_per_day)} per hari di atas ${pc.keep_free_days} hari`}</small></label>` : ""}
+      </fieldset>
+      <p class="hint cr-tight">Foto dihapus otomatis setelah masa simpan berakhir. Unduh album sebelum itu.</p>`);
     bindPicks((k) => { readStep(); render(); });
+    view.querySelectorAll("[data-keep]").forEach((b) => (b.onclick = () => {
+      readStep();
+      const k = keepChoices().find((x) => x.id === b.dataset.keep);
+      D.keepMode = k.id;
+      D.keepDays = k.days ?? Math.max(pc.keep_free_days + 1, Math.min(pc.keep_max_days, D.keepDays > pc.keep_free_days ? D.keepDays : pc.keep_free_days + 15));
+      save(); render();
+    }));
     view.querySelector(".cr-body").addEventListener("change", () => { readStep(); save(); render(); });
   }
 
@@ -233,12 +268,17 @@ export async function renderCreate(setView, { me } = {}) {
 
   // ---------- 4. Tamu dan privasi ----------
   function step4() {
-    const q = paid ? quote(price, D.guests, D.shots) : null;
+    const q = paid ? quote(price, D.guests, D.shots, D.unlimited) : null;
     frame("Siapa yang ikut?", `
       <div class="cr-seg" role="radiogroup" aria-label="Cara bergabung">
         <button type="button" role="radio" aria-checked="${!D.inviteOnly}" data-set="inviteOnly" data-v="false"><b>Siapa pun dengan link</b><small>Scan QR atau kode</small></button>
         <button type="button" role="radio" aria-checked="${D.inviteOnly}" data-set="inviteOnly" data-v="true"><b>Hanya yang diundang</b><small>Daftar email, diisi di Panel</small></button>
       </div>
+      ${canUnlimited ? `
+      <button type="button" class="cr-unl" role="switch" data-flip="unlimited" aria-checked="${D.unlimited}">
+        <span><b>Unlimited tamu & jepretan</b><small>${rp(pc.price_unlimited)} · tanpa diskon dan kode promo. Album dibuka setelah acara selesai.</small></span>
+        <span class="switch bare" aria-hidden="true"><span class="knob"></span></span></button>` : ""}
+      ${D.unlimited ? `<div class="cr-card cr-unl-on"><b>Tamu dan jepretan tanpa batas</b><small class="hint">Bagikan QR ke siapa pun; tidak ada batas jumlah tamu maupun jepretan per tamu.</small></div>` : `
       <div class="cr-card">
         <div class="cr-row"><label for="cr-g" class="cr-label">Jumlah tamu</label>
           <div class="cr-stepper small">
@@ -250,7 +290,7 @@ export async function renderCreate(setView, { me } = {}) {
         ${q ? `<div class="cr-price"><span>${D.guests} tamu × ${D.shots} jepretan${q.discount_pct ? ` · diskon ${q.discount_pct}%` : ""}</span><b>${q.total ? rp(q.total) : "Gratis"}</b></div>
         <small class="hint">Bisa tambah tamu atau jepretan kapan saja, cukup bayar selisihnya. <a href="#/harga" target="_blank" rel="noopener">Cara hitung</a></small>`
           : `<small class="hint">Maksimal ${maxGuests} tamu${small ? " (sedang dibatasi)" : ""}.</small>`}
-      </div>
+      </div>`}
       <div class="cr-field">
         <span class="cr-label">Siapa yang bisa melihat album?</span>
         <div class="cr-seg two" role="radiogroup" aria-label="Akses album">
@@ -261,13 +301,17 @@ export async function renderCreate(setView, { me } = {}) {
         <div class="cr-toggles">${sw("showNames", "Tampilkan nama pemotret", "Nama muncul di bawah foto")}</div>
       </div>`);
     bindPicks();
-    bindSteppers("guests", 1, maxGuests);
+    // Unlimited: mode album "per gulungan" tidak berlaku (gulungan tidak pernah habis)
+    if (D.unlimited && D.open === "roll") { D.open = "after"; save(); }
+    if (!D.unlimited) bindSteppers("guests", 1, maxGuests);
   }
 
   // ---------- 5. Sampul dan tautan ----------
   function step5() {
     if (!D.slugTouched && !D.slug && D.name) D.slug = slugify(D.name);
-    const q = paid ? quote(price, D.guests, D.shots) : null;
+    const q = paid ? quote(price, D.guests, D.shots, D.unlimited) : null;
+    const kFee = feeOf(D.keepDays);
+    const total = (q?.total || 0) + kFee;
     const rev = revealIso();
     const openText = D.open === "roll" ? "Per gulungan" : D.open === "delay" ? `Cuci film ${D.delayH} jam` : rev ? `${dayMon(rev)}, ${hhmm(rev)}` : "Setelah acara";
     frame("Sampul dan tautan", `
@@ -291,10 +335,12 @@ export async function renderCreate(setView, { me } = {}) {
         <b>Ringkasan</b>
         <div><span>Waktu</span><span>${esc(fmtRange(fromLocalInput(D.starts), fromLocalInput(D.ends)) || "Belum diatur")}${D.lockStart ? " · kamera aktif saat mulai" : ""}</span></div>
         <div><span>Album dibuka</span><span>${esc(openText)}${D.albumPrivate ? " · hanya penyelenggara" : ""}</span></div>
-        <div><span>Kamera</span><span>${D.shots} jepretan · ${esc(FILMS[D.film]?.name || "")}</span></div>
-        <div><span>Tamu</span><span>${D.guests} tamu${q ? ` · ${q.total ? rp(q.total) : "Gratis"}` : ""}</span></div>
+        <div><span>Kamera</span><span>${D.unlimited ? "Jepretan tanpa batas" : `${D.shots} jepretan`} · ${esc(FILMS[D.film]?.name || "")}</span></div>
+        <div><span>Tamu</span><span>${D.unlimited ? "Unlimited tamu & jepretan" : `${D.guests} tamu`}${q ? ` · ${q.total ? rp(q.total) : "Gratis"}` : ""}</span></div>
+        <div><span>Simpan foto</span><span>${D.keepDays} hari · ${kFee ? rp(kFee) : "Gratis"}</span></div>
+        ${paid ? `<div class="cr-sum-total"><span>Total</span><b>${total ? rp(total) : "Gratis"}</b></div>` : ""}
       </div>`,
-    { nextLabel: q?.total ? "Lanjut bayar" : "Buat acara" });
+    { nextLabel: total ? `Lanjut bayar ${rp(total)}` : "Buat acara" });
     const fe = f();
     fe.cover.onchange = async () => {
       const file = fe.cover.files[0];
@@ -341,7 +387,7 @@ export async function renderCreate(setView, { me } = {}) {
     if (fe.ends) D.ends = fe.ends.value;
     if (fe.delayH) D.delayH = Number(fe.delayH.value);
     if (fe.openAt) D.openAt = fe.openAt.value;
-    if (fe.keepDays) D.keepDays = Number(fe.keepDays.value);
+    if (fe.keepCustom) D.keepDays = Math.min(pc.keep_max_days, Math.max(pc.keep_free_days + 1, Math.round(Number(fe.keepCustom.value) || pc.keep_free_days + 1)));
     if (fe.shots) D.shots = Math.min(maxShots, Math.max(1, Math.round(Number(fe.shots.value) || 1)));
     if (fe.guests) D.guests = Math.min(maxGuests, Math.max(1, Math.round(Number(fe.guests.value) || 1)));
     if (fe.welcome) D.welcome = fe.welcome.value;
@@ -376,6 +422,7 @@ export async function renderCreate(setView, { me } = {}) {
       id = await rpc("create_event", {
         p_name: D.name.trim(), p_max_shots: D.shots, p_max_members: D.guests,
         p_invite_only: D.inviteOnly, p_film: D.film,
+        p_unlimited: Boolean(D.unlimited && canUnlimited), p_keep_days: D.keepDays,
       });
     } catch (e) { toast(friendly(e), 6000); btn.disabled = false; btn.textContent = "Coba lagi"; return; }
     try { sessionStorage.removeItem(DRAFT); } catch { /* abaikan */ }
