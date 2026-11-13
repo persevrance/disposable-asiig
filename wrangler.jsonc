@@ -8,6 +8,9 @@
   "name": "disposable-asiig",
   "main": "worker/index.js",
   "compatibility_date": "2025-10-01",
+  // Jangan hapus variabel yang diisi di dasbor Cloudflare saat deploy (wrangler biasanya menimpanya).
+  // Kunci rahasia (MIDTRANS_*, SUPABASE_SERVICE_KEY, SIGN_SECRET) tetap sebaiknya bertipe Secret.
+  "keep_vars": true,
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
