@@ -28,6 +28,7 @@ const OPEN_MODES = [
   { id: "after", name: "Setelah acara selesai", desc: (d) => `Semua terbuka serentak${d.ends ? ` pukul ${hhmm(d.ends)}` : " saat acara selesai"}` },
   { id: "delay", name: "Cuci film dulu", desc: (d) => `Terbuka ${d.delayH} jam setelah acara selesai` },
   { id: "time", name: "Waktu tertentu", desc: () => "Pilih tanggal dan jam sendiri" },
+  { id: "instant", name: "Langsung terlihat", desc: () => "Foto tamu tampil di album begitu dijepret, tanpa menunggu roll habis" },
 ];
 const G_PRESETS = [5, 25, 50, 100, 200, 300];
 const R_PRESETS = [[12, "12"], [24, "24"], [27, "27 · klasik"], [36, "36"], [50, "50"]];
@@ -207,7 +208,7 @@ export async function renderCreate(setView, { me } = {}) {
       <div class="cr-timeline" role="list" aria-label="Garis waktu acara">
         <span role="listitem"><b>${D.starts ? hhmm(fromLocalInput(D.starts)) : "–"}</b>mulai</span>
         <span role="listitem"><b>${D.ends ? hhmm(fromLocalInput(D.ends)) : "–"}</b>kamera berhenti</span>
-        <span role="listitem" class="hot"><b>${D.open === "roll" ? "per tamu" : rev ? hhmm(rev) : "–"}</b>${D.open === "roll" ? "film habis = terbuka" : `album dibuka${rev && D.ends && dayMon(rev) !== dayMon(fromLocalInput(D.ends)) ? ` ${dayMon(rev)}` : ""}`}</span>
+        <span role="listitem" class="hot"><b>${D.open === "instant" ? "langsung" : D.open === "roll" ? "per tamu" : rev ? hhmm(rev) : "–"}</b>${D.open === "instant" ? "foto langsung terbuka" : D.open === "roll" ? "film habis = terbuka" : `album dibuka${rev && D.ends && dayMon(rev) !== dayMon(fromLocalInput(D.ends)) ? ` ${dayMon(rev)}` : ""}`}</span>
         <span role="listitem"><b>${purge ? dayMon(purge) : "–"}</b>hapus otomatis</span>
       </div>
       <fieldset class="cr-radios cr-keep"><legend>Simpan foto selama</legend>
@@ -313,7 +314,7 @@ export async function renderCreate(setView, { me } = {}) {
     const kFee = feeOf(D.keepDays);
     const total = (q?.total || 0) + kFee;
     const rev = revealIso();
-    const openText = D.open === "roll" ? "Per gulungan" : D.open === "delay" ? `Cuci film ${D.delayH} jam` : rev ? `${dayMon(rev)}, ${hhmm(rev)}` : "Setelah acara";
+    const openText = D.open === "instant" ? "Langsung terlihat" : D.open === "roll" ? "Per gulungan" : D.open === "delay" ? `Cuci film ${D.delayH} jam` : rev ? `${dayMon(rev)}, ${hhmm(rev)}` : "Setelah acara";
     frame("Sampul dan tautan", `
       <div class="cr-cover">
         <div class="cr-cover-pick">
@@ -432,6 +433,7 @@ export async function renderCreate(setView, { me } = {}) {
       hide_names: !D.showNames, allow_film_choice: D.filmChoice, event_type: D.type || null,
       host_name: D.host, album_private: D.albumPrivate, date_stamp: D.dateStamp,
       allow_gallery: D.gallery, allow_front: D.front, lock_until_start: Boolean(D.lockStart && D.starts),
+      show_instantly: D.open === "instant",
       ...(paid && D.creatorEmail ? { creator_email: D.creatorEmail } : {}),
     };
     try { await rpc("set_event", { p_event: id, p_patch: patch }); }

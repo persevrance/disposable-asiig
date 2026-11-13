@@ -23,50 +23,93 @@ const SOUND_KEY = "shutterSound";
 const loadSound = () => { try { return localStorage.getItem(SOUND_KEY) !== "0"; } catch { return true; } };
 const saveSound = (on) => { try { localStorage.setItem(SOUND_KEY, on ? "1" : "0"); } catch { /* abaikan */ } };
 
-// Suara rana kamera film, dibuat langsung (tanpa file): desis pendek lalu klik.
-// AudioContext dibuat saat ketukan pertama (aturan autoplay browser).
-let audio = null;
-// Panggil langsung di dalam ketukan (sebelum await) supaya Safari mengizinkan suara
+// Suara rana kamera film dan tik timer, dibuat langsung (tanpa file) sebagai WAV di memori lalu
+// diputar lewat elemen <audio>. Alasannya: di iPhone, Web Audio ikut senyap saat sakelar
+// silent/getar aktif, dan suara yang diputar setelah jeda (menunggu flash, mengambil bingkai) bisa
+// ditolak. Elemen <audio> "dibuka" sekali di dalam ketukan (primeAudio), setelah itu boleh diputar
+// kapan saja. Web Audio tetap dipakai sebagai cadangan bila <audio> gagal.
+const RATE = 22050;
+function wavUrl(samples) {
+  const n = samples.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, "RIFF"); v.setUint32(4, 36 + n * 2, true); str(8, "WAVE"); str(12, "fmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, RATE, true); v.setUint32(28, RATE * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, n * 2, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, samples[i])) * 0x7fff, true);
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+// Desis pendek + klik kedua (tirai menutup), disaring bandpass ~2,4 kHz
+function shutterSamples() {
+  const len = Math.floor(RATE * 0.14), out = new Float32Array(len);
+  const w0 = (2 * Math.PI * 2400) / RATE, alpha = Math.sin(w0) / (2 * 0.8), a0 = 1 + alpha;
+  const b0 = alpha / a0, b2 = -alpha / a0, a1 = (-2 * Math.cos(w0)) / a0, a2 = (1 - alpha) / a0;
+  let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+  for (let i = 0; i < len; i++) {
+    const env = i < len * 0.07 ? 1 : Math.exp(-(i - len * 0.07) / (len * 0.11));
+    const second = i > len * 0.52 && i < len * 0.58 ? 1.7 : 0;
+    const x = (Math.random() * 2 - 1) * (env + second);
+    const y = b0 * x + b2 * x2 - a1 * y1 - a2 * y2;
+    x2 = x1; x1 = x; y2 = y1; y1 = y;
+    out[i] = y * 1.6;
+  }
+  return out;
+}
+function tickSamples(freq) {
+  const len = Math.floor(RATE * 0.08), out = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    const tt = i / RATE, env = Math.min(1, tt / 0.004) * Math.exp(-tt / 0.02);
+    out[i] = (Math.sin(2 * Math.PI * freq * tt) > 0 ? 1 : -1) * env * 0.35;
+  }
+  return out;
+}
+let sounds = null;   // { shutter, tick, tickHigh }: HTMLAudioElement
+let audio = null;    // AudioContext cadangan
+function makeSounds() {
+  const make = (samples) => { const a = new Audio(wavUrl(samples)); a.preload = "auto"; return a; };
+  return { shutter: make(shutterSamples()), tick: make(tickSamples(1180)), tickHigh: make(tickSamples(1760)) };
+}
+// Panggil langsung di dalam ketukan (sebelum await): membuka elemen audio dan AudioContext
 function primeAudio() {
+  try {
+    sounds ||= makeSounds();
+    for (const a of Object.values(sounds)) {
+      if (a.dataset.ready) continue;
+      a.muted = true;
+      a.play().then(() => { a.pause(); a.currentTime = 0; a.muted = false; a.dataset.ready = "1"; })
+        .catch(() => { a.muted = false; });
+    }
+  } catch { /* tanpa <audio> */ }
   try {
     audio ||= new (window.AudioContext || window.webkitAudioContext)();
     if (audio.state === "suspended") audio.resume();
-  } catch { /* tanpa suara */ }
+  } catch { /* tanpa Web Audio */ }
 }
-function shutterSound() {
+function playEl(a, fallback) {
+  if (!a) return fallback();
+  try {
+    a.muted = false; a.currentTime = 0;
+    const pr = a.play();
+    if (pr && pr.catch) pr.catch(fallback);
+  } catch { fallback(); }
+}
+function shutterSound() { playEl(sounds?.shutter, webShutter); }
+function tickSound(high = false) { playEl(high ? sounds?.tickHigh : sounds?.tick, () => webTick(high)); }
+// Cadangan Web Audio (bila elemen <audio> ditolak browser)
+function webShutter() {
   try {
     if (!audio) return;
-    const t = audio.currentTime;
-    const len = Math.floor(audio.sampleRate * 0.12);
-    const buf = audio.createBuffer(1, len, audio.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) {
-      const env = i < len * 0.08 ? 1 : Math.exp(-(i - len * 0.08) / (len * 0.12));
-      const second = i > len * 0.55 && i < len * 0.6 ? 1.6 : 0;   // klik kedua: tirai menutup
-      d[i] = (Math.random() * 2 - 1) * (env + second) * 0.5;
-    }
-    const src = audio.createBufferSource();
-    src.buffer = buf;
-    const filter = audio.createBiquadFilter();
-    filter.type = "bandpass"; filter.frequency.value = 2400; filter.Q.value = 0.8;
-    const gain = audio.createGain();
-    gain.gain.setValueAtTime(0.9, t);
-    src.connect(filter).connect(gain).connect(audio.destination);
-    src.start(t);
+    const src = audio.createBufferSource(), d = shutterSamples();
+    const buf = audio.createBuffer(1, d.length, RATE); buf.copyToChannel(d, 0);
+    src.buffer = buf; src.connect(audio.destination); src.start();
   } catch { /* tanpa suara */ }
 }
-// Bunyi tik pendek untuk hitung mundur timer jepret
-function tickSound(high = false) {
+function webTick(high) {
   try {
     if (!audio) return;
-    const t = audio.currentTime;
-    const osc = audio.createOscillator(), gain = audio.createGain();
-    osc.type = "square"; osc.frequency.value = high ? 1760 : 1180;
-    gain.gain.setValueAtTime(0.0001, t);
-    gain.gain.exponentialRampToValueAtTime(0.18, t + 0.005);
-    gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
-    osc.connect(gain).connect(audio.destination);
-    osc.start(t); osc.stop(t + 0.08);
+    const src = audio.createBufferSource(), d = tickSamples(high ? 1760 : 1180);
+    const buf = audio.createBuffer(1, d.length, RATE); buf.copyToChannel(d, 0);
+    src.buffer = buf; src.connect(audio.destination); src.start();
   } catch { /* tanpa suara */ }
 }
 const TIMER_KEY = "camTimer";
@@ -160,7 +203,11 @@ export async function renderCamera(root, status, go) {
     soundBtn.classList.toggle("muted", !soundOn);
     soundBtn.title = soundOn ? t("Suara rana nyala") : t("Suara rana mati");
   }
-  soundBtn.onclick = () => { soundOn = !soundOn; saveSound(soundOn); updateSoundBtn(); toast(soundOn ? t("Suara rana nyala") : t("Suara rana mati"), 1500); };
+  soundBtn.onclick = () => {
+    soundOn = !soundOn; saveSound(soundOn); updateSoundBtn();
+    if (soundOn) { primeAudio(); setTimeout(shutterSound, 120); }   // contoh bunyi supaya terdengar langsung
+    toast(soundOn ? t("Suara rana nyala") : t("Suara rana mati"), 1500);
+  };
 
   // ---- Efek film: bawaan acara, atau pilihan tamu jika diizinkan ----
   function currentFilm() {
@@ -234,6 +281,7 @@ export async function renderCamera(root, status, go) {
     setCounter(left);
     hint.textContent = revealLater()
       ? t("Semua foto terbuka dalam {x}.", { x: fmtCountdown(new Date(status.reveal_at) - Date.now()) })
+      : status.show_instantly ? (status.unlimited ? t("Jepretan tanpa batas. Foto langsung tampil di album.") : t("Foto langsung tampil di album. Sisa {n} jepretan.", { n: left }))
       : status.unlimited ? t("Jepretan tanpa batas. Foto terbuka di album setelah acara selesai.")
       : left > 0 ? t("Foto Anda terbuka di album setelah {n} jepretan lagi.", { n: left }) : "";
     showWait();

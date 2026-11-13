@@ -1087,3 +1087,6 @@ html.dark .tile img { background: #251a2c; }
 .pr-unl { background: #2d1b33; color: #f6eaf0; border-color: #2d1b33; }
 .pr-unl p { color: #d9c9dd !important; }
 .pr-unl-price { font-family: "Fredoka", system-ui, sans-serif; font-size: 1.8rem; font-weight: 600; }
+.sw-koran { background: repeating-linear-gradient(0deg, #eee4cf 0 5px, #cfc3a8 5px 6px); border: 1.5px solid #1f1b16; border-top: 7px double #1f1b16; }
+.sw-kamera { background: radial-gradient(circle at 70% 55%, #0b0908 0 6px, #2c2724 6px 10px, #151210 10px 13px, transparent 13px), #3b3530; border: 1.5px solid #221e1b; }
+.sw-scrapbook { background: linear-gradient(35deg, transparent 60%, rgba(255, 134, 168, .85) 60% 78%, transparent 78%), #e3cfab; border: 2px dashed #6b5440; }

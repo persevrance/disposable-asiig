@@ -584,6 +584,24 @@ await as("host", `select set_event($1, $2)`, [evP, { album_private: true }]);
 const albumPriv = await as("d", `select * from get_album($1)`, [evP]);
 ok(albumAll.length === 2 && albumPriv.length === 1 && albumPriv[0].is_mine, `album_private hides others (${albumAll.length} -> ${albumPriv.length})`);
 ok((await as("host", `select * from get_album($1)`, [evP])).length === 2, "owner still sees everything");
+// Foto langsung terlihat tanpa menunggu roll habis (acara 3 jepretan, baru 1 terpakai)
+const evI = (await as("host", `select create_event('Langsung', 3, 10) id`))[0].id;
+await as("d", `select join_event($1)`, [(await db.query(`select join_code from events where id = $1`, [evI])).rows[0].join_code]);
+{
+  const r = (await as("d", `select * from reserve_shot($1, gen_random_uuid())`, [evI]))[0];
+  for (const pth of [r.o_file_path, r.o_medium_path, r.o_thumb_path])
+    await as("d", `insert into storage.objects (bucket_id, name, metadata) values ('photos', $1, '{"size": 1000}')`, [pth]);
+  await as("d", `select confirm_shot($1)`, [r.o_photo_id]);
+}
+ok((await as("d", `select count(*)::int n from get_album($1) where not is_mine`, [evI]))[0].n === 0, "roll belum habis: foto orang lain belum terlihat");
+await as("host", `select set_event($1, $2)`, [evI, { show_instantly: true }]);
+ok((await as("host", `select show_instantly from my_status($1)`, [evI]))[0].show_instantly === true, "my_status shows show_instantly");
+const hostShot = (await as("host", `select * from reserve_shot($1, gen_random_uuid())`, [evI]))[0];
+for (const pth of [hostShot.o_file_path, hostShot.o_medium_path, hostShot.o_thumb_path])
+  await as("host", `insert into storage.objects (bucket_id, name, metadata) values ('photos', $1, '{"size": 1000}')`, [pth]);
+await as("host", `select confirm_shot($1)`, [hostShot.o_photo_id]);
+ok((await as("d", `select count(*)::int n from get_album($1) where not is_mine`, [evI]))[0].n === 1, "show_instantly: foto langsung terlihat walau roll belum habis");
+await as("host", `select delete_event($1)`, [evI]);
 await as("host", `select set_event($1, $2)`, [ev, { slug: null }]);
 for (const id of [evB, dupV2, evP]) await as("host", `select delete_event($1)`, [id]);
 

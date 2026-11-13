@@ -49,7 +49,19 @@ export const ORNAMENTS = [
   { id: "selotip",  name: "Selotip",     gap: 36 },
   { id: "konfeti",  name: "Konfeti",     gap: 10 },
   { id: "kartu",    name: "Kartu acara", gap: 10, card: true },
+  // Tema dengan kop (masthead): nama acara dan tanggal di atas, kaki hanya logo
+  { id: "koran",    name: "Koran lama",  gap: 18, bg: "koran", head: 220, masthead: true },
+  { id: "kamera",   name: "Kamera retro", gap: 16, bg: "kamera", head: 150 },
+  { id: "scrapbook", name: "Scrapbook & perangko", gap: 40, bg: "kraft", head: 190, masthead: true },
 ];
+
+// Latar khusus ornamen (tidak muncul di pilihan "Latar" editor)
+export const ORN_BACKGROUNDS = {
+  koran:  { bg: "#eee4cf", ink: "#1f1b16", muted: "#5d5446", cell: "#d8ccb3", body: "#1f1b16", cut: "#eee4cf" },
+  kamera: { bg: "#221e1b", ink: "#f2ebe0", muted: "#b8ab99", cell: "#38322d", body: "#f2ebe0", cut: "#221e1b" },
+  kraft:  { bg: "#e3cfab", ink: "#3a281a", muted: "#6b5440", cell: "#d2bb95", body: "#3a281a", cut: "#e3cfab" },
+};
+export const WASHI = ["rgba(255, 134, 168, .82)", "rgba(134, 196, 245, .82)", "rgba(255, 201, 77, .85)", "rgba(90, 216, 182, .8)"];
 
 export const SIZES = {
   feed:   { name: "Feed",  ratio: "4:5",  w: 1080, h: 1350 },

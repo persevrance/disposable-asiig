@@ -4,9 +4,9 @@
 // photos: [{ id, url, thumb, owner_name }] — url ukuran sedang (1080 px), thumb 400 px.
 // Pratinjau editor memakai thumbnail; foto sedang baru dimuat saat Selesai.
 import { el, esc, toast, modal, download, safeName, fmtRange, ICON } from "./ui.js";
-import { t } from "./i18n.js";
+import { t, locale } from "./i18n.js";
 import {
-  LAYOUTS, ORNAMENTS, SIZES, BACKGROUNDS, CONFETTI, STAMP, TAPE, CARD, layoutCells,
+  LAYOUTS, ORNAMENTS, SIZES, BACKGROUNDS, ORN_BACKGROUNDS, WASHI, CONFETTI, STAMP, TAPE, CARD, layoutCells,
 } from "./collage-layouts.js";
 
 export const COLLAGE_MAX = 9;
@@ -73,6 +73,13 @@ function seeded(str) {
 }
 
 const pad2 = (n) => String(n).padStart(2, "0");
+const SERIF = 'Georgia, "Times New Roman", serif';
+const MONO = '"Courier New", ui-monospace, monospace';
+// Tanggal acara untuk kolase: tanggal mulai acara, atau hari ini bila acara belum berjadwal
+function eventDate(ev, style = "long") {
+  const d = ev.starts_at ? new Date(ev.starts_at) : new Date();
+  return d.toLocaleDateString(locale, style === "long" ? { weekday: "long", day: "numeric", month: "long", year: "numeric" } : { day: "numeric", month: "long", year: "numeric" });
+}
 function stampText(ev) {
   const d = ev.starts_at ? new Date(ev.starts_at) : new Date();
   return `'${String(d.getFullYear()).slice(2)} ${pad2(d.getMonth() + 1)} ${pad2(d.getDate())}`;
@@ -90,11 +97,13 @@ async function fontsReady() {
 function geometry(o, n) {
   const F = SIZES[o.size], orn = ORN[o.orn];
   const story = o.size === "story";
-  const m = 56, band = orn.band || 0;
-  const showText = o.foot || Boolean(orn.card);
+  const m = 56, band = orn.band || 0, head = orn.head || 0;
+  // Teks di kaki: nama dan/atau tanggal. Ornamen berkop menaruh teksnya di kop, kakinya hanya logo.
+  const wantText = o.name || o.date;
+  const showText = !orn.masthead && (wantText || Boolean(orn.card));
   const textFoot = story ? 360 : o.size === "square" ? 150 : 170;
   const logoFoot = story ? 300 : 110;                     // logo saja tanpa nama acara
-  const top = (story ? 220 : m) + band;                   // Story: ruang aman tampilan Instagram
+  const top = (story ? 220 : m) + band + head;            // Story: ruang aman tampilan Instagram
   const foot = (showText ? textFoot : o.logo ? logoFoot : m) + band;
   const area = { x: m, y: top, w: F.w - 2 * m, h: F.h - top - foot };
   const gap = orn.gap;
@@ -102,14 +111,94 @@ function geometry(o, n) {
     x: area.x + fx * (area.w + gap), y: area.y + fy * (area.h + gap),
     w: fw * (area.w + gap) - gap, h: fh * (area.h + gap) - gap,
   }));
-  return { F, story, m, band, top, foot, showText, area, cells };
+  return { F, story, m, band, head, top, foot, showText, area, cells, headY: (story ? 220 : m) + band - (story ? 0 : 20) };
 }
 
 function theme(o) {
   const orn = ORN[o.orn];
-  if (orn.bg) return BACKGROUNDS[orn.bg];
+  if (orn.bg) return ORN_BACKGROUNDS[orn.bg] || BACKGROUNDS[orn.bg];
   if (orn.card && o.bg === "gelap") return BACKGROUNDS.krem;
   return BACKGROUNDS[o.bg];
+}
+
+// Kop ornamen (di atas grid foto): koran, kamera, scrapbook. Nama/tanggal mengikuti sakelar teks.
+function drawHead(ctx, o, g, th, ev, rnd) {
+  const { F, m } = g, y0 = g.top - g.head, h = g.head - 24;
+  const name = o.name ? ev.name || "" : "", date = o.date ? eventDate(ev) : "";
+  if (o.orn === "koran") {
+    ctx.fillStyle = th.ink; ctx.textBaseline = "alphabetic";
+    // baris kecil di atas: edisi | tanggal
+    ctx.font = `700 22px ${SERIF}`; ctx.textAlign = "left";
+    ctx.fillText(t("EDISI KHUSUS"), m, y0 + 30);
+    ctx.textAlign = "right"; ctx.fillText(date ? date.toUpperCase() : t("CETAKAN JEPRETIN"), F.w - m, y0 + 30);
+    ctx.fillRect(m, y0 + 44, F.w - 2 * m, 4); ctx.fillRect(m, y0 + 52, F.w - 2 * m, 1.5);
+    // judul koran = nama acara
+    ctx.textAlign = "center";
+    let fs = 96; ctx.font = `900 ${fs}px ${SERIF}`;
+    const title = (name || "Kabar Hari Ini").toUpperCase();
+    while (fs > 44 && ctx.measureText(title).width > F.w - 2 * m) { fs -= 4; ctx.font = `900 ${fs}px ${SERIF}`; }
+    ctx.fillText(fit(ctx, title, F.w - 2 * m), F.w / 2, y0 + 58 + Math.min(110, h - 70) * 0.5 + fs * 0.35);
+    ctx.fillRect(m, y0 + h - 6, F.w - 2 * m, 1.5); ctx.fillRect(m, y0 + h, F.w - 2 * m, 4);
+    return;
+  }
+  if (o.orn === "kamera") {
+    // bodi kamera: pelat atas, jendela bidik, rana, dan lensa
+    const bx = m, by = y0 + 6, bw = F.w - 2 * m, bh = h - 12;
+    ctx.fillStyle = "#3b3530"; roundRect(ctx, bx, by, bw, bh, 22); ctx.fill();
+    ctx.fillStyle = "#4a433d"; roundRect(ctx, bx + 10, by + 10, bw - 20, bh * 0.36, 14); ctx.fill();
+    ctx.fillStyle = "#151210"; roundRect(ctx, bx + 36, by + bh * 0.52, 120, bh * 0.3, 8); ctx.fill();   // jendela bidik
+    ctx.fillStyle = "#6ec3ff"; ctx.globalAlpha = .35; roundRect(ctx, bx + 46, by + bh * 0.56, 100, bh * 0.22, 6); ctx.fill(); ctx.globalAlpha = 1;
+    const lx = bx + bw - 120, ly = by + bh / 2 + 6, lr = Math.min(52, bh * 0.42);
+    for (const [r, c] of [[lr, "#151210"], [lr * 0.72, "#2c2724"], [lr * 0.45, "#0b0908"], [lr * 0.16, "#5c7da8"]]) {
+      ctx.fillStyle = c; ctx.beginPath(); ctx.arc(lx, ly, r, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = "#d6336c"; ctx.beginPath(); ctx.arc(bx + bw - 250, by + 24, 14, 0, Math.PI * 2); ctx.fill();   // tombol rana
+    ctx.fillStyle = th.ink; ctx.font = `700 26px ${MONO}`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText("JEPRETIN 35", bx + 180, by + bh * 0.67);
+    ctx.fillStyle = th.muted; ctx.font = `700 20px ${MONO}`;
+    ctx.fillText(date ? eventDate(ev, "short").toUpperCase() : "ISO 400", bx + 180, by + bh * 0.67 + 30);
+    return;
+  }
+  if (o.orn === "scrapbook") {
+    // perangko bergerigi + cap pos di kanan, nama & tanggal tulisan tangan di kiri
+    const sw = 128, sh = 150, sx = F.w - m - sw - 10, sy = y0 - 8;
+    ctx.save(); ctx.translate(sx + sw / 2, sy + sh / 2); ctx.rotate((4 * Math.PI) / 180); ctx.translate(-(sx + sw / 2), -(sy + sh / 2));
+    ctx.shadowColor = "rgba(60, 40, 20, .25)"; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
+    ctx.fillStyle = "#fffaf2"; ctx.fillRect(sx, sy, sw, sh);
+    ctx.shadowColor = "transparent";
+    ctx.fillStyle = th.bg;   // gerigi perangko
+    for (let x = sx; x <= sx + sw; x += 16) { for (const yy of [sy, sy + sh]) { ctx.beginPath(); ctx.arc(x, yy, 6, 0, Math.PI * 2); ctx.fill(); } }
+    for (let yy = sy; yy <= sy + sh; yy += 16) { for (const x of [sx, sx + sw]) { ctx.beginPath(); ctx.arc(x, yy, 6, 0, Math.PI * 2); ctx.fill(); } }
+    ctx.fillStyle = "#d6336c"; ctx.fillRect(sx + 16, sy + 16, sw - 32, sh - 32);
+    drawMark(ctx, sx + sw / 2 - 34, sy + 40, 68, "#fff8f0", "#d6336c");
+    ctx.fillStyle = "#fff8f0"; ctx.font = `700 22px ${DISPLAY}`; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.fillText("Rp 2026", sx + sw / 2, sy + sh - 30);
+    ctx.restore();
+    // cap pos melingkar bertanggal
+    const pcx = sx - 20, pcy = sy + sh * 0.62, pr = 70;
+    ctx.save(); ctx.strokeStyle = "rgba(58, 40, 26, .55)"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(pcx, pcy, pr, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(pcx, pcy, pr - 14, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = "rgba(58, 40, 26, .6)"; ctx.font = `700 20px ${MONO}`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const d = ev.starts_at ? new Date(ev.starts_at) : new Date();
+    ctx.fillText(`${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}`, pcx, pcy - 10);
+    ctx.fillText(String(d.getFullYear()), pcx, pcy + 14);
+    for (let k = 0; k < 4; k++) { ctx.beginPath(); ctx.moveTo(pcx + pr + 8, pcy - 30 + k * 20); ctx.bezierCurveTo(pcx + pr + 60, pcy - 44 + k * 20, pcx + pr + 90, pcy - 16 + k * 20, pcx + pr + 140, pcy - 30 + k * 20); ctx.stroke(); }
+    ctx.restore();
+    // nama acara dan tanggal
+    const tw = sx - 120 - m;
+    ctx.fillStyle = th.ink; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+    let fs = 64; ctx.font = `600 ${fs}px ${DISPLAY}`;
+    while (fs > 36 && ctx.measureText(name).width > tw) { fs -= 4; ctx.font = `600 ${fs}px ${DISPLAY}`; }
+    if (name) ctx.fillText(fit(ctx, name, tw), m, y0 + 74);
+    if (date) { ctx.font = `600 28px ${BODY}`; ctx.fillStyle = th.muted; ctx.fillText(fit(ctx, date, tw), m, y0 + (name ? 118 : 74)); }
+    // garis coretan di bawah nama
+    if (name) {
+      ctx.strokeStyle = "#d6336c"; ctx.lineWidth = 5; ctx.lineCap = "round";
+      const w = Math.min(tw, ctx.measureText(name).width + 40);
+      ctx.beginPath(); ctx.moveTo(m, y0 + 140); ctx.bezierCurveTo(m + w * 0.3, y0 + 132, m + w * 0.7, y0 + 148, m + w * 0.55, y0 + 138); ctx.stroke();
+    }
+  }
 }
 
 // Urutan menggambar sama untuk semua kombinasi: latar → lapisan bawah ornamen → tiap kotak
@@ -128,6 +217,18 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
   // 1. Latar
   ctx.fillStyle = th.bg; ctx.fillRect(0, 0, F.w, F.h);
 
+  // 1b. Tekstur latar ornamen (berbenih: sama setiap kali dibuat ulang)
+  const rnd = seeded(String(ev.event_id || ev.name || "jepretin") + o.orn);
+  if (o.orn === "koran" || o.orn === "scrapbook") {
+    for (let i = 0; i < 900; i++) {
+      ctx.fillStyle = o.orn === "koran" ? `rgba(60, 45, 25, ${0.03 + rnd() * 0.05})` : `rgba(110, 80, 45, ${0.04 + rnd() * 0.06})`;
+      const x = rnd() * F.w, y = rnd() * F.h;
+      if (o.orn === "koran") ctx.fillRect(x, y, 1.6 + rnd() * 2, 1.6 + rnd() * 2);
+      else { ctx.save(); ctx.translate(x, y); ctx.rotate(rnd() * Math.PI); ctx.fillRect(0, 0, 6 + rnd() * 14, 1.2); ctx.restore(); }
+    }
+  }
+  if (orn.head) drawHead(ctx, o, g, th, ev, rnd);
+
   // 2. Lapisan bawah: lubang film di atas dan bawah
   if (band) {
     const k = Math.floor(F.w / 54), hw = 24, hh = 18;
@@ -141,19 +242,21 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
 
   // 3. Tiap kotak
   const stamp = orn.stamp || o.stamp, stampStr = stampText(ev);
-  const pol = o.orn === "polaroid";
+  const pol = o.orn === "polaroid" || o.orn === "scrapbook";
   g.cells.forEach((b, i) => {
     const img = imgs[i];
     ctx.save();
     let p = b, radius = band ? 4 : 6;
     if (pol) {
       const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
-      ctx.translate(cx, cy); ctx.rotate(((i % 2 ? 2 : -2) * Math.PI) / 180); ctx.translate(-cx, -cy);
+      const tilt = o.orn === "scrapbook" ? (rnd() * 3 - 1.5) : (i % 2 ? 2 : -2);
+      ctx.translate(cx, cy); ctx.rotate((tilt * Math.PI) / 180); ctx.translate(-cx, -cy);
       ctx.save();
       ctx.shadowColor = "rgba(45, 27, 51, .22)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
       ctx.fillStyle = "#ffffff"; ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.restore();
-      const side = Math.max(12, Math.min(b.w, b.h) * 0.05), bottom = Math.max(36, b.h * 0.14);
+      const side = Math.max(12, Math.min(b.w, b.h) * 0.05);
+      const bottom = o.orn === "scrapbook" ? side : Math.max(36, b.h * 0.14);
       p = { x: b.x + side, y: b.y + side, w: Math.max(1, b.w - side * 2), h: Math.max(1, b.h - side - bottom) };
       radius = 2;
     }
@@ -161,7 +264,31 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
     roundRect(ctx, p.x, p.y, p.w, p.h, radius); ctx.clip();
     ctx.fillStyle = pol ? "#efdccb" : th.cell; ctx.fillRect(p.x, p.y, p.w, p.h);
     if (img) cover(ctx, img, p.x, p.y, p.w, p.h);
+    // Koran lama: foto hitam-putih bernuansa sepia seperti cetakan koran
+    if (img && o.orn === "koran") {
+      ctx.globalCompositeOperation = "saturation"; ctx.fillStyle = "#808080"; ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.globalCompositeOperation = "multiply"; ctx.fillStyle = "#e6d6b6"; ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.globalCompositeOperation = "source-over";
+    }
     ctx.restore();
+    if (o.orn === "koran") { ctx.lineWidth = 3; ctx.strokeStyle = th.ink; ctx.strokeRect(p.x, p.y, p.w, p.h); }
+    // Kamera retro: sudut jendela bidik dan nomor frame (di tepi, tidak menutupi wajah)
+    if (o.orn === "kamera") {
+      const inset = Math.max(12, Math.min(p.w, p.h) * 0.05), len = Math.max(18, Math.min(p.w, p.h) * 0.12);
+      ctx.strokeStyle = "rgba(255, 248, 240, .92)"; ctx.lineWidth = 4; ctx.lineCap = "square";
+      for (const [sx, sy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+        const x = sx ? p.x + p.w - inset : p.x + inset, y = sy ? p.y + p.h - inset : p.y + inset;
+        const dx = sx ? -len : len, dy = sy ? -len : len;
+        ctx.beginPath(); ctx.moveTo(x + dx, y); ctx.lineTo(x, y); ctx.lineTo(x, y + dy); ctx.stroke();
+      }
+      if (img) {
+        const fs = Math.max(16, Math.round(Math.min(p.w, p.h) * 0.06));
+        ctx.font = `700 ${fs}px ${MONO}`; ctx.textAlign = "left"; ctx.textBaseline = "bottom";
+        ctx.fillStyle = STAMP; ctx.shadowColor = "rgba(0, 0, 0, .4)"; ctx.shadowBlur = 4;
+        ctx.fillText(`${pad2(i + 1)}A`, p.x + inset + 16, p.y + p.h - inset - 14);
+        ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
+      }
+    }
     if (!img && preview) {
       ctx.setLineDash([14, 10]); ctx.lineWidth = 4; ctx.strokeStyle = th.muted;
       roundRect(ctx, p.x + 2, p.y + 2, p.w - 4, p.h - 4, radius); ctx.stroke(); ctx.setLineDash([]);
@@ -176,6 +303,16 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
       ctx.shadowColor = "rgba(0, 0, 0, .35)"; ctx.shadowBlur = 4;
       ctx.fillStyle = STAMP; ctx.fillText(stampStr, p.x + p.w - fs * 0.6, p.y + p.h - fs * 0.45);
       ctx.shadowColor = "transparent"; ctx.shadowBlur = 0;
+    }
+    // Scrapbook: selotip washi miring di dua sudut atas
+    if (o.orn === "scrapbook") {
+      const tw = Math.min(150, b.w * 0.34), tt = tw * 0.28;
+      for (const [sx, rot] of [[0, -38], [1, 38]]) {
+        ctx.save();
+        ctx.translate(sx ? b.x + b.w - tw * 0.18 : b.x + tw * 0.18, b.y + tt * 0.2); ctx.rotate((rot * Math.PI) / 180);
+        ctx.fillStyle = WASHI[Math.floor(rnd() * WASHI.length)]; ctx.fillRect(-tw / 2, -tt / 2, tw, tt);
+        ctx.restore();
+      }
     }
     // Hiasan di tepi kotak: selotip
     if (o.orn === "selotip") {
@@ -227,13 +364,15 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
   if (g.showText) {
     const textW = textRight - m;
     const used = Math.min(imgs.filter(Boolean).length, g.cells.length);
+    const kamera = o.orn === "kamera";
+    // Baris utama: nama acara (atau tanggal bila nama dimatikan); baris kedua: tanggal · jumlah foto
+    const main = o.name ? ev.name || "" : eventDate(ev, "short");
+    const sub = [o.name && o.date ? eventDate(ev, "short") : "", t("{n} foto", { n: used })].filter(Boolean).join(" · ");
     ctx.textAlign = "left";
-    ctx.font = `600 ${g.story ? 50 : 44}px ${DISPLAY}`; ctx.fillStyle = ink;
+    ctx.font = kamera ? `700 ${g.story ? 44 : 38}px ${MONO}` : `600 ${g.story ? 50 : 44}px ${DISPLAY}`; ctx.fillStyle = ink;
     ctx.textBaseline = "alphabetic";
-    ctx.fillText(fit(ctx, ev.name || "", textW), m, cy - 4);
-    const when = fmtRange(ev.starts_at, ev.ends_at);
-    const sub = [when, t("{n} foto", { n: used })].filter(Boolean).join(" · ");
-    ctx.font = `600 ${g.story ? 28 : 25}px ${BODY}`; ctx.fillStyle = muted;
+    ctx.fillText(fit(ctx, kamera ? main.toUpperCase() : main, textW), m, cy - 4);
+    ctx.font = kamera ? `700 ${g.story ? 26 : 23}px ${MONO}` : `600 ${g.story ? 28 : 25}px ${BODY}`; ctx.fillStyle = kamera ? STAMP : muted;
     ctx.textBaseline = "top";
     ctx.fillText(fit(ctx, sub, textW), m, cy + 10);
   }
@@ -250,7 +389,7 @@ export async function openCollage(ev, photos, { pickMore } = {}) {
   const allowed = ORNAMENTS.filter((o) => !cfg.allowed?.length || cfg.allowed.includes(o.id) || o.id === cfg.ornament);
   const logoOptional = cfg.logo_optional === true;     // BR-19: wajib di acara gratis
   const S = {
-    tab: "layout", layout: "auto", size: "feed", bg: "krem", foot: true, stamp: false, logo: true,
+    tab: "layout", layout: "auto", size: "feed", bg: "krem", name: true, date: true, stamp: false, logo: true,
     orn: allowed.some((o) => o.id === cfg.ornament) ? cfg.ornament : (allowed[0]?.id || "polos"),
   };
   let list = photos.slice(0, COLLAGE_MAX);
@@ -353,7 +492,8 @@ export async function openCollage(ev, photos, { pickMore } = {}) {
         `<span class="cl-shape" aria-hidden="true" style="width:${Math.round(z.w / 40)}px;height:${Math.round(z.h / 40)}px"></span><b>${esc(t(z.name))}</b><small>${z.ratio}</small>`, "size")).join("")}</div>`;
     } else {
       const rows = [
-        ["foot", t("Nama acara dan tanggal"), t("Di kaki kolase"), false],
+        ["name", t("Nama acara"), t("Di kaki atau kop kolase"), false],
+        ["date", t("Tanggal"), t("Tanggal acara, atau hari ini bila belum berjadwal"), false],
         ["stamp", t("Cap tanggal di tiap foto"), t("Gaya kamera sekali pakai"), false],
         ["logo", t("Logo Jepretin"), logoOptional ? t("Boleh dimatikan untuk acara ini") : t("Wajib di acara gratis; bisa dimatikan di acara berbayar"), !logoOptional],
       ];

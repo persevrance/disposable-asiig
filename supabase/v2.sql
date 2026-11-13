@@ -181,7 +181,7 @@ alter table photo_reports enable row level security;
 -- Ornamen kolase yang dikenal (samakan dengan src/collage-layouts.js)
 create or replace function valid_ornament(p text) returns boolean
 language sql immutable as $$
-  select p in ('polos', 'film', 'polaroid', 'tanggal', 'selotip', 'konfeti', 'kartu');
+  select p in ('polos', 'film', 'polaroid', 'tanggal', 'selotip', 'konfeti', 'kartu', 'koran', 'kamera', 'scrapbook');
 $$;
 
 -- Opsional: { ornament, allowed: [...], accent: "#rrggbb", logo_optional }.
@@ -220,6 +220,8 @@ alter table events
   add column if not exists lock_until_start boolean not null default false,
   -- Paket Unlimited: tamu dan jepretan tanpa batas (max_members/max_shots diisi batas sistem)
   add column if not exists unlimited boolean not null default false,
+  -- Foto tamu langsung terlihat di album begitu dijepret (tanpa menunggu roll habis / acara selesai)
+  add column if not exists show_instantly boolean not null default false,
   -- Masa simpan foto (hari setelah acara); di atas batas gratis dibayar saat pembayaran.
   -- keep_basis = biaya masa simpan yang sudah dibayar (dasar selisih saat diperpanjang).
   add column if not exists keep_days int not null default 30 check (keep_days between 1 and 3650),
@@ -461,10 +463,10 @@ drop function if exists event_preview(text);
 create function event_preview(p_code text)
 returns table (name text, cover_path text, welcome_text text, is_open boolean, max_shots int,
                starts_at timestamptz, ends_at timestamptz, host_name text, album_private boolean,
-               lock_until_start boolean, unlimited boolean)
+               lock_until_start boolean, unlimited boolean, show_instantly boolean)
 language sql stable security definer set search_path = public as $$
   select e.name, e.cover_path, e.welcome_text, open_now(e), e.max_shots, e.starts_at, e.ends_at,
-         e.host_name, e.album_private, e.lock_until_start, e.unlimited
+         e.host_name, e.album_private, e.lock_until_start, e.unlimited, e.show_instantly
     from events e
    where auth.uid() is not null and e.join_code = upper(trim(p_code));
 $$;
@@ -566,10 +568,10 @@ language sql stable security definer set search_path = public as $$
                       where me.event_id = p_event and me.user_id = auth.uid()
                         and not me.blocked and not pr.banned)
          and (not e.album_private or p.user_id = auth.uid())
-         and case
+         and (e.show_instantly or case
                when e.reveal_at is not null then now() >= e.reveal_at
                else (not e.unlimited and m.shots_used >= e.max_shots) or not open_now(e)
-             end
+             end)
        )
      );
 $$;
@@ -654,7 +656,8 @@ returns table (event_id uuid, name text, join_code text, max_shots int, max_memb
                starts_at timestamptz, ends_at timestamptz, collage_theme jsonb, needs_review boolean,
                pay_status text, price_basis int, event_type text, host_name text, slug text,
                album_private boolean, date_stamp boolean, allow_gallery boolean, allow_front boolean,
-               lock_until_start boolean, unlimited boolean, keep_days int, keep_basis int)
+               lock_until_start boolean, unlimited boolean, keep_days int, keep_basis int,
+               show_instantly boolean)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name,
          case when can_manage(e.id) then e.join_code end,
@@ -674,7 +677,7 @@ language sql stable security definer set search_path = public as $$
          e.starts_at, e.ends_at, e.collage_theme, e.needs_review,
          e.pay_status, e.price_basis, e.event_type, e.host_name, e.slug,
          e.album_private, e.date_stamp, e.allow_gallery, e.allow_front, e.lock_until_start,
-         e.unlimited, e.keep_days, e.keep_basis
+         e.unlimited, e.keep_days, e.keep_basis, e.show_instantly
     from events e
     cross join app_settings s
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
@@ -891,7 +894,7 @@ begin
                     mirror_photo = e.mirror_photo, photo_max_side = e.photo_max_side,
                     event_type = e.event_type, host_name = e.host_name, album_private = e.album_private,
                     date_stamp = e.date_stamp, allow_gallery = e.allow_gallery, allow_front = e.allow_front,
-                    lock_until_start = e.lock_until_start,
+                    lock_until_start = e.lock_until_start, show_instantly = e.show_instantly,
                     collage_theme = e.collage_theme - 'logo_optional'
    where id = v_id;
   insert into event_invites (event_id, email)
@@ -1004,6 +1007,7 @@ begin
   if p_patch ? 'allow_gallery' then e.allow_gallery := (p_patch->>'allow_gallery')::boolean; end if;
   if p_patch ? 'allow_front' then e.allow_front := (p_patch->>'allow_front')::boolean; end if;
   if p_patch ? 'lock_until_start' then e.lock_until_start := (p_patch->>'lock_until_start')::boolean; end if;
+  if p_patch ? 'show_instantly' then e.show_instantly := (p_patch->>'show_instantly')::boolean; end if;
   -- Unlimited dan masa simpan: bebas diubah saat draf (dihitung ulang saat bayar) atau oleh superadmin;
   -- acara yang sudah aktif menambahnya lewat pesanan (start_order). Masa simpan boleh dikurangi.
   if p_patch ? 'unlimited' and (p_patch->>'unlimited')::boolean is distinct from e.unlimited then
@@ -1073,7 +1077,7 @@ begin
                     album_private = e.album_private, date_stamp = e.date_stamp,
                     allow_gallery = e.allow_gallery, allow_front = e.allow_front,
                     creator_email = e.creator_email, lock_until_start = e.lock_until_start,
-                    unlimited = e.unlimited, keep_days = e.keep_days
+                    unlimited = e.unlimited, keep_days = e.keep_days, show_instantly = e.show_instantly
    where id = p_event;
   perform log_audit('ubah_acara', p_event::text, p_patch);
 end $$;
@@ -1719,8 +1723,8 @@ begin
       join event_members m on m.event_id = p.event_id and m.user_id = p.user_id
       join profiles pr     on pr.id = p.user_id
      where p.event_id = p_event and p.status = 'ready' and not p.hidden
-       and case when e.reveal_at is not null then now() >= e.reveal_at
-                else (not e.unlimited and m.shots_used >= e.max_shots) or not open_now(e) end
+       and (e.show_instantly or case when e.reveal_at is not null then now() >= e.reveal_at
+                else (not e.unlimited and m.shots_used >= e.max_shots) or not open_now(e) end)
      order by p.taken_at desc
      limit least(greatest(coalesce(p_limit, 300), 1), 500);
 end $$;

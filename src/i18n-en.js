@@ -529,6 +529,24 @@ export default {
   "{x}/hari": "{x}/day",
   "Setelah masa simpan, foto dihapus otomatis.": "Photos are deleted automatically when storage ends.",
 
+  // Kolase: ornamen baru dan teks
+  "Koran lama": "Old newspaper",
+  "Kamera retro": "Retro camera",
+  "Scrapbook & perangko": "Scrapbook & stamps",
+  "Nama acara": "Event name",
+  "Tanggal": "Date",
+  "Di kaki atau kop kolase": "In the footer or header of the collage",
+  "Tanggal acara, atau hari ini bila belum berjadwal": "Event date, or today if it isn't scheduled",
+  "EDISI KHUSUS": "SPECIAL EDITION",
+  "CETAKAN JEPRETIN": "PRINTED BY JEPRETIN",
+
+  // Foto langsung terlihat
+  "Jepretan tanpa batas. Foto langsung tampil di album.": "Unlimited shots. Photos appear in the album right away.",
+  "Foto langsung tampil di album. Sisa {n} jepretan.": "Photos appear in the album right away. {n} shots left.",
+  "Foto langsung masuk album": "Photos go straight to the album",
+  "Begitu dijepret, fotomu bisa dilihat di album.": "As soon as you shoot, your photo shows up in the album.",
+  "Belum ada foto. Foto tamu tampil di sini begitu dijepret.": "No photos yet. Guests' photos appear here as soon as they're taken.",
+
   // Pengajuan pembuat acara
   "Pengajuan pembuat acara sedang ditinjau": "Your host request is under review",
   "Pengajuan pembuat acara ditolak": "Your host request was declined",

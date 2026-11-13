@@ -198,6 +198,7 @@ export async function renderPanel(root, status, { reload, home }) {
           <label class="check"><input type="checkbox" name="allow_gallery" ${status.allow_gallery ? "checked" : ""}/> Tamu boleh mengunggah dari galeri</label>
           <label class="check"><input type="checkbox" name="allow_front" ${status.allow_front !== false ? "checked" : ""}/> Tamu boleh memakai kamera depan</label>
           <label class="check"><input type="checkbox" name="lock_until_start" ${status.lock_until_start ? "checked" : ""}/> Kamera baru aktif saat acara dimulai (tamu melihat hitung mundur)</label>
+          <label class="check"><input type="checkbox" name="show_instantly" ${status.show_instantly ? "checked" : ""}/> Foto tamu langsung terlihat di album (tanpa menunggu roll habis)</label>
           <fieldset class="collage-theme">
             <legend>Kolase tamu</legend>
             <label>Ornamen bawaan
@@ -437,6 +438,7 @@ export async function renderPanel(root, status, { reload, home }) {
       allow_gallery: f.allow_gallery.checked,
       allow_front: f.allow_front.checked,
       lock_until_start: f.lock_until_start.checked,
+      show_instantly: f.show_instantly.checked,
       allow_film_choice: f.allow_film_choice.checked,
       reveal_at: reveal,
       purge_at: f.purge_at.value ? new Date(f.purge_at.value + "T00:00").toISOString() : null,

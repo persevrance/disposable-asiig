@@ -28,13 +28,17 @@ async function fakePhoto(i) {
 }
 
 const ev = { event_id: "00000000-0000-0000-0000-000000000001", name: "Wisuda Angkatan 2026", starts_at: "2026-11-14T08:00:00+07:00" };
-const base = { layout: "auto", orn: "polos", bg: "krem", size: "feed", foot: true, stamp: false, logo: true };
+const base = { layout: "auto", orn: "polos", bg: "krem", size: "feed", name: true, date: true, stamp: false, logo: true };
 const CASES = [
   ["1×1 Feed", { ...base, layout: "1x1" }, 1, [1080, 1350]],
   ["2×2 + Roll film", { ...base, layout: "2x2", orn: "film" }, 4, [1080, 1350]],
   ["3×3 Story", { ...base, layout: "3x3", size: "story" }, 9, [1080, 1920]],
   ["Otomatis 5 + Polaroid + cap tanggal, Kotak", { ...base, orn: "polaroid", stamp: true, size: "square" }, 5, [1080, 1080]],
-  ["2×3 Konfeti, tanpa teks", { ...base, layout: "2x3", orn: "konfeti", foot: false }, 6, [1080, 1350]],
+  ["2×3 Konfeti, tanpa teks", { ...base, layout: "2x3", orn: "konfeti", name: false, date: false }, 6, [1080, 1350]],
+  ["2×2 Koran lama", { ...base, layout: "2x2", orn: "koran" }, 4, [1080, 1350]],
+  ["Otomatis 3 Kamera retro, Story", { ...base, orn: "kamera", size: "story" }, 3, [1080, 1920]],
+  ["2×3 Scrapbook & perangko, Kotak", { ...base, layout: "2x3", orn: "scrapbook", size: "square" }, 6, [1080, 1080]],
+  ["1×1 Scrapbook, hanya tanggal", { ...base, layout: "1x1", orn: "scrapbook", name: false }, 1, [1080, 1350]],
   ["1 + 2 Kartu acara di latar gelap", { ...base, layout: "1p2", orn: "kartu", bg: "gelap" }, 2, [1080, 1350]],
 ];
 
