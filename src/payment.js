@@ -32,10 +32,19 @@ async function payFetch(route, body) {
   const { data } = await supabase.auth.getSession();
   const tok = data.session?.access_token;
   if (!tok) throw new Error("BELUM_LOGIN");
-  const res = await fetch(`/api/pay/${route}`, {
+  const send = () => fetch(`/api/pay/${route}`, {
     method: "POST", headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+  // "Failed to fetch" = koneksi putus sebelum ada jawaban (mis. koneksi HTTP/2 lama yang
+  // sudah ditutup). Browser tidak mengulang POST sendiri; checkout dan status aman diulang
+  // karena start_order memakai ulang pesanan tertunda yang sama.
+  let res;
+  try { res = await send(); } catch (e) {
+    if (!(e instanceof TypeError)) throw e;
+    await new Promise((r) => setTimeout(r, 800));
+    res = await send();
+  }
   const out = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
   return out;
