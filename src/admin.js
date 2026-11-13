@@ -1688,6 +1688,13 @@ async function pengaturan(body) {
         <p class="hint">Dari <code>npx web-push generate-vapid-keys</code>. Kunci privat disimpan di Secrets Edge Function <code>notify-album</code>, bukan di sini.</p>
       </fieldset>
 
+      <fieldset><legend>Notifikasi email</legend>
+        <label class="check"><input type="checkbox" name="email_enabled" ${s.email_enabled ? "checked" : ""}/> Kirim notifikasi email</label>
+        <label>Batas email per hari
+          <input type="number" name="email_daily_cap" min="0" max="10000" value="${s.email_daily_cap ?? 90}" /></label>
+        <p class="hint">Kabar penting (pembayaran, foto disembunyikan otomatis, kapasitas ditutup) dikirim langsung. Kabar lain digabung jadi ringkasan per jam atau harian. Bila batas ini tercapai, ringkasan ditunda ke hari berikutnya; email langsung tetap terkirim. Resend gratis 100 email/hari. Pemasangan: README bagian 6.</p>
+      </fieldset>
+
       <fieldset><legend>Kamera</legend>
         <label class="check"><input type="checkbox" name="flash_enabled" ${s.flash_enabled ? "checked" : ""}/> Tampilkan tombol flash</label>
         <label class="check"><input type="checkbox" name="mirror_preview" ${s.mirror_preview ? "checked" : ""}/> Cerminkan jendela bidik kamera depan (seperti cermin)</label>
@@ -1720,6 +1727,8 @@ async function pengaturan(body) {
     mirror_photo: f.mirror_photo.checked,
     storage_backend: f.storage_backend.value,
     vapid_public_key: f.vapid_public_key.value.trim() || null,
+    email_enabled: f.email_enabled.checked,
+    email_daily_cap: Number(f.email_daily_cap.value),
   });
   // Tandai kuota yang dipakai foto baru, ikut pilihan lokasi
   const syncQuota = () => view.querySelectorAll("[data-quota]").forEach((l) => l.classList.toggle("active", l.dataset.quota === f.storage_backend.value));
@@ -1786,6 +1795,7 @@ const SETTING_DEFAULTS = {
   photo_max_side: 2560, jpeg_quality: 88, default_film: "senja",
   flash_enabled: true, mirror_preview: true, mirror_photo: false,
   storage_backend: "supabase", vapid_public_key: null,
+  email_enabled: false, email_daily_cap: 90,
 };
 const SETTING_LABELS = {
   max_shots_limit: "Maks. potretan per peserta", max_members_limit: "Maks. peserta per acara",
@@ -1794,6 +1804,7 @@ const SETTING_LABELS = {
   jpeg_quality: "Kualitas JPEG", default_film: "Efek film bawaan", flash_enabled: "Tombol flash",
   mirror_preview: "Cermin jendela bidik", mirror_photo: "Cermin hasil foto",
   storage_backend: "Lokasi foto baru", vapid_public_key: "Kunci VAPID",
+  email_enabled: "Notifikasi email", email_daily_cap: "Batas email per hari",
 };
 function settingText(k, v) {
   if (k === "storage_backend") return v === "r2" ? "Cloudflare R2" : "Supabase Storage";

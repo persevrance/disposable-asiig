@@ -19,7 +19,7 @@ drop policy if exists "suara: dengar"            on storage.objects;
 drop policy if exists "suara: hapus"             on storage.objects;
 
 drop view if exists stored_objects;
-drop table if exists orders, promo_codes, creation_waitlist, creator_requests, data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
+drop table if exists email_outbox, orders, promo_codes, creation_waitlist, creator_requests, data_requests, guestbook, album_watch, push_subscriptions, r2_objects,
   photo_reports, favorites, client_errors, downloads, audit_log, user_roles, app_settings,
   photos, event_members, event_invites, events, event_creators, profiles cascade;
 
@@ -82,5 +82,10 @@ drop function if exists
   event_orders(uuid), admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text),
   -- buat acara v2
-  valid_slug(text), slug_available(text, uuid), resolve_slug(text)
+  valid_slug(text), slug_available(text, uuid), resolve_slug(text),
+  -- notifikasi email
+  superadmin_emails(), user_email(uuid), email_kick(text), queue_email(text, text, text, text, jsonb),
+  trg_email_orders(), trg_email_reports(), trg_email_events(), trg_email_creator_requests(),
+  trg_email_data_requests(), trg_email_capacity(), email_flush(text), email_sent_today(),
+  claim_emails(text, int), finish_emails(bigint[], jsonb)
 cascade;

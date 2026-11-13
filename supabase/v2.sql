@@ -1342,6 +1342,8 @@ begin
     keep_flat           = coalesce((p_patch->>'keep_flat')::int, keep_flat),
     keep_max_days       = coalesce((p_patch->>'keep_max_days')::int, keep_max_days),
     photo_mb_estimate   = coalesce((p_patch->>'photo_mb_estimate')::numeric, photo_mb_estimate),
+    email_enabled       = coalesce((p_patch->>'email_enabled')::boolean, email_enabled),
+    email_daily_cap     = coalesce((p_patch->>'email_daily_cap')::int, email_daily_cap),
     updated_at = now(), updated_by = auth.uid()
   where id;
   perform log_audit('ubah_pengaturan', null, p_patch);
@@ -3031,6 +3033,327 @@ do $$ begin
       r2_migration_batch(int), due_waitlist_notifications(), mark_waitlist_notified(uuid[]),
       set_order_snap(text, text, text), midtrans_notify(text, text, text, text, numeric),
       apply_order_paid(text, text) to service_role;
+  end if;
+end $$;
+
+-- ---------- Notifikasi email (pola outbox) ---------------------------
+-- Trigger menaruh kabar di email_outbox. Prioritas:
+--   urgent  langsung dikirim (pg_net memanggil Edge Function send-email setelah transaksi selesai)
+--   hourly  digabung jadi ringkasan per jam per penerima (pg_cron)
+--   daily   digabung jadi ringkasan harian 07.00 WIB (pg_cron)
+-- Semua mati sampai app_settings.email_enabled dinyalakan. Rahasia (URL fungsi, CRON_SECRET)
+-- disimpan di Supabase Vault, bukan di file ini; lihat supabase/cron.sql.
+
+alter table app_settings
+  add column if not exists email_enabled boolean not null default false,
+  -- Pengaman kuota penyedia email (Resend gratis 100/hari): ringkasan ditunda bila sudah
+  -- sebanyak ini email terkirim hari ini (WIB). Email urgent selalu lolos.
+  add column if not exists email_daily_cap int not null default 90
+    check (email_daily_cap between 0 and 10000);
+
+create table if not exists email_outbox (
+  id           bigserial primary key,
+  kind         text not null,
+  recipient    text not null check (recipient = lower(trim(recipient)) and recipient like '%_@_%'),
+  priority     text not null check (priority in ('urgent', 'hourly', 'daily')),
+  dedupe_key   text not null unique,
+  payload      jsonb not null default '{}',
+  created_at   timestamptz not null default now(),
+  locked_at    timestamptz,               -- sedang diproses Edge Function
+  sent_at      timestamptz,
+  cancelled_at timestamptz,               -- digantikan kabar urgent
+  attempts     int not null default 0,
+  last_error   text
+);
+create index if not exists email_outbox_due on email_outbox (priority, created_at)
+  where sent_at is null and cancelled_at is null;
+alter table email_outbox enable row level security;   -- tanpa policy: hanya fungsi definer/service role
+
+create or replace function superadmin_emails() returns setof text
+language sql stable security definer set search_path = public as $$
+  select email from user_roles where role = 'superadmin';
+$$;
+
+create or replace function user_email(p_user uuid) returns text
+language sql stable security definer set search_path = public as $$
+  select lower(email) from auth.users where id = p_user;
+$$;
+
+-- Panggil Edge Function send-email lewat pg_net (asinkron; permintaan baru berangkat setelah
+-- transaksi commit). Diam-diam tidak melakukan apa pun bila pg_net/Vault/rahasia belum ada.
+create or replace function email_kick(p_priority text) returns boolean
+language plpgsql security definer set search_path = public as $$
+declare v_url text; v_secret text;
+begin
+  if not exists (select 1 from pg_extension where extname = 'pg_net')
+     or not exists (select 1 from pg_extension where extname = 'supabase_vault') then
+    return false;
+  end if;
+  execute $q$ select (select decrypted_secret from vault.decrypted_secrets where name = 'email_fn_url'),
+                     (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret') $q$
+    into v_url, v_secret;
+  if v_url is null or v_secret is null then return false; end if;
+  execute 'select net.http_post(url := $1, headers := $2, body := $3)'
+    using v_url, jsonb_build_object('Content-Type', 'application/json', 'x-cron-secret', v_secret),
+          jsonb_build_object('priority', p_priority);
+  return true;
+exception when others then
+  return false;
+end $$;
+
+-- Taruh satu kabar. Kunci dedupe mencegah email ganda; kabar yang belum terkirim diperbarui
+-- isinya (mis. jumlah laporan terbaru). Urgent memicu pengiriman sekali per transaksi.
+create or replace function queue_email(p_kind text, p_to text, p_priority text, p_key text,
+                                       p_payload jsonb default '{}')
+returns boolean
+language plpgsql security definer set search_path = public as $$
+declare v_to text := lower(trim(coalesce(p_to, ''))); v_new boolean;
+begin
+  if v_to not like '%_@_%' or p_key is null then return false; end if;
+  if not coalesce((select email_enabled from app_settings), false) then return false; end if;
+  insert into email_outbox (kind, recipient, priority, dedupe_key, payload)
+  values (p_kind, v_to, p_priority, p_key, coalesce(p_payload, '{}'))
+  on conflict (dedupe_key) do update set payload = excluded.payload
+    where email_outbox.sent_at is null and email_outbox.locked_at is null
+          and email_outbox.cancelled_at is null
+  returning (xmax = 0) into v_new;
+  if coalesce(v_new, false) and p_priority = 'urgent'
+     and coalesce(current_setting('app.email_kicked', true), '') <> '1' then
+    perform set_config('app.email_kicked', '1', true);
+    perform email_kick('urgent');
+  end if;
+  return coalesce(v_new, false);
+end $$;
+
+-- ----- Trigger: pemetaan kejadian -> penerima + prioritas -----
+
+-- Pembayaran lunas: bukti bayar langsung ke pembayar, rekap harian ke superadmin.
+-- Refund: langsung ke pembayar dan superadmin.
+create or replace function trg_email_orders() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_to text := user_email(new.user_id); a text;
+        v_p jsonb := jsonb_build_object('order', new.id, 'event_id', new.event_id, 'event_name', new.event_name,
+          'amount', new.amount, 'kind', new.kind, 'guests', new.guests, 'shots', new.shots,
+          'unlimited', new.unlimited, 'keep_days', new.keep_days, 'payment_type', new.payment_type,
+          'at', now());
+begin
+  if new.status = 'paid' then
+    perform queue_email('payment_paid', v_to, 'urgent', 'paid:' || new.id, v_p);
+    for a in select superadmin_emails() loop
+      perform queue_email('payment_paid_admin', a, 'daily', 'paid-admin:' || new.id || ':' || a, v_p);
+    end loop;
+  elsif new.status = 'refunded' then
+    perform queue_email('payment_refunded', v_to, 'urgent', 'refund:' || new.id, v_p);
+    for a in select superadmin_emails() loop
+      perform queue_email('payment_refunded_admin', a, 'urgent', 'refund-admin:' || new.id || ':' || a, v_p);
+    end loop;
+  end if;
+  return null;
+end $$;
+drop trigger if exists email_orders on orders;
+create trigger email_orders after update of status on orders
+  for each row when (new.status is distinct from old.status and new.status in ('paid', 'refunded'))
+  execute function trg_email_orders();
+
+-- Laporan foto: per jam ke pemilik acara, harian ke superadmin. Begitu foto disembunyikan
+-- otomatis (>= 3 laporan terbuka) kabar langsung ke pemilik + superadmin, dan ringkasan
+-- laporan foto itu yang belum terkirim dibatalkan.
+create or replace function trg_email_reports() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_n int; v_owner text; v_name text; a text; v_p jsonb;
+        v_day text := to_char(now() at time zone 'Asia/Jakarta', 'YYYYMMDD');
+begin
+  select user_email(e.owner_id), e.name into v_owner, v_name from events e where e.id = new.event_id;
+  select count(*) into v_n from photo_reports where photo_id = new.photo_id and resolved_at is null;
+  v_p := jsonb_build_object('event_id', new.event_id, 'event_name', v_name, 'photo_id', new.photo_id,
+                            'reason', new.reason, 'note', new.note, 'reports', v_n, 'at', now());
+  if v_n >= 3 then
+    update email_outbox set cancelled_at = now()
+     where dedupe_key like 'report:' || new.photo_id || ':%'
+       and sent_at is null and cancelled_at is null and locked_at is null;
+    perform queue_email('photo_hidden', v_owner, 'urgent', 'hidden:' || new.photo_id || ':' || v_owner || ':' || v_day, v_p);
+    for a in select superadmin_emails() loop
+      perform queue_email('photo_hidden', a, 'urgent', 'hidden:' || new.photo_id || ':' || a || ':' || v_day, v_p);
+    end loop;
+  elsif not exists (select 1 from email_outbox where dedupe_key like 'hidden:' || new.photo_id || ':%:' || v_day) then
+    perform queue_email('photo_report', v_owner, 'hourly', 'report:' || new.photo_id || ':' || v_owner || ':' || v_day, v_p);
+    for a in select superadmin_emails() loop
+      perform queue_email('photo_report', a, 'daily', 'report:' || new.photo_id || ':' || a || ':' || v_day, v_p);
+    end loop;
+  end if;
+  return null;
+end $$;
+drop trigger if exists email_reports on photo_reports;
+create trigger email_reports after insert on photo_reports
+  for each row execute function trg_email_reports();
+
+-- Acara baru: rekap harian ke superadmin (kecuali acara milik superadmin sendiri).
+-- Masuk "Perlu ditinjau": ringkasan per jam.
+create or replace function trg_email_events() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare v_owner text := user_email(new.owner_id); a text; v_p jsonb;
+        v_day text := to_char(now() at time zone 'Asia/Jakarta', 'YYYYMMDD');
+begin
+  if v_owner in (select superadmin_emails()) then return null; end if;
+  v_p := jsonb_build_object('event_id', new.id, 'event_name', new.name, 'owner_email', v_owner,
+                            'guests', new.max_members, 'shots', new.max_shots, 'unlimited', new.unlimited,
+                            'pay_status', new.pay_status, 'starts_at', new.starts_at, 'at', now());
+  for a in select superadmin_emails() loop
+    if tg_op = 'INSERT' then
+      perform queue_email('event_created', a, 'daily', 'event:' || new.id || ':' || a, v_p);
+    end if;
+    if new.needs_review then
+      perform queue_email('event_review', a, 'hourly', 'review:' || new.id || ':' || a || ':' || v_day, v_p);
+    end if;
+  end loop;
+  return null;
+end $$;
+drop trigger if exists email_events_ins on events;
+create trigger email_events_ins after insert on events
+  for each row execute function trg_email_events();
+drop trigger if exists email_events_review on events;
+create trigger email_events_review after update of needs_review on events
+  for each row when (new.needs_review and not old.needs_review)
+  execute function trg_email_events();
+
+-- Pengajuan pembuat acara: per jam ke superadmin; keputusannya langsung ke pemohon.
+create or replace function trg_email_creator_requests() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare a text;
+begin
+  if tg_op = 'INSERT' then
+    for a in select superadmin_emails() loop
+      perform queue_email('creator_request', a, 'hourly', 'creq:' || new.id || ':' || a,
+        jsonb_build_object('id', new.id, 'email', new.email, 'phone', new.phone, 'event_name', new.event_name,
+                           'event_date', new.event_date, 'guests', new.guests, 'note', new.note, 'at', now()));
+    end loop;
+  else
+    perform queue_email('creator_decision', new.email, 'urgent', 'creq-done:' || new.id,
+      jsonb_build_object('id', new.id, 'status', new.status, 'reply', new.reply, 'event_name', new.event_name));
+  end if;
+  return null;
+end $$;
+drop trigger if exists email_creator_requests_ins on creator_requests;
+create trigger email_creator_requests_ins after insert on creator_requests
+  for each row execute function trg_email_creator_requests();
+drop trigger if exists email_creator_requests_done on creator_requests;
+create trigger email_creator_requests_done after update of status on creator_requests
+  for each row when (old.status = 'open' and new.status in ('approved', 'rejected'))
+  execute function trg_email_creator_requests();
+
+-- Permintaan hapus data (UU PDP): per jam ke superadmin.
+create or replace function trg_email_data_requests() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare a text; v_p jsonb;
+begin
+  v_p := jsonb_build_object('id', new.id, 'kind', new.kind, 'email', new.email, 'note', new.note,
+                            'event_name', (select name from events where id = new.event_id), 'at', now());
+  for a in select superadmin_emails() loop
+    perform queue_email('data_request', a, 'hourly', 'dreq:' || new.id || ':' || a, v_p);
+  end loop;
+  return null;
+end $$;
+drop trigger if exists email_data_requests on data_requests;
+create trigger email_data_requests after insert on data_requests
+  for each row execute function trg_email_data_requests();
+
+-- Pengaman kapasitas: tutup otomatis = langsung; batasi otomatis = ringkasan per jam.
+create or replace function trg_email_capacity() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare a text; v_key text := coalesce(extract(epoch from new.creation_changed_at)::bigint::text, '0');
+        v_p jsonb := jsonb_build_object('mode', new.creation_mode, 'message', new.creation_message, 'at', now());
+begin
+  for a in select superadmin_emails() loop
+    if new.creation_mode = 'closed' then
+      perform queue_email('capacity_closed', a, 'urgent', 'cap:' || v_key || ':' || a, v_p);
+    elsif new.creation_mode = 'limited' then
+      perform queue_email('capacity_limited', a, 'hourly', 'cap:' || v_key || ':' || a, v_p);
+    end if;
+  end loop;
+  return null;
+end $$;
+drop trigger if exists email_capacity on app_settings;
+create trigger email_capacity after update of creation_mode on app_settings
+  for each row when (new.creation_mode_auto and new.creation_mode is distinct from old.creation_mode)
+  execute function trg_email_capacity();
+
+-- ----- Dipakai pg_cron dan Edge Function send-email -----
+
+-- pg_cron: panggil Edge Function HANYA bila ada kabar tertunda untuk prioritas ini.
+-- Ringkasan harian sekaligus membersihkan baris lama (> 30 hari).
+create or replace function email_flush(p_priority text) returns boolean
+language plpgsql security definer set search_path = public as $$
+begin
+  if p_priority = 'daily' then
+    delete from email_outbox where created_at < now() - interval '30 days'
+       and (sent_at is not null or cancelled_at is not null or attempts >= 5);
+  end if;
+  if not exists (select 1 from email_outbox
+                  where priority = p_priority and sent_at is null and cancelled_at is null and attempts < 5
+                    and (locked_at is null or locked_at < now() - interval '10 minutes')) then
+    return false;
+  end if;
+  return email_kick(p_priority);
+end $$;
+
+-- Jumlah email yang sudah terkirim hari ini (WIB). Satu ringkasan = satu email
+-- (baris sepenerima yang diselesaikan bersamaan berbagi sent_at); urgent dihitung per baris.
+create or replace function email_sent_today() returns int
+language sql stable security definer set search_path = public as $$
+  select count(distinct (recipient, sent_at, case when priority = 'urgent' then id end))::int
+    from email_outbox
+   where sent_at >= (date_trunc('day', now() at time zone 'Asia/Jakarta') at time zone 'Asia/Jakarta');
+$$;
+
+-- Ambil kabar untuk dikirim (dikunci 10 menit). Ringkasan dibatasi email_daily_cap:
+-- maksimal sebanyak sisa jatah penerima per panggilan. Urgent tidak dibatasi.
+create or replace function claim_emails(p_priority text, p_limit int default 200)
+returns setof email_outbox
+language plpgsql security definer set search_path = public as $$
+declare v_room int := 1000000;
+begin
+  if p_priority <> 'urgent' then
+    v_room := greatest((select email_daily_cap from app_settings) - email_sent_today(), 0);
+    if v_room = 0 then return; end if;
+  end if;
+  return query
+    update email_outbox o set locked_at = now(), attempts = o.attempts + 1
+     where o.id in (
+       select d.id from email_outbox d
+        where d.priority = p_priority and d.sent_at is null and d.cancelled_at is null and d.attempts < 5
+          and (d.locked_at is null or d.locked_at < now() - interval '10 minutes')
+          and d.recipient in (
+            select r.recipient from email_outbox r
+             where r.priority = p_priority and r.sent_at is null and r.cancelled_at is null and r.attempts < 5
+               and (r.locked_at is null or r.locked_at < now() - interval '10 minutes')
+             group by r.recipient order by min(r.created_at) limit v_room)
+        order by d.created_at
+        limit greatest(coalesce(p_limit, 200), 1)
+        for update skip locked)
+    returning o.*;
+end $$;
+
+-- Hasil pengiriman: p_sent = id terkirim, p_failed = {"<id>": "pesan galat"} (dicoba lagi nanti).
+create or replace function finish_emails(p_sent bigint[], p_failed jsonb default '{}') returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  update email_outbox set sent_at = now(), locked_at = null, last_error = null
+   where id = any(coalesce(p_sent, '{}'));
+  update email_outbox o set locked_at = null, last_error = left(f.value, 500)
+    from jsonb_each_text(coalesce(p_failed, '{}')) f
+   where o.id = f.key::bigint;
+end $$;
+
+revoke execute on function
+  superadmin_emails(), user_email(uuid), email_kick(text), queue_email(text, text, text, text, jsonb),
+  trg_email_orders(), trg_email_reports(), trg_email_events(), trg_email_creator_requests(),
+  trg_email_data_requests(), trg_email_capacity(), email_flush(text), email_sent_today(),
+  claim_emails(text, int), finish_emails(bigint[], jsonb)
+from public, anon, authenticated;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function claim_emails(text, int), finish_emails(bigint[], jsonb), email_flush(text)
+      to service_role;
   end if;
 end $$;
 

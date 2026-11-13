@@ -786,6 +786,68 @@ for (const id of [kEv, uEv, capEv]) await as("admin", `select delete_event($1)`,
 await as("admin", `select admin_set_settings($1)`, [{ max_shots_limit: 100 }]);
 await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: false }]);
 
+// ---------- Notifikasi email (outbox) ----------
+const outbox = async (where = "true") => (await db.query(`select * from email_outbox where ${where} order by id`)).rows;
+const mailPhoto = (await db.query(`insert into photos (event_id, user_id, seq, client_shot_id, status, file_path, thumb_path)
+  values ($1, $2, 99, gen_random_uuid(), 'ready', 'mail/full.jpg', 'mail/thumb.jpg') returning id`, [ev, U.d[0]])).rows[0].id;
+const rep = (await db.query(`select id from profiles order by id limit 3`)).rows.map((r) => r.id);
+await db.exec(`delete from photo_reports where photo_id = '${mailPhoto}'`);
+await db.query(`insert into photo_reports (photo_id, event_id, reporter_id, reason) values ($1, $2, $3, 'privasi')`, [mailPhoto, ev, rep[0]]);
+ok((await outbox()).length === 0, "email: sakelar mati -> outbox kosong");
+await expectErr("host", `select admin_set_settings('{"email_enabled": true}')`, [], "BUKAN_SUPERADMIN");
+await as("admin", `select admin_set_settings('{"email_enabled": true, "email_daily_cap": 90}')`);
+await db.exec(`delete from photo_reports where photo_id = '${mailPhoto}'`);
+// laporan pertama: per jam ke pemilik, harian ke superadmin
+await db.query(`insert into photo_reports (photo_id, event_id, reporter_id, reason) values ($1, $2, $3, 'privasi')`, [mailPhoto, ev, rep[0]]);
+let ob = await outbox(`kind = 'photo_report'`);
+ok(ob.length === 2 && ob.find((r) => r.recipient === "host@x.id")?.priority === "hourly"
+   && ob.find((r) => r.recipient === "admin@x.id")?.priority === "daily", "email: laporan -> hourly pemilik + daily superadmin");
+await db.query(`insert into photo_reports (photo_id, event_id, reporter_id, reason) values ($1, $2, $3, 'lainnya')`, [mailPhoto, ev, rep[1]]);
+ob = await outbox(`kind = 'photo_report'`);
+ok(ob.length === 2 && ob.every((r) => r.payload.reports === 2), "email: laporan kedua memperbarui isi, tanpa baris baru");
+await db.query(`insert into photo_reports (photo_id, event_id, reporter_id, reason) values ($1, $2, $3, 'tidak_pantas')`, [mailPhoto, ev, rep[2]]);
+ob = await outbox(`kind = 'photo_hidden'`);
+ok(ob.length === 2 && ob.every((r) => r.priority === "urgent"), "email: 3 laporan -> urgent ke pemilik + superadmin");
+ok((await outbox(`kind = 'photo_report'`)).every((r) => r.cancelled_at), "email: ringkasan laporan foto itu dibatalkan");
+// pembayaran lunas: urgent ke pembayar, daily ke superadmin; dedupe
+await db.query(`insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, amount, expires_at)
+                values ('JPR-20261113-EMAIL1', $1, $2, 'Nikahan', 'upgrade', 70, 2, 50000, 50000, now() + interval '1 hour')`, [ev, U.host[0]]);
+await db.exec(`select apply_order_paid('JPR-20261113-EMAIL1', 'qris')`);
+await db.exec(`select apply_order_paid('JPR-20261113-EMAIL1', 'qris')`);
+ok((await outbox(`kind = 'payment_paid' and recipient = 'host@x.id' and priority = 'urgent'`)).length === 1, "email: lunas -> satu urgent ke pembayar");
+ok((await outbox(`kind = 'payment_paid_admin' and priority = 'daily'`)).length === 1, "email: lunas -> daily superadmin");
+await db.exec(`update orders set status = 'refunded' where id = 'JPR-20261113-EMAIL1'`);
+ok((await outbox(`kind in ('payment_refunded', 'payment_refunded_admin') and priority = 'urgent'`)).length === 2, "email: refund -> urgent pembayar + superadmin");
+// pengajuan pembuat acara dan permintaan hapus data
+const crE = (await db.query(`insert into creator_requests (user_id, email, phone, event_name) values (null, 'c@x.id', '6281234567890', 'Reuni') returning id`)).rows[0].id;
+ok((await outbox(`kind = 'creator_request' and priority = 'hourly'`)).length === 1, "email: pengajuan -> hourly superadmin");
+await db.query(`update creator_requests set status = 'rejected', reply = 'Kurang data' where id = $1`, [crE]);
+ok((await outbox(`kind = 'creator_decision' and recipient = 'c@x.id' and priority = 'urgent'`)).length === 1, "email: keputusan pengajuan -> urgent pemohon");
+await db.query(`insert into data_requests (user_id, email, kind) values (null, 'c@x.id', 'account')`);
+ok((await outbox(`kind = 'data_request' and priority = 'hourly'`)).length === 1, "email: hapus data -> hourly superadmin");
+// acara baru milik non-superadmin -> daily; kapasitas tutup otomatis -> urgent
+const evMail = (await as("host", `select create_event('Acara Email', 2) id`))[0].id;
+ok((await outbox(`kind = 'event_created' and payload->>'event_id' = '${evMail}'`)).length === 1, "email: acara baru -> daily superadmin");
+await db.exec(`update app_settings set creation_mode = 'closed', creation_mode_auto = true, creation_changed_at = now()`);
+ok((await outbox(`kind = 'capacity_closed' and priority = 'urgent'`)).length === 1, "email: kapasitas ditutup otomatis -> urgent");
+await db.exec(`update app_settings set creation_mode = 'open', creation_mode_auto = false`);
+// klaim: tidak ganda, batas harian hanya menahan ringkasan
+const u1 = (await db.query(`select * from claim_emails('urgent', 50)`)).rows;
+ok(u1.length >= 5 && (await db.query(`select * from claim_emails('urgent', 50)`)).rows.length === 0, "email: klaim urgent tidak ganda");
+await db.query(`select finish_emails($1, $2)`, [u1.slice(1).map((r) => r.id), { [u1[0].id]: "galat uji" }]);
+ok((await outbox(`id = ${u1[0].id}`))[0].last_error === "galat uji" && !(await outbox(`id = ${u1[0].id}`))[0].locked_at, "email: gagal dicatat dan dilepas");
+await db.exec(`update app_settings set email_daily_cap = 0`);
+ok((await db.query(`select * from claim_emails('hourly')`)).rows.length === 0, "email: batas harian menahan ringkasan");
+ok((await db.query(`select * from claim_emails('urgent')`)).rows.length === 1, "email: urgent tetap lolos batas harian");
+await db.exec(`update app_settings set email_daily_cap = 90`);
+const h1 = (await db.query(`select * from claim_emails('hourly')`)).rows;
+ok(h1.length === 2 && h1.every((r) => r.priority === "hourly"), "email: klaim ringkasan per jam");
+ok((await db.query(`select email_flush('daily') v`)).rows[0].v === false, "email: flush tanpa pg_net aman");
+await expectErr("c", `select * from claim_emails('urgent')`, [], "permission denied");
+await expectErr("c", `select queue_email('x', 'c@x.id', 'urgent', 'k')`, [], "permission denied");
+await as("host", `select delete_event($1)`, [evMail]);
+await as("admin", `select admin_set_settings('{"email_enabled": false}')`);
+
 await as("host", `select delete_event($1)`, [ev]);
 ok((await db.query(`select count(*)::int n from photos`)).rows[0].n === 0, "delete_event cascades");
 

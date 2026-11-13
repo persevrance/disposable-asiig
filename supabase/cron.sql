@@ -37,6 +37,22 @@ select cron.schedule(
 select cron.unschedule(jobid) from cron.job where jobname = 'pengaman-kapasitas';
 select cron.schedule('pengaman-kapasitas', '*/5 * * * *', $$ select capacity_tick(); $$);
 
+-- ---------------------------------------------------------------------
+-- Notifikasi email (Edge Function send-email, lihat README "Notifikasi email").
+-- 1) Simpan URL fungsi dan CRON_SECRET di Vault (sekali saja; ganti nilai <...>):
+--      select vault.create_secret('https://<PROJECT-REF>.supabase.co/functions/v1/send-email', 'email_fn_url');
+--      select vault.create_secret('<CRON-SECRET>', 'cron_secret');
+--    Mengganti nilai: select vault.update_secret(id, '<nilai baru>') from vault.secrets where name = 'cron_secret';
+-- 2) Jadwal di bawah tidak memuat rahasia. email_flush hanya memanggil Edge Function
+--    bila ada kabar tertunda, jadi jadwal yang sepi tidak memakan kuota.
+-- Email urgent dikirim langsung oleh trigger; jadwal 5 menit hanya mengulang yang gagal.
+select cron.unschedule(jobid) from cron.job
+ where jobname in ('email-urgent-ulang', 'email-ringkasan-jam', 'email-ringkasan-hari');
+select cron.schedule('email-urgent-ulang',   '*/5 * * * *', $$ select email_flush('urgent'); $$);
+select cron.schedule('email-ringkasan-jam',  '0 * * * *',   $$ select email_flush('hourly'); $$);
+-- Setiap hari pukul 07.00 WIB (00.00 UTC)
+select cron.schedule('email-ringkasan-hari', '0 0 * * *',   $$ select email_flush('daily'); $$);
+
 -- Cek jadwal:            select * from cron.job;
 -- Cek hasil terakhir:    select * from cron.job_run_details order by start_time desc limit 5;
 -- Uji sekarang (tanpa menunggu jadwal): jalankan isi blok select net.http_post(...) di atas,

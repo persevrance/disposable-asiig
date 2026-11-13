@@ -112,6 +112,48 @@ Tes: `npm run test:sql` (harga, pesanan, webhook di database) dan `npm run test:
 dengan Midtrans tiruan: tanda tangan, cek ulang status, Snap), serta `npm run test:r2` (bundel
 thumbnail dan URL foto stabil di Worker).
 
+### 6. Notifikasi email
+
+Trigger database menaruh kabar di tabel `email_outbox`. Edge Function `send-email` mengirimnya
+lewat [Resend](https://resend.com) (gratis 100 email/hari, 3.000/bulan). Kuota Worker Cloudflare
+tidak terpakai sama sekali.
+
+| Kejadian | Penerima | Kapan |
+|---|---|---|
+| Pembayaran lunas | Pembayar (bukti bayar) | langsung |
+| Pembayaran lunas | Superadmin | ringkasan harian |
+| Refund | Pembayar + superadmin | langsung |
+| Laporan foto (1–2 laporan) | Pemilik acara / superadmin | ringkasan per jam / harian |
+| Foto disembunyikan otomatis (3 laporan) | Pemilik acara + superadmin | langsung |
+| Acara baru (bukan milik superadmin) | Superadmin | ringkasan harian |
+| Acara perlu ditinjau | Superadmin | ringkasan per jam |
+| Pengajuan pembuat acara | Superadmin | ringkasan per jam |
+| Keputusan pengajuan | Pemohon | langsung |
+| Permintaan hapus data | Superadmin | ringkasan per jam |
+| Kapasitas: ditutup otomatis / dibatasi otomatis | Superadmin | langsung / per jam |
+
+Ringkasan berisi satu email per penerima. Ringkasan per jam dikirim tiap jam, ringkasan harian
+pukul 07.00 WIB. Bila hari itu sudah terkirim sebanyak **Batas email per hari**, ringkasan ditunda
+ke hari berikutnya, sedangkan email langsung tetap terkirim.
+
+1. Jalankan ulang `supabase/v2.sql`.
+2. Resend: daftar, verifikasi domain pengirim (catatan DNS di Cloudflare), buat API key.
+3. Supabase -> Edge Functions -> deploy `supabase/functions/send-email` (atau
+   `npx supabase functions deploy send-email --no-verify-jwt`), lalu matikan **Verify JWT**.
+4. Edge Functions -> Secrets: `RESEND_API_KEY`, `EMAIL_FROM` (mis. `TitipPotret <notifikasi@domain-anda.id>`),
+   `APP_URL` (mis. `https://domain-anda.id`), dan `CRON_SECRET` (sama dengan purge-events).
+5. SQL Editor: simpan URL fungsi dan `CRON_SECRET` di Vault, lalu pasang tiga jadwal email.
+   Keduanya ada di bagian "Notifikasi email" pada `supabase/cron.sql`.
+6. Dashboard -> Pengaturan -> **Notifikasi email**: nyalakan sakelarnya. Selama mati, tidak ada
+   kabar yang diantrekan.
+7. Uji: laporkan satu foto dari tiga akun, atau selesaikan satu pembayaran sandbox. Email langsung
+   tiba dalam beberapa detik. Periksa antrean dan hasil pemanggilan:
+   ```sql
+   select id, kind, recipient, priority, sent_at, attempts, last_error from email_outbox order by id desc limit 20;
+   select status_code, content from net._http_response order by created desc limit 5;
+   ```
+   Email yang gagal dicoba lagi (urgent tiap 5 menit, ringkasan pada jadwal berikutnya), paling banyak 5 kali.
+
 ## Uji di HP (daftar periksa)
 
 - [ ] Login Google di Android (Chrome) dan iPhone (Safari).

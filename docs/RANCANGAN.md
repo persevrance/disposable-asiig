@@ -125,7 +125,7 @@ Jalankan ulang `supabase/v2.sql`; untuk R2 dan notifikasi ikuti README bagian 1c
 - [x] Bahasa Inggris untuk layar tamu (`src/i18n.js`), deteksi otomatis + tombol ID/EN
 - [x] Permintaan hapus foto / akun (UU PDP): `data_requests`, tab Privasi superadmin
 - [x] Ekspor CSV: log, daftar acara, laporan peserta per acara
-- Email ditunda (notifikasi cukup lewat push)
+- [x] Notifikasi email (pola outbox): trigger mengisi `email_outbox` dengan prioritas urgent / hourly / daily; urgent langsung memanggil Edge Function `send-email` lewat pg_net (sekali per transaksi), sedangkan ringkasan per jam dan harian (07.00 WIB) dikirim pg_cron lewat `email_flush`, dan Edge Function hanya dipanggil bila ada kabar tertunda. Satu ringkasan per penerima, kunci dedupe mencegah email ganda, foto yang disembunyikan otomatis membatalkan ringkasan laporannya. Batas harian (`app_settings.email_daily_cap`) hanya menahan ringkasan. Sakelar `email_enabled` di Pengaturan. Pemetaan kejadian ada di README bagian 6.
 
 ## Catatan storage
 
