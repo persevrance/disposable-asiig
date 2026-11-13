@@ -167,9 +167,9 @@ async function renderJoin(code) {
         ${ev?.is_open && ev.lock_until_start && ev.starts_at && new Date(ev.starts_at) > new Date()
           ? `<p class="join-wait">${ICON.clock}<span>${t("Kamera aktif dalam")} <b></b></span></p>` : ""}
         <ul class="join-rules">
-          <li><span class="jr-ic coral jr-num">${ev?.unlimited ? "∞" : ev ? ev.max_shots : ICON.film}</span><div><b>${ev?.unlimited ? t("Jepretan tanpa batas") : ev ? t("{n} jepretan untukmu", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Nggak bisa dihapus, nggak bisa diulang.")}</span></div></li>
+          <li><span class="jr-ic coral jr-num">${ev?.unlimited ? "∞" : ev ? ev.max_shots : ICON.film}</span><div><b>${ev?.unlimited ? t("Potretan tanpa batas") : ev ? t("{n} potretan untukmu", { n: ev.max_shots }) : t("Potretan terbatas")}</b><span>${t("Nggak bisa dihapus, nggak bisa diulang.")}</span></div></li>
           ${ev?.show_instantly
-            ? `<li><span class="jr-ic sun">${ICON.clock}</span><div><b>${t("Foto langsung masuk album")}</b><span>${t("Begitu dijepret, fotomu bisa dilihat di album.")}</span></div></li>`
+            ? `<li><span class="jr-ic sun">${ICON.clock}</span><div><b>${t("Foto langsung masuk album")}</b><span>${t("Begitu dipotret, fotomu bisa dilihat di album.")}</span></div></li>`
             : `<li><span class="jr-ic sun">${ICON.clock}</span><div><b>${t("Hasil terlihat setelah film habis")}</b><span>${t("Seperti kamera film, fotonya dicuci dulu.")}</span></div></li>`}
           ${ev?.album_private
             ? `<li><span class="jr-ic mint">${ICON.lock}</span><div><b>${t("Album khusus penyelenggara")}</b><span>${t("Kamu melihat fotomu sendiri; semua foto dikumpulkan untuk penyelenggara.")}</span></div></li>`
@@ -323,7 +323,7 @@ async function renderHome() {
       const photos = ev.photos ? ` · ${t("{n} foto", { n: ev.photos })}` : "";
       const sub = ev.is_owner && !ev.shots_used ? t("Acara Anda") + photos
         : !ev.is_open ? t("Album terbuka") + photos
-        : left > 0 ? t("{n} jepretan tersisa", { n: left }) : t("Film habis · lihat album");
+        : left > 0 ? t("{n} potretan tersisa", { n: left }) : t("Film habis · lihat album");
       const tag = ev.is_open ? `<span class="tag ok">${t("Berlangsung")}</span>` : `<span class="tag hot">${t("Album")}</span>`;
       const thumb = ev.cover_path
         ? `<span class="he-thumb has-cover" style="background-image:url('${esc(coverUrl(ev.cover_path))}')" aria-hidden="true"></span>`
@@ -355,7 +355,7 @@ function renderPayGate(status) {
           <ul class="pg-list">
             <li>${ICON.people}<span>Tamu belum bisa bergabung lewat QR atau kode undangan.</span></li>
             <li>${ICON.camera}<span>Kamera, album, dan Panel acara terkunci sampai lunas.</span></li>
-            <li>${ICON.check}<span>Pengaturan acaramu aman tersimpan (${status.max_members} tamu × ${status.max_shots} jepretan).</span></li>
+            <li>${ICON.check}<span>Pengaturan acaramu aman tersimpan (${status.max_members} tamu × ${status.max_shots} potretan).</span></li>
           </ul>
           <div class="pg-actions">
             <button type="button" class="btn primary" data-act="pay">Selesaikan pembayaran</button>

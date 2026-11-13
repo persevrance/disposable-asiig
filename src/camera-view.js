@@ -13,7 +13,7 @@ import { el, esc, toast, confetti, fmtDate, fmtCountdown, liveCountdown, ICON, b
 import { t } from "./i18n.js";
 
 // Gulungan film untuk layar "Film habis"
-const ROLL_ART = `<svg width="84" height="84" viewBox="0 0 64 64" aria-hidden="true"><circle cx="26" cy="32" r="20" fill="#2D1B33"/><circle cx="26" cy="32" r="7" fill="#FFF8F0"/><circle cx="26" cy="18" r="3" fill="#FFF8F0"/><circle cx="26" cy="46" r="3" fill="#FFF8F0"/><circle cx="12" cy="32" r="3" fill="#FFF8F0"/><circle cx="40" cy="32" r="3" fill="#FFF8F0"/><path d="M26 52h32v-8H34" fill="none" stroke="#D6336C" stroke-width="4" stroke-linecap="round"/></svg>`;
+const ROLL_ART = `<svg width="84" height="84" viewBox="0 0 64 64" aria-hidden="true"><circle cx="26" cy="32" r="20" fill="#1F2A44"/><circle cx="26" cy="32" r="7" fill="#FFF7EC"/><circle cx="26" cy="18" r="3" fill="#FFF7EC"/><circle cx="26" cy="46" r="3" fill="#FFF7EC"/><circle cx="12" cy="32" r="3" fill="#FFF7EC"/><circle cx="40" cy="32" r="3" fill="#FFF7EC"/><path d="M26 52h32v-8H34" fill="none" stroke="#C4471F" stroke-width="4" stroke-linecap="round"/></svg>`;
 const ICON_SOUND = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path class="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/><path class="mute" d="m16 9 6 6M22 9l-6 6"/></svg>`;
 
 const FLASH_KEY = "flashOn";
@@ -138,7 +138,7 @@ export async function renderCamera(root, status, go) {
           <button class="vf-btn icon-only" data-act="sound" aria-pressed="true" aria-label="${t("Suara rana")}">${ICON_SOUND}</button>
           <div class="vf-right">
             ${status.allow_gallery ? `<label class="vf-btn icon-only vf-gallery" aria-label="${t("Unggah dari galeri")}" title="${t("Unggah dari galeri")}">${ICON.album}<input type="file" accept="image/*" hidden /></label>` : ""}
-            <button class="vf-btn icon-only vf-timer" data-act="timer" aria-pressed="false" aria-label="${t("Timer jepret")}" title="${t("Timer jepret")}">${ICON.clock}<b class="vf-timer-n" aria-hidden="true"></b></button>
+            <button class="vf-btn icon-only vf-timer" data-act="timer" aria-pressed="false" aria-label="${t("Timer potret")}" title="${t("Timer potret")}">${ICON.clock}<b class="vf-timer-n" aria-hidden="true"></b></button>
             <button class="vf-btn icon-only" data-act="flip" aria-label="${t("Tukar kamera")}" disabled ${status.allow_front === false ? "hidden" : ""}>${ICON.flip}</button>
           </div>
         </div>
@@ -161,10 +161,10 @@ export async function renderCamera(root, status, go) {
       <p class="queue-note" hidden></p>
       <div class="controls">
         <a class="album-thumb" href="#/e/${status.event_id}/album" aria-label="${t("Buka album")}">${ICON.gridTab}</a>
-        <button class="shutter" data-act="shoot" aria-label="${t("Jepret")}" disabled><span></span></button>
+        <button class="shutter" data-act="shoot" aria-label="${t("Potret")}" disabled><span></span></button>
         <button class="ctl flash-btn" data-act="flash" aria-pressed="false" aria-label="Flash" disabled>${ICON.bolt}</button>
       </div>
-      <div class="counter" aria-live="polite"><b>--</b><small>${t("sisa jepretan")}</small></div>
+      <div class="counter" aria-live="polite"><b>--</b><small>${t("sisa potretan")}</small></div>
     </section>`);
   root.replaceChildren(view);
   // Penghitung sisa tampil di kanan atas, sebaris dengan nama acara
@@ -258,7 +258,7 @@ export async function renderCamera(root, status, go) {
   }
 
   async function remaining() {
-    if (status.unlimited) return Infinity;   // paket Unlimited: jepretan tanpa batas
+    if (status.unlimited) return Infinity;   // paket Unlimited: potretan tanpa batas
     const local = (await queue.forEvent(status.event_id)).filter((j) => !j.reserved).length;
     return Math.max(0, status.max_shots - status.shots_used - local);
   }
@@ -281,9 +281,9 @@ export async function renderCamera(root, status, go) {
     setCounter(left);
     hint.textContent = revealLater()
       ? t("Semua foto terbuka dalam {x}.", { x: fmtCountdown(new Date(status.reveal_at) - Date.now()) })
-      : status.show_instantly ? (status.unlimited ? t("Jepretan tanpa batas. Foto langsung tampil di album.") : t("Foto langsung tampil di album. Sisa {n} jepretan.", { n: left }))
-      : status.unlimited ? t("Jepretan tanpa batas. Foto terbuka di album setelah acara selesai.")
-      : left > 0 ? t("Foto Anda terbuka di album setelah {n} jepretan lagi.", { n: left }) : "";
+      : status.show_instantly ? (status.unlimited ? t("Potretan tanpa batas. Foto langsung tampil di album.") : t("Foto langsung tampil di album. Sisa {n} potretan.", { n: left }))
+      : status.unlimited ? t("Potretan tanpa batas. Foto terbuka di album setelah acara selesai.")
+      : left > 0 ? t("Foto Anda terbuka di album setelah {n} potretan lagi.", { n: left }) : "";
     showWait();
     note.hidden = waiting === 0;
     note.textContent = t("{n} foto tersimpan di HP dan akan terkirim otomatis saat ada sinyal.", { n: waiting });
@@ -292,7 +292,7 @@ export async function renderCamera(root, status, go) {
     if (left <= 0 && !status.blocked) showDone(t("Film habis!"), t("Gulunganmu sudah dicuci dan masuk ke album bersama."), true);
     else if (!status.is_open) showDone(t("Acara ditutup"), t("Pemotretan sudah selesai."));
     else if (status.blocked) showDone(t("Akses dihentikan"), t("Pemilik acara menghentikan akses Anda."));
-    else if (status.needs_review) hint.textContent = t("Acara ini masih ditinjau tim Jepretin. Kamera aktif setelah tinjauan selesai.");
+    else if (status.needs_review) hint.textContent = t("Acara ini masih ditinjau tim TitipPotret. Kamera aktif setelah tinjauan selesai.");
   }
 
   function showWait() {
@@ -302,7 +302,7 @@ export async function renderCamera(root, status, go) {
     waitBox.hidden = !on;
     if (!on) return;
     waitBox.querySelector("b").textContent = fmtCountdown(new Date(status.starts_at) - Date.now());
-    waitBox.querySelector("small").textContent = t("Acara mulai {d}. Jepretan belum terpakai.", { d: fmtDate(status.starts_at) });
+    waitBox.querySelector("small").textContent = t("Acara mulai {d}. Potretan belum terpakai.", { d: fmtDate(status.starts_at) });
   }
   // Tiap detik: angka hitung mundur (kunci kamera / cuci film); saat waktunya tiba, muat ulang tampilan
   let wasLocked = notStarted(), wasReveal = revealLater();
@@ -488,7 +488,7 @@ export async function renderCamera(root, status, go) {
     // Seperti object-fit: contain, supaya yang terlihat sama persis dengan bingkai foto
     const scale = Math.min(w / vw, h / vh);
     const dw = vw * scale, dh = vh * scale, dx = (w - dw) / 2, dy = (h - dh) / 2;
-    cctx.fillStyle = "#1a0f1f";
+    cctx.fillStyle = "#10151f";
     cctx.fillRect(0, 0, w, h);
     cctx.save();
     if (mirrorPreview()) { cctx.translate(w, 0); cctx.scale(-1, 1); }
@@ -590,7 +590,7 @@ export async function renderCamera(root, status, go) {
       await refresh(); // penghitung turun segera (foto sudah di antrean)
       await p;
     } catch (e) {
-      if (e.code === "FILE_LAMA") toast(t("Foto itu bukan jepretan baru. Ambil foto langsung dengan kamera."), 5000);
+      if (e.code === "FILE_LAMA") toast(t("Foto itu bukan potretan baru. Ambil foto langsung dengan kamera."), 5000);
       else {
         if (!errorCode(e) && navigator.onLine) report("SHOT_FAILED", e?.message || e);
         toast(errorCode(e) ? friendly(e) : t("Foto tersimpan di HP, akan dikirim saat koneksi kembali."));
@@ -603,7 +603,7 @@ export async function renderCamera(root, status, go) {
     }
   }
 
-  // ---- Timer jepret: mati / 3 / 10 detik. Jatah baru terpakai saat foto benar-benar diambil. ----
+  // ---- Timer potret: mati / 3 / 10 detik. Jatah baru terpakai saat foto benar-benar diambil. ----
   let timerSec = loadTimer();
   let countdown = null;
   const timerBtn = view.querySelector('[data-act="timer"]');
@@ -612,7 +612,7 @@ export async function renderCamera(root, status, go) {
     timerBtn.classList.toggle("on", timerSec > 0);
     timerBtn.setAttribute("aria-pressed", String(timerSec > 0));
     timerBtn.querySelector(".vf-timer-n").textContent = timerSec || "";
-    timerBtn.setAttribute("aria-label", timerSec ? t("Timer jepret: {n} detik", { n: timerSec }) : t("Timer jepret: mati"));
+    timerBtn.setAttribute("aria-label", timerSec ? t("Timer potret: {n} detik", { n: timerSec }) : t("Timer potret: mati"));
   }
   timerBtn.onclick = () => {
     timerSec = TIMER_STEPS[(TIMER_STEPS.indexOf(timerSec) + 1) % TIMER_STEPS.length];
@@ -671,7 +671,7 @@ export async function renderCamera(root, status, go) {
     fileInput.value = "";
     if (f) take(() => { developing.hidden = false; return captureFromFile(f, devOpts(false)); });
   };
-  // Unggah dari galeri (hanya bila penyelenggara mengizinkan); tetap memakai jatah jepretan
+  // Unggah dari galeri (hanya bila penyelenggara mengizinkan); tetap memakai jatah potretan
   const galleryInput = view.querySelector(".vf-gallery input");
   if (galleryInput) galleryInput.onchange = () => {
     const f = galleryInput.files[0];

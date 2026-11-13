@@ -333,9 +333,9 @@ export async function renderAlbum(root, status) {
     if (filter.owner) return t("Belum ada foto dari tamu ini.");
     if (status.reveal_at && new Date(status.reveal_at) > new Date())
       return t("Mode cuci film: semua foto tampil pada {d}.", { d: fmtDate(status.reveal_at) });
-    if (status.show_instantly) return t("Belum ada foto. Foto tamu tampil di sini begitu dijepret.");
+    if (status.show_instantly) return t("Belum ada foto. Foto tamu tampil di sini begitu dipotret.");
     if (status.unlimited) return t("Semua foto tampil setelah acara selesai.");
-    return t("Foto tampil setelah pemotretnya menghabiskan {n} jepretan atau saat acara ditutup.", { n: status.max_shots });
+    return t("Foto tampil setelah pemotretnya menghabiskan {n} potretan atau saat acara ditutup.", { n: status.max_shots });
   }
 
   const label = (r) => (r.owner_name ? `#${r.seq} · ${r.owner_name}` : t("Tamu"));
@@ -597,7 +597,7 @@ export async function renderAlbum(root, status) {
       box.querySelector(".lb-avatar").textContent = who.trim()[0]?.toUpperCase() || "?";
       box.querySelector(".lb-who").textContent = who;
       box.querySelector(".lb-film").textContent = [
-        r.seq ? t("Jepretan {a}/{b}", { a: r.seq, b: status.max_shots }) : "",
+        r.seq ? t("Potretan {a}/{b}", { a: r.seq, b: status.max_shots }) : "",
         fmtDate(r.taken_at),
         r.film ? t("Efek {f}", { f: t(filmName(r.film)) }) : "",
       ].filter(Boolean).join(" · ");

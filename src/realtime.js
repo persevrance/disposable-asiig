@@ -37,7 +37,7 @@ export function onAlbumPing(eventId, fn) {
 }
 export const albumLive = (eventId) => Boolean(channels.get(eventId)?.ready);
 
-// Kirim ping (tanpa menunggu); dipakai setelah jepretan terkirim atau acara ditutup
+// Kirim ping (tanpa menunggu); dipakai setelah potretan terkirim atau acara ditutup
 export function pingAlbum(eventId, kind = "photo") {
   if (!supabase || large.has(eventId)) return;
   const c = channel(eventId);

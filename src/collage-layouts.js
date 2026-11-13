@@ -71,13 +71,13 @@ export const SIZES = {
 
 // bg latar, ink teks, muted keterangan, cell kotak kosong, body/cut warna logo
 export const BACKGROUNDS = {
-  krem:  { name: "Krem",       bg: "#fff8f0", ink: "#2d1b33", muted: "#6e5d72", cell: "#efdccb", body: "#2d1b33", cut: "#fff8f0" },
-  gelap: { name: "Gelap",      bg: "#1c1220", ink: "#f6eaf0", muted: "#bba9c0", cell: "#2b1d31", body: "#fff8f0", cut: "#1c1220" },
-  putih: { name: "Putih",      bg: "#ffffff", ink: "#2d1b33", muted: "#6e5d72", cell: "#efdccb", body: "#2d1b33", cut: "#ffffff" },
-  koral: { name: "Koral muda", bg: "#ffe3ec", ink: "#2d1b33", muted: "#6e5d72", cell: "#f7c9d7", body: "#2d1b33", cut: "#ffe3ec" },
+  krem:  { name: "Krem",       bg: "#fff7ec", ink: "#1f2a44", muted: "#5b6475", cell: "#e6dccd", body: "#1f2a44", cut: "#fff7ec" },
+  gelap: { name: "Gelap",      bg: "#141b2b", ink: "#f3eee6", muted: "#b7bfcc", cell: "#1b2438", body: "#fff7ec", cut: "#141b2b" },
+  putih: { name: "Putih",      bg: "#ffffff", ink: "#1f2a44", muted: "#5b6475", cell: "#e6dccd", body: "#1f2a44", cut: "#ffffff" },
+  koral: { name: "Koral muda", bg: "#fde4d8", ink: "#1f2a44", muted: "#5b6475", cell: "#f6c9b6", body: "#1f2a44", cut: "#fde4d8" },
 };
 
-export const CONFETTI = ["#ff5c8a", "#ffc94d", "#5ad8b6", "#c0a8ff", "#86c4f5"];
+export const CONFETTI = ["#e8603c", "#ffc94d", "#5ad8b6", "#c0a8ff", "#86c4f5"];
 export const STAMP = "#ff9f43";
 export const TAPE = "rgba(255, 201, 77, 0.78)";
-export const CARD = { bg: "#2d1b33", ink: "#fff8f0", muted: "#d9c9dd" };
+export const CARD = { bg: "#1f2a44", ink: "#fff7ec", muted: "#c9cfdb" };

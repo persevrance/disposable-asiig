@@ -1,4 +1,4 @@
-// Antrean jepretan di IndexedDB: foto disimpan di HP dulu, baru dikirim.
+// Antrean potretan di IndexedDB: foto disimpan di HP dulu, baru dikirim.
 import { createStore, get, set, del, keys } from "idb-keyval";
 
 const store = createStore("disposable-asiig", "antrean");

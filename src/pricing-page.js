@@ -12,7 +12,7 @@ export async function renderPricing(setView, { loggedIn }) {
   const view = el(`
     <div class="landing pricing-page">
       <header class="lp-nav">
-        <a class="lp-logo" href="#/" aria-label="Jepretin">${brandLockup(42)}</a>
+        <a class="lp-logo" href="#/" aria-label="TitipPotret">${brandLockup(42)}</a>
         <nav aria-label="${t("Navigasi utama")}">
           <a class="lp-link" href="#/">${t("Beranda")}</a>
           <a class="lp-link" href="#/harga" aria-current="page">${t("Harga")}</a>
@@ -50,7 +50,7 @@ export async function renderPricing(setView, { loggedIn }) {
           <div class="chips" role="group" aria-label="${t("Jumlah tamu")}">${G_PRESETS.filter((v) => v <= maxG).map((v) => `<button type="button" class="chip" data-g="${v}">${v}</button>`).join("")}</div>
         </div>
         <div class="pr-field">
-          <div class="pr-row"><label for="pr-r">${t("Isi roll per tamu")}</label><span><output class="pr-big" data-out="r"></output> <small>${t("jepretan")}</small></span></div>
+          <div class="pr-row"><label for="pr-r">${t("Isi roll per tamu")}</label><span><output class="pr-big" data-out="r"></output> <small>${t("potretan")}</small></span></div>
           <input id="pr-r" type="range" min="1" max="${maxR}" step="1" />
           <div class="chips" role="group" aria-label="${t("Isi roll per tamu")}">${R_PRESETS.filter(([v]) => v <= maxR).map(([v, l]) => `<button type="button" class="chip" data-r="${v}">${esc(t(l))}</button>`).join("")}</div>
         </div>
@@ -61,23 +61,23 @@ export async function renderPricing(setView, { loggedIn }) {
         <span class="pr-per"></span>
         <div class="pr-lines"></div>
         <button type="button" class="btn pr-cta" data-act="create">${t("Buat acara dengan pengaturan ini")}</button>
-        <small>${t("Bisa tambah tamu atau jepretan nanti, cukup bayar selisihnya.")}</small>
+        <small>${t("Bisa tambah tamu atau potretan nanti, cukup bayar selisihnya.")}</small>
       </div>
     </section>
     <section class="pr-how">
       <h2>${t("Cara harga dihitung")}</h2>
       <div class="pr-cards">
         <div class="card"><b>${t("Tarif per tamu, sesuai isi roll")}</b>
-          ${cfg.roll_tiers.map(([max, p], i) => `<div class="pr-line"><span>${i ? cfg.roll_tiers[i - 1][0] + 1 : 1}–${max} ${t("jepretan")}</span><b>${rp(p)}</b></div>`).join("")}</div>
+          ${cfg.roll_tiers.map(([max, p], i) => `<div class="pr-line"><span>${i ? cfg.roll_tiers[i - 1][0] + 1 : 1}–${max} ${t("potretan")}</span><b>${rp(p)}</b></div>`).join("")}</div>
         <div class="card"><b>${t("Makin ramai, makin murah")}</b>
           ${cfg.discounts.length ? cfg.discounts.map(([min, p], i) => `<div class="pr-line"><span>${min}${cfg.discounts[i + 1] ? `–${cfg.discounts[i + 1][0] - 1}` : "+"} ${t("tamu")}</span><b class="ok-text">−${p}%</b></div>`).join("") : `<p class="hint">–</p>`}</div>
         <div class="card"><b>${t("Aturan kecil")}</b>
           <p>${t("Gratis untuk {g} tamu dengan roll sampai {r}.", { g: cfg.free_guests, r: cfg.free_shots })}</p>
           <p>${t("Pembayaran minimum {m}, dibulatkan ke atas per Rp1.000.", { m: rp(cfg.min) })}</p>
           <p>${t("Semua fitur termasuk di setiap acara.")}</p></div>
-        <div class="card pr-unl"><b>${t("Unlimited tamu & jepretan")}</b>
+        <div class="card pr-unl"><b>${t("Unlimited tamu & potretan")}</b>
           <span class="pr-unl-price">${rp(cfg.price_unlimited)}</span>
-          <p>${t("Tanpa batas tamu dan jepretan, harga tetap tanpa diskon. Album dibuka setelah acara selesai.")}</p></div>
+          <p>${t("Tanpa batas tamu dan potretan, harga tetap tanpa diskon. Album dibuka setelah acara selesai.")}</p></div>
         <div class="card"><b>${t("Masa simpan foto")}</b>
           <div class="pr-line"><span>${t("Sampai {d} hari", { d: cfg.keep_free_days })}</span><b>${t("Gratis")}</b></div>
           <div class="pr-line"><span>${t("{a}–{b} hari", { a: cfg.keep_free_days + 1, b: cfg.keep_flat_days - 1 })}</span><b>${t("{x}/hari", { x: rp(cfg.keep_per_day) })}</b></div>
@@ -89,7 +89,7 @@ export async function renderPricing(setView, { loggedIn }) {
       <h2>${t("Pertanyaan umum")}</h2>
       ${[
         ["Bisa pilih jumlah tamu yang tidak bulat, misalnya 37?", "Bisa. Jumlah tamu dan isi roll bebas diatur, harganya langsung dihitung ulang."],
-        ["Kalau tamunya ternyata lebih banyak?", "Tambah tamu atau jepretan kapan saja dari panel acara. Kamu cukup membayar selisihnya, dan tamu yang sudah masuk tidak terganggu."],
+        ["Kalau tamunya ternyata lebih banyak?", "Tambah tamu atau potretan kapan saja dari panel acara. Kamu cukup membayar selisihnya, dan tamu yang sudah masuk tidak terganggu."],
         ["Apakah tamu perlu membayar atau memasang aplikasi?", "Tidak. Tamu cukup scan QR dan masuk dengan akun Google."],
         ["Metode pembayarannya apa saja?", "QRIS, e-wallet, dan virtual account bank lewat Midtrans."],
       ].map(([q, a]) => `<details class="card"><summary>${t(q)}</summary><p>${t(a)}</p></details>`).join("")}
@@ -109,7 +109,7 @@ export async function renderPricing(setView, { loggedIn }) {
     view.querySelector(".pr-lines").innerHTML = `
       <div><span>${st.g} ${t("tamu")} × ${rp(q.rate)}</span><span>${rp(q.subtotal)}</span></div>
       <div><span>${q.discount_pct ? t("Diskon {p}% jumlah tamu", { p: q.discount_pct }) : t("Diskon jumlah tamu")}</span><span class="ok-text">${q.discount_pct ? `−${rp(q.volume_discount)}` : "–"}</span></div>
-      <div><span>${t("Total jepretan maksimum")}</span><span>${(st.g * st.r).toLocaleString("id-ID")} ${t("foto")}</span></div>`;
+      <div><span>${t("Total potretan maksimum")}</span><span>${(st.g * st.r).toLocaleString("id-ID")} ${t("foto")}</span></div>`;
   }
   gIn.oninput = () => { st.g = Number(gIn.value); render(); };
   rIn.oninput = () => { st.r = Number(rIn.value); render(); };

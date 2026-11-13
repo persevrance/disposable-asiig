@@ -198,7 +198,7 @@ export function actionSheet(title, actions) {
 // Konfeti kecil saat film habis (dilewati jika pengguna memilih kurangi gerakan)
 export function confetti() {
   if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
-  const colors = ["#ff5c8a", "#ffc23c", "#2ec4a0", "#5bb8ff", "#b48cff"];
+  const colors = ["#e8603c", "#f2a93b", "#2ec4a0", "#5bb8ff", "#b48cff"];
   const layer = el(`<div class="confetti" aria-hidden="true"></div>`);
   for (let i = 0; i < 70; i++) {
     const s = document.createElement("i");
@@ -247,7 +247,7 @@ Object.assign(ICON, {
   grid: svg('<rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/>', 18),
   download: svg('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', 18),
   trash: svg('<path d="M5 7h14M10 7V5h4v2M7 7l1 13h8l1-13"/>', 18),
-  // Ikon desain Jepretin
+  // Ikon desain TitipPotret
   back: svg('<path d="M15 18l-6-6 6-6"/>'),
   close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
   scan: svg('<path d="M3 7V4h3M17 4h3v3M21 17v3h-3M7 20H4v-3"/><rect x="8" y="8" width="8" height="8" rx="1"/>', 20),
@@ -295,22 +295,23 @@ export const badge = (name, tone = "coral", size = "") =>
   `<span class="icon-badge ${tone} ${size}" aria-hidden="true">${ICON[name]}</span>`;
 
 // Logo aplikasi (sama dengan public/icon.svg, tanpa latar)
-// Logo Jepretin: kamera sekali pakai (jendela bidik, lampu flash koral, lensa bulat).
-// dark = versi untuk latar gelap (badan krem, detail ungu tua).
+// Logo TitipPotret: label titipan yang juga kamera (lubang tali, lampu kilat, lensa).
+// dark = versi untuk latar gelap (badan krem, detail biru tinta).
+export const BRAND_TAG_PATH = "M34 12 H82 Q90 12 90 20 V80 Q90 88 82 88 H34 L10 50 Z";
 export function brandMark(size = 42, { dark = false, label = "" } = {}) {
-  const body = dark ? "#FFF8F0" : "#2D1B33";
-  const cut = dark ? "#2D1B33" : "#FFF8F0";
+  const body = dark ? "#FFF7EC" : "#1F2A44";
+  const cut = dark ? "#1F2A44" : "#FFF7EC";
   const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
-  return `<svg class="brand-mark${dark ? " on-dark" : ""}" width="${size}" height="${size}" viewBox="0 0 64 64" ${a11y}>
-  <rect x="44" y="9" width="9" height="7" rx="2" fill="${body}"/>
-  <rect x="4" y="14" width="56" height="38" rx="10" fill="${body}"/>
-  <rect x="10" y="20" width="11" height="7" rx="2.5" fill="${cut}"/>
-  <rect x="42" y="20" width="12" height="7" rx="2.5" fill="#FF5C8A"/>
-  <circle cx="32" cy="35" r="11.5" fill="${cut}"/>
-  <circle cx="32" cy="35" r="6.5" fill="${body}"/>
-  <circle cx="29.5" cy="32.5" r="1.8" fill="${cut}"/>
+  return `<svg class="brand-mark${dark ? " on-dark" : ""}" width="${size}" height="${size}" viewBox="0 0 100 100" ${a11y}>
+  <path d="${BRAND_TAG_PATH}" fill="${body}"/>
+  <circle cx="24" cy="50" r="4.5" fill="${cut}"/>
+  <rect x="72" y="19" width="10" height="6" rx="2" fill="#E8603C"/>
+  <circle cx="60" cy="50" r="18" fill="${cut}"/>
+  <circle cx="60" cy="50" r="10" fill="#E8603C"/>
+  <circle cx="56.5" cy="46.5" r="3" fill="${cut}"/>
 </svg>`;
 }
-// Logo + wordmark huruf kecil
+// Wordmark: "Titip" Medium + "Potret" ExtraBold
+export const WORDMARK = '<span class="wordmark"><span class="wm-a">Titip</span><span class="wm-b">Potret</span></span>';
 export const brandLockup = (size = 40, opts) =>
-  `<span class="brand-lockup">${brandMark(size, opts)}<span class="wordmark">jepretin</span></span>`;
+  `<span class="brand-lockup">${brandMark(size, opts)}${WORDMARK}</span>`;

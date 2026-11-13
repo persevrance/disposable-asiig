@@ -174,7 +174,7 @@ export async function clearThumbCache() {
   try { await caches.delete(THUMB_CACHE); } catch { /* abaikan */ }
 }
 
-// Dipakai panel pemilik saat menghapus acara atau jepretan macet
+// Dipakai panel pemilik saat menghapus acara atau potretan macet
 export async function removeFiles(paths) {
   for (let i = 0; i < paths.length; i += 100) {
     const part = paths.slice(i, i + 100);

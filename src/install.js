@@ -33,7 +33,7 @@ export async function promptInstall() {
       <ol class="steps">
         <li>${t("Ketuk tombol Bagikan di Safari (kotak dengan panah ke atas).")}</li>
         <li>${t("Gulir lalu pilih Tambah ke Layar Utama.")}</li>
-        <li>${t("Ketuk Tambah. Ikon Jepretin muncul di layar utama.")}</li>
+        <li>${t("Ketuk Tambah. Ikon TitipPotret muncul di layar utama.")}</li>
       </ol>
       <div class="dialog-actions"><button class="btn primary" data-act="ok">${t("Mengerti")}</button></div>
     </div>`);

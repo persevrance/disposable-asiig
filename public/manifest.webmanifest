@@ -1,12 +1,12 @@
 {
-  "name": "Jepretin",
-  "short_name": "Jepretin",
+  "name": "TitipPotret",
+  "short_name": "TitipPotret",
   "description": "Kamera sekali pakai untuk acara bersama",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#FFF8F0",
-  "theme_color": "#FFF8F0",
+  "background_color": "#FFF7EC",
+  "theme_color": "#FFF7EC",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

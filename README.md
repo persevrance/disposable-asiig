@@ -4,12 +4,12 @@ Kamera sekali pakai berbasis web dengan album bersama. Opsi B1, paket P1:
 Supabase (login Google, database, penyimpanan foto) + Cloudflare Pages
 (tampilan) di `disposable-asiig.my.id`.
 
-- Jatah jepretan per acara (batas maksimum diatur superadmin), dijaga di server dengan kunci baris.
+- Jatah potretan per acara (batas maksimum diatur superadmin), dijaga di server dengan kunci baris.
 - Tanpa hapus, tanpa ulang. Foto peserta tampil di album setelah jatahnya habis,
   saat acara ditutup, atau pada waktu "cuci film".
 - Foto disimpan dulu di HP (IndexedDB) lalu dikirim; sinyal putus tidak memotong jatah dua kali.
 - 7 efek film, flash (lampu kamera belakang / layar untuk kamera depan), resolusi dan mirror dari pengaturan.
-- Tamu bisa mengunduh foto ukuran penuh, maks. sejumlah jatah jepretan (foto sendiri gratis).
+- Tamu bisa mengunduh foto ukuran penuh, maks. sejumlah jatah potretan (foto sendiri gratis).
 - Peran: superadmin (dashboard `#/admin`), pembuat acara, tamu. Rancangan lengkap: [docs/RANCANGAN.md](docs/RANCANGAN.md).
 
 ## Susunan
@@ -48,7 +48,7 @@ supabase/reset.sql   menghapus semua objek v1 + v2 (data hilang)
    insert into user_roles (email, role) values ('email-anda@gmail.com', 'superadmin')
    on conflict (email) do update set role = 'superadmin';
    ```
-4. Login, buka **Dashboard** di beranda: tambahkan pembuat acara di tab Peran, atur batas jepretan,
+4. Login, buka **Dashboard** di beranda: tambahkan pembuat acara di tab Peran, atur batas potretan,
    resolusi, dan mirror di tab Pengaturan.
 
 ### 2. Google
@@ -117,9 +117,9 @@ thumbnail dan URL foto stabil di Worker).
 - [ ] Login Google di Android (Chrome) dan iPhone (Safari).
 - [ ] Link `?kode=` memasukkan peserta setelah layar persetujuan.
 - [ ] Jendela bidik muncul; kamera depan/belakang bisa ditukar.
-- [ ] Satu jepretan: penghitung 30 -> 29, foto belum tampil di album.
+- [ ] Satu potretan: penghitung 30 -> 29, foto belum tampil di album.
 - [ ] Mode pesawat saat memotret: foto terkirim sendiri setelah online, jatah hanya berkurang satu.
-- [ ] Buat acara dengan jatah 3: setelah jepretan ke-3 muncul "Film habis" dan foto tampil di HP lain.
+- [ ] Buat acara dengan jatah 3: setelah potretan ke-3 muncul "Film habis" dan foto tampil di HP lain.
 - [ ] Flash: kamera belakang Android menyalakan lampu sesaat; kamera depan memutihkan layar. Di iPhone, tombol flash kamera belakang hanya muncul jika Safari mendukung `torch`.
 - [ ] Balik kamera ke depan: jendela bidik dan hasil foto dicerminkan sesuai Pengaturan.
 - [ ] Efek film berbeda per acara (mis. Hitam Putih Klasik menghasilkan foto monokrom).

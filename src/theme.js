@@ -16,7 +16,7 @@ function apply() {
   const dark = pref === "dark" || (pref === "auto" && Boolean(mq?.matches));
   document.documentElement.classList.toggle("dark", dark);
   // Warna bilah status HP mengikuti tema yang sedang tampil
-  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", dark ? "#1a1220" : "#FFF8F0"));
+  document.querySelectorAll('meta[name="theme-color"]').forEach((m) => m.setAttribute("content", dark ? "#121826" : "#FFF7EC"));
 }
 
 export function setTheme(v) {

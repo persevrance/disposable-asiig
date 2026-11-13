@@ -68,7 +68,7 @@ async function notifyWaitlist(supa: any) {
     users.add(r.user_id);
     const payload = JSON.stringify({
       title: "Pembuatan acara dibuka lagi",
-      body: "Kamu sudah bisa membuat acara baru di Jepretin.",
+      body: "Kamu sudah bisa membuat acara baru di TitipPotret.",
       url: "/#/admin/acara",
       tag: "creation-open",
     });

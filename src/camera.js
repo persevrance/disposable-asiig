@@ -180,7 +180,7 @@ async function developInWorker(source, sw, sh, opts, stamp) {
     w.postMessage({ id, bitmap, opts, stamp: st }, stampImage ? [bitmap, stampImage] : [bitmap]);
     setTimeout(() => { if (waiting.delete(id)) resolve({ ok: false, error: "timeout" }); }, 20000);
   });
-  if (!res.ok) { workerBroken = true; return null; } // jepretan berikutnya langsung di thread utama
+  if (!res.ok) { workerBroken = true; return null; } // potretan berikutnya langsung di thread utama
   return { photo: res.photo, medium: res.medium, thumb: res.thumb };
 }
 
@@ -218,7 +218,7 @@ export async function captureFromCanvas(frame, opts) {
 }
 
 // Cadangan jika getUserMedia gagal: file dari <input capture>.
-// File yang dibuat lebih dari 3 menit lalu ditolak (bukan jepretan baru dari kamera).
+// File yang dibuat lebih dari 3 menit lalu ditolak (bukan potretan baru dari kamera).
 export const FILE_MAX_AGE_MS = 3 * 60 * 1000;
 export async function captureFromFile(file, opts) {
   if (!file.lastModified || Date.now() - file.lastModified > FILE_MAX_AGE_MS) {

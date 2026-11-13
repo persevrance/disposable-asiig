@@ -10,9 +10,9 @@ import {
 } from "./collage-layouts.js";
 
 export const COLLAGE_MAX = 9;
-const FLASH = "#ff5c8a";
-const DISPLAY = '"Fredoka", "Nunito", system-ui, sans-serif';
-const BODY = '"Nunito", system-ui, sans-serif';
+const FLASH = "#e8603c";
+const DISPLAY = '"Plus Jakarta Sans", system-ui, sans-serif';
+const BODY = '"Plus Jakarta Sans", system-ui, sans-serif';
 const ORN = Object.fromEntries(ORNAMENTS.map((o) => [o.id, o]));
 const PREVIEW_SCALE = 0.5;
 
@@ -32,20 +32,31 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
 
-// Logo kamera Jepretin (kotak 64×64) di (x, y) berukuran size
-function drawMark(ctx, x, y, size, body, cut) {
-  const k = size / 64;
+// Logo TitipPotret (kotak 100×100: label titipan berbentuk kamera) di (x, y) berukuran size
+const TAG = "M34 12 H82 Q90 12 90 20 V80 Q90 88 82 88 H34 L10 50 Z";
+function drawMark(ctx, x, y, size, body, cut, accent = FLASH) {
+  const k = size / 100;
+  const dot = (cx, cy, r, fill) => { ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); };
   ctx.save();
   ctx.translate(x, y); ctx.scale(k, k);
-  ctx.fillStyle = body;
-  roundRect(ctx, 44, 9, 9, 7, 2); ctx.fill();
-  roundRect(ctx, 4, 14, 56, 38, 10); ctx.fill();
-  ctx.fillStyle = cut; roundRect(ctx, 10, 20, 11, 7, 2.5); ctx.fill();
-  ctx.fillStyle = FLASH; roundRect(ctx, 42, 20, 12, 7, 2.5); ctx.fill();
-  ctx.fillStyle = cut; ctx.beginPath(); ctx.arc(32, 35, 11.5, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = body; ctx.beginPath(); ctx.arc(32, 35, 6.5, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = cut; ctx.beginPath(); ctx.arc(29.5, 32.5, 1.8, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = body; ctx.fill(new Path2D(TAG));
+  dot(24, 50, 4.5, cut);
+  ctx.fillStyle = accent; roundRect(ctx, 72, 19, 10, 6, 2); ctx.fill();
+  dot(60, 50, 18, cut);
+  dot(60, 50, 10, accent);
+  dot(56.5, 46.5, 3, cut);
   ctx.restore();
+}
+
+// Wordmark "Titip" Medium + "Potret" ExtraBold, rata kiri di (x, y); mengembalikan lebarnya
+function wordmarkWidth(ctx, px) {
+  ctx.font = `500 ${px}px ${DISPLAY}`; const a = ctx.measureText("Titip").width;
+  ctx.font = `800 ${px}px ${DISPLAY}`; return a + ctx.measureText("Potret").width;
+}
+function drawWordmark(ctx, x, y, px) {
+  ctx.font = `500 ${px}px ${DISPLAY}`; ctx.fillText("Titip", x, y);
+  const a = ctx.measureText("Titip").width;
+  ctx.font = `800 ${px}px ${DISPLAY}`; ctx.fillText("Potret", x + a, y);
 }
 
 // Potong teks dengan "…" bila melebihi lebar
@@ -85,7 +96,7 @@ function stampText(ev) {
   return `'${String(d.getFullYear()).slice(2)} ${pad2(d.getMonth() + 1)} ${pad2(d.getDate())}`;
 }
 
-// Font Fredoka/Nunito harus termuat dulu, kalau tidak teks jatuh ke font cadangan
+// Font Plus Jakarta Sans harus termuat dulu, kalau tidak teks jatuh ke font cadangan
 async function fontsReady() {
   try {
     await Promise.all([document.fonts?.load(`600 48px ${DISPLAY}`), document.fonts?.load(`700 26px ${BODY}`)].filter(Boolean));
@@ -130,7 +141,7 @@ function drawHead(ctx, o, g, th, ev, rnd) {
     // baris kecil di atas: edisi | tanggal
     ctx.font = `700 22px ${SERIF}`; ctx.textAlign = "left";
     ctx.fillText(t("EDISI KHUSUS"), m, y0 + 30);
-    ctx.textAlign = "right"; ctx.fillText(date ? date.toUpperCase() : t("CETAKAN JEPRETIN"), F.w - m, y0 + 30);
+    ctx.textAlign = "right"; ctx.fillText(date ? date.toUpperCase() : t("CETAKAN TITIPPOTRET"), F.w - m, y0 + 30);
     ctx.fillRect(m, y0 + 44, F.w - 2 * m, 4); ctx.fillRect(m, y0 + 52, F.w - 2 * m, 1.5);
     // judul koran = nama acara
     ctx.textAlign = "center";
@@ -152,9 +163,9 @@ function drawHead(ctx, o, g, th, ev, rnd) {
     for (const [r, c] of [[lr, "#151210"], [lr * 0.72, "#2c2724"], [lr * 0.45, "#0b0908"], [lr * 0.16, "#5c7da8"]]) {
       ctx.fillStyle = c; ctx.beginPath(); ctx.arc(lx, ly, r, 0, Math.PI * 2); ctx.fill();
     }
-    ctx.fillStyle = "#d6336c"; ctx.beginPath(); ctx.arc(bx + bw - 250, by + 24, 14, 0, Math.PI * 2); ctx.fill();   // tombol rana
+    ctx.fillStyle = "#c4471f"; ctx.beginPath(); ctx.arc(bx + bw - 250, by + 24, 14, 0, Math.PI * 2); ctx.fill();   // tombol rana
     ctx.fillStyle = th.ink; ctx.font = `700 26px ${MONO}`; ctx.textAlign = "left"; ctx.textBaseline = "middle";
-    ctx.fillText("JEPRETIN 35", bx + 180, by + bh * 0.67);
+    ctx.fillText("TITIPPOTRET 35", bx + 180, by + bh * 0.67);
     ctx.fillStyle = th.muted; ctx.font = `700 20px ${MONO}`;
     ctx.fillText(date ? eventDate(ev, "short").toUpperCase() : "ISO 400", bx + 180, by + bh * 0.67 + 30);
     return;
@@ -169,9 +180,9 @@ function drawHead(ctx, o, g, th, ev, rnd) {
     ctx.fillStyle = th.bg;   // gerigi perangko
     for (let x = sx; x <= sx + sw; x += 16) { for (const yy of [sy, sy + sh]) { ctx.beginPath(); ctx.arc(x, yy, 6, 0, Math.PI * 2); ctx.fill(); } }
     for (let yy = sy; yy <= sy + sh; yy += 16) { for (const x of [sx, sx + sw]) { ctx.beginPath(); ctx.arc(x, yy, 6, 0, Math.PI * 2); ctx.fill(); } }
-    ctx.fillStyle = "#d6336c"; ctx.fillRect(sx + 16, sy + 16, sw - 32, sh - 32);
-    drawMark(ctx, sx + sw / 2 - 34, sy + 40, 68, "#fff8f0", "#d6336c");
-    ctx.fillStyle = "#fff8f0"; ctx.font = `700 22px ${DISPLAY}`; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = "#c4471f"; ctx.fillRect(sx + 16, sy + 16, sw - 32, sh - 32);
+    drawMark(ctx, sx + sw / 2 - 34, sy + 40, 68, "#fff7ec", "#c4471f", "#1f2a44");
+    ctx.fillStyle = "#fff7ec"; ctx.font = `700 22px ${DISPLAY}`; ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
     ctx.fillText("Rp 2026", sx + sw / 2, sy + sh - 30);
     ctx.restore();
     // cap pos melingkar bertanggal
@@ -194,7 +205,7 @@ function drawHead(ctx, o, g, th, ev, rnd) {
     if (date) { ctx.font = `600 28px ${BODY}`; ctx.fillStyle = th.muted; ctx.fillText(fit(ctx, date, tw), m, y0 + (name ? 118 : 74)); }
     // garis coretan di bawah nama
     if (name) {
-      ctx.strokeStyle = "#d6336c"; ctx.lineWidth = 5; ctx.lineCap = "round";
+      ctx.strokeStyle = "#c4471f"; ctx.lineWidth = 5; ctx.lineCap = "round";
       const w = Math.min(tw, ctx.measureText(name).width + 40);
       ctx.beginPath(); ctx.moveTo(m, y0 + 140); ctx.bezierCurveTo(m + w * 0.3, y0 + 132, m + w * 0.7, y0 + 148, m + w * 0.55, y0 + 138); ctx.stroke();
     }
@@ -232,7 +243,7 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
   // 2. Lapisan bawah: lubang film di atas dan bawah
   if (band) {
     const k = Math.floor(F.w / 54), hw = 24, hh = 18;
-    ctx.fillStyle = "#fff8f0";
+    ctx.fillStyle = "#fff7ec";
     for (let i = 0; i < k; i++) {
       const x = 18 + i * (F.w - 36) / k;
       roundRect(ctx, x, (band - hh) / 2, hw, hh, 4); ctx.fill();
@@ -252,7 +263,7 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
       const tilt = o.orn === "scrapbook" ? (rnd() * 3 - 1.5) : (i % 2 ? 2 : -2);
       ctx.translate(cx, cy); ctx.rotate((tilt * Math.PI) / 180); ctx.translate(-cx, -cy);
       ctx.save();
-      ctx.shadowColor = "rgba(45, 27, 51, .22)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+      ctx.shadowColor = "rgba(31, 42, 68, .22)"; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
       ctx.fillStyle = "#ffffff"; ctx.fillRect(b.x, b.y, b.w, b.h);
       ctx.restore();
       const side = Math.max(12, Math.min(b.w, b.h) * 0.05);
@@ -262,7 +273,7 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
     }
     ctx.save();
     roundRect(ctx, p.x, p.y, p.w, p.h, radius); ctx.clip();
-    ctx.fillStyle = pol ? "#efdccb" : th.cell; ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.fillStyle = pol ? "#e6dccd" : th.cell; ctx.fillRect(p.x, p.y, p.w, p.h);
     if (img) cover(ctx, img, p.x, p.y, p.w, p.h);
     // Koran lama: foto hitam-putih bernuansa sepia seperti cetakan koran
     if (img && o.orn === "koran") {
@@ -353,12 +364,11 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
   let textRight = F.w - m;
   if (o.logo) {
     const markSize = 48;
-    ctx.font = `600 34px ${DISPLAY}`;
-    const wm = "jepretin", wmW = ctx.measureText(wm).width;
+    const wmW = wordmarkWidth(ctx, 34);
     const lx = F.w - m - (markSize + 12 + wmW);
     drawMark(ctx, lx, cy - markSize / 2 - 2, markSize, card ? CARD.ink : th.body, card ? CARD.bg : th.cut);
     ctx.fillStyle = ink; ctx.textBaseline = "middle"; ctx.textAlign = "left";
-    ctx.fillText(wm, lx + markSize + 12, cy);
+    drawWordmark(ctx, lx + markSize + 12, cy, 34);
     textRight = lx - 40;
   }
   if (g.showText) {
@@ -495,7 +505,7 @@ export async function openCollage(ev, photos, { pickMore } = {}) {
         ["name", t("Nama acara"), t("Di kaki atau kop kolase"), false],
         ["date", t("Tanggal"), t("Tanggal acara, atau hari ini bila belum berjadwal"), false],
         ["stamp", t("Cap tanggal di tiap foto"), t("Gaya kamera sekali pakai"), false],
-        ["logo", t("Logo Jepretin"), logoOptional ? t("Boleh dimatikan untuk acara ini") : t("Wajib di acara gratis; bisa dimatikan di acara berbayar"), !logoOptional],
+        ["logo", t("Logo TitipPotret"), logoOptional ? t("Boleh dimatikan untuk acara ini") : t("Wajib di acara gratis; bisa dimatikan di acara berbayar"), !logoOptional],
       ];
       pane.innerHTML = `<div class="cl-toggles">${rows.map(([k, name, desc, locked]) => `
         <div class="cl-toggle">

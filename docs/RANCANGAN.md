@@ -16,7 +16,7 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
    Beranda hanya menampilkan acara milik sendiri dan acara yang kodenya dimasukkan di perangkat ini (`localStorage`, per akun); daftar itu dihapus saat keluar.
 2. Hanya email dengan peran `creator`/`superadmin` yang bisa membuat acara.
    Superadmin bisa membatasi jumlah acara tiap pembuat acara (`user_roles.event_limit`, NULL = tanpa batas) dari tab Peran. Hitungan `user_roles.events_created` tidak berkurang saat acara dihapus; superadmin bisa mengubahnya untuk memberi jatah baru. Superadmin sendiri tidak dibatasi.
-3. Jatah jepretan diatur pembuat acara, 1 sampai `app_settings.max_shots_limit`. Pembuat acara hanya bisa menaikkan; superadmin bisa menurunkan selama tidak di bawah pemakaian.
+3. Jatah potretan diatur pembuat acara, 1 sampai `app_settings.max_shots_limit`. Pembuat acara hanya bisa menaikkan; superadmin bisa menurunkan selama tidak di bawah pemakaian.
 4. Efek film: pembuat acara memilih efek bawaan; tamu boleh menggantinya sendiri dari jendela bidik (pratinjau dari gambar kamera, diingat per acara di HP). Pembuat acara bisa mematikan pilihan tamu (`events.allow_film_choice`). Efek dibakar ke foto di HP (`src/film.js`). Nama preset buatan sendiri, bukan merek.
 5. Tidak ada unggah dari galeri. Cadangan `<input capture>` menolak file yang `lastModified`-nya lebih dari 3 menit.
 6. Foto tampil setelah film habis (tetap; acara ditutup dan cuci film juga tetap).
@@ -26,7 +26,7 @@ Database: `supabase/schema.sql` (v1) lalu `supabase/v2.sql` (perubahan v2, aman 
 10. Resolusi diatur superadmin (`photo_max_side`, global + override per acara). Tiap foto: penuh, sedang (1080px), thumbnail (400px).
 11. Dashboard (`#/admin`), tombolnya hanya tampil untuk superadmin dan pembuat acara. Superadmin: ringkasan + storage, peran, pengaturan, semua acara, pengguna (blokir), log aktivitas. Pembuat acara: hanya tab Acara berisi acaranya sendiri.
 12. Flash manual (senter untuk kamera belakang jika didukung, layar putih untuk kamera depan). Kontrol kamera 3 kolom proporsional. Mirror diatur superadmin. Sampul/kartu undangan per acara (bucket publik `covers`).
-13. Tema warna ceria (krem, koral, kuning, mint).
+13. Tema warna TitipPotret: Tinta #1F2A44, Lampu kilat #E8603C, Kertas foto #FFF7EC; huruf Plus Jakarta Sans.
 14. Penyimpanan tetap Supabase.
 
 ## Tahapan
@@ -103,18 +103,18 @@ Jalankan ulang `supabase/v2.sql`; untuk R2 dan notifikasi ikuti README bagian 1c
 - [x] Notifikasi browser "album terbuka" (`push_subscriptions`, `album_watch`, Edge Function `notify-album`, dipicu aplikasi tanpa pg_cron)
 - [x] Buku tamu teks + suara maks. 60 detik, 3 per tamu (`guestbook`, bucket `voices`, tab Ucapan)
 - [x] Kolase v2 (BR-09: 1–9 foto, dibuat di HP, tidak diunggah, tanpa kuota unduhan): tata letak, ornamen, ukuran, dan teks sebagai pilihan bebas (`src/collage.js`, `src/collage-layouts.js`); tema per acara `events.collage_theme` (diatur di Panel → Pengaturan → Kolase tamu); tukar foto dengan ketuk, pindah dengan tahan-geser
-- [x] BR-19: logo Jepretin di kolase wajib; boleh dimatikan bila `collage_theme.logo_optional` (diatur superadmin, sampai pembayaran tersedia)
+- [x] BR-19: logo TitipPotret di kolase wajib; boleh dimatikan bila `collage_theme.logo_optional` (diatur superadmin, sampai pembayaran tersedia)
 - [x] Pengaman kapasitas: status pembuatan acara Buka / Hanya acara kecil / Tutup (`set_creation_mode`, `can_create_event(tamu, roll)`), meter kapasitas (`admin_capacity`; request Worker dan realtime puncak sebagai perkiraan model), pengaman otomatis 85%/95% (`capacity_tick`, cron 5 menit), tinjauan acara besar (`needs_review`, `review_event`; kamera aktif setelah ditinjau), daftar tunggu "Kabari saya" (`creation_waitlist`, push lewat `notify-album`)
 - [x] Pembayaran Midtrans Snap: harga per tamu × tarif roll × (1 − diskon), minimum, kuota gratis (`price_quote_raw`, `src/price.js`); acara berbayar = draf sampai lunas (`events.pay_status`); pesanan dan kode promo (`orders`, `promo_codes`, `start_order`); tambah tamu bayar selisih; webhook dan cek status di Worker (`worker/pay.js`, tanda tangan Signature Secret Key + cek ulang ke API status); Dashboard → Keuangan; halaman harga publik `#/harga`
 - [x] Buat acara v2 (#/buat, `src/create-event.js`): halaman penuh lima langkah sesuai kanvas (jenis & nama, waktu & buka album, kamera, tamu & privasi, sampul & tautan), lalu bayar dan "Acaramu sudah siap!"; nama penyelenggara, tautan khusus `domain/<slug>` (`resolve_slug`), album hanya penyelenggara (`album_private`), cap tanggal / unggah galeri / kamera depan bisa diatur
 - [x] Layanan mandiri: saat pembayaran aktif, semua akun Google terverifikasi bisa langsung membuat acara tanpa pengajuan (`can_create_event`); email di kolom "Email pembuat acara" (`events.creator_email`) otomatis menjadi pembuat acara saat pesanan lunas. Saat pembayaran mati, alur pengajuan pembuat acara tetap berlaku.
 - [x] Metode bayar dipilih di layar Pembayaran (QRIS, GoPay, ShopeePay, Virtual account): disimpan di `orders.pay_method`, popup Snap langsung ke metode itu (`enabled_payments`), ganti metode = pesanan baru
-- [x] Timer jepret 3/10 detik di kamera (sebelah tukar kamera), bisa dibatalkan, jatah baru terpakai saat foto diambil
+- [x] Timer potret 3/10 detik di kamera (sebelah tukar kamera), bisa dibatalkan, jatah baru terpakai saat foto diambil
 - [x] Kunci kamera sampai acara mulai (opsional, `events.lock_until_start`, dijaga di `reserve_shot`): hitung mundur di layar gabung dan kamera
 - [x] Hitung mundur sampai album terbuka (mode cuci film) di album, kamera, dan layar "Film habis"
 - [x] Masa simpan foto berbayar (`events.keep_days`, `keep_fee()`): sampai 30 hari gratis, 31–59 hari Rp3.000/hari, 60–90 hari Rp200.000; hapus otomatis wajib (rencana hapus dibatasi masa simpan); perpanjang lewat Upgrade (bayar selisih)
-- [x] Batas jepretan per tamu mengikuti rentang harga tertinggi (`shots_cap()`); Upgrade bertahap per rentang di Panel
-- [x] Paket Unlimited tamu & jepretan Rp999.000 tanpa diskon/promo (`events.unlimited`); album dibuka setelah acara selesai
+- [x] Batas potretan per tamu mengikuti rentang harga tertinggi (`shots_cap()`); Upgrade bertahap per rentang di Panel
+- [x] Paket Unlimited tamu & potretan Rp999.000 tanpa diskon/promo (`events.unlimited`); album dibuka setelah acara selesai
 - [x] Suara rana dan tik timer lewat elemen <audio> (WAV di memori, dibuka saat ketukan), tetap berbunyi saat iPhone dalam mode senyap; Web Audio sebagai cadangan
 - [x] Opsi foto tamu langsung terlihat tanpa menunggu roll habis (`events.show_instantly`), di langkah 2 Buat acara dan Panel
 - [x] Kolase: ornamen Koran lama, Kamera retro, Scrapbook & perangko (referensi gaya fremio.id, desain sendiri); sakelar Nama acara dan Tanggal terpisah, tanggal selalu tampil (tanggal acara atau hari ini)

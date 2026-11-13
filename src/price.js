@@ -1,4 +1,4 @@
-// Rumus harga Jepretin, sama persis dengan price_quote_raw() di supabase/v2.sql.
+// Rumus harga TitipPotret, sama persis dengan price_quote_raw() di supabase/v2.sql.
 // Dipakai untuk angka langsung di layar (halaman harga, wizard, tambah tamu); nominal yang
 // ditagih tetap dihitung ulang server saat pesanan dibuat. Tanpa DOM, supaya bisa dites di Node.
 // cfg: hasil price_settings() — { roll_tiers, discounts, free_guests, free_shots, min }
@@ -23,10 +23,10 @@ export function keepFee(cfg, days) {
   return (days - cfg.keep_free_days) * cfg.keep_per_day;
 }
 
-// Batas jepretan per tamu (rentang harga tertinggi saat pembayaran aktif)
+// Batas potretan per tamu (rentang harga tertinggi saat pembayaran aktif)
 export const shotsCap = (cfg) => cfg.shots_cap || cfg.max_shots_limit || 100;
 
-// Rentang harga jepretan: [{ from, to, rate }] untuk pilihan upgrade bertahap
+// Rentang harga potretan: [{ from, to, rate }] untuk pilihan upgrade bertahap
 export function tiers(cfg) {
   return (cfg.roll_tiers || []).map(([to, rate], i, a) => ({ from: i ? a[i - 1][0] + 1 : 1, to: Math.min(to, shotsCap(cfg)), rate }))
     .filter((t) => t.from <= shotsCap(cfg));

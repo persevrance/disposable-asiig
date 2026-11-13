@@ -46,12 +46,12 @@ export async function renderAdmin(app, tab, { setView, me }) {
   const label = (t, n) => (t === "acara" && !superadmin ? "Acara saya" : n);
   const meta = me?.user_metadata || {};
   const who = meta.full_name || meta.name || me?.email || "";
-  // Header: terang untuk pembuat acara, gelap untuk superadmin (desain Jepretin)
+  // Header: terang untuk pembuat acara, gelap untuk superadmin (desain TitipPotret)
   const view = el(`
     <div class="admin-shell">
       <header class="admin-head${superadmin ? " dark" : ""}">
         <div class="admin-head-in">
-          <a class="admin-logo" href="#/" aria-label="Jepretin, kembali ke beranda">${brandLockup(34, { dark: superadmin })}</a>
+          <a class="admin-logo" href="#/" aria-label="TitipPotret, kembali ke beranda">${brandLockup(34, { dark: superadmin })}</a>
           ${superadmin ? `<span class="admin-badge">Superadmin</span>` : ""}
           <nav class="admin-nav" aria-label="Navigasi dashboard">
             ${tabs.map(([t, n]) => `<a href="#/admin/${t}" class="${t === tab ? "on" : ""}" ${t === tab ? 'aria-current="page"' : ""}>${label(t, n)}</a>`).join("")}
@@ -182,7 +182,7 @@ const ERROR_KINDS = {
   DENIED: "Izin kamera ditolak", NOT_HTTPS: "Bukan HTTPS", IN_APP: "Browser bawaan aplikasi",
   UNSUPPORTED: "Browser tidak mendukung", NO_CAMERA: "Kamera tidak ada", BUSY: "Kamera dipakai aplikasi lain",
   OTHER: "Lainnya", BLACK_VIEWFINDER: "Jendela bidik hitam", DARK_FRAMES: "Gambar kamera gelap",
-  SHOT_FAILED: "Jepretan gagal diproses",
+  SHOT_FAILED: "Potretan gagal diproses",
 };
 // Ringkas user agent menjadi "iPhone · Safari"
 function shortUA(ua = "") {
@@ -531,7 +531,7 @@ async function privasi(body) {
 
 // ---------- Pembuatan acara: status Buka / Hanya acara kecil / Tutup, kapasitas, antrean ----------
 // Status hanya menahan acara BARU (dan penambahan tamu/roll). Acara yang sudah dibuat atau
-// berlangsung, tamu yang bergabung, dan jepretan tidak pernah dihentikan olehnya.
+// berlangsung, tamu yang bergabung, dan potretan tidak pernah dihentikan olehnya.
 const CREATION_MODES = {
   open:    { label: "Buka",        title: "Menerima semua acara", badge: "Terbuka",  tone: "open",
              desc: "Semua akun pembuat acara bisa membuat acara sesuai batas global dan kuotanya." },
@@ -785,7 +785,7 @@ function checkPriceRows(tiers, disc) {
   if (!tiers.length) return "Isi paling sedikit satu tarif roll.";
   for (const [max, rate] of tiers) {
     if (!whole(max) || max < 1 || max > 500) return `Batas roll harus bilangan bulat 1–500 (sekarang: ${max || "kosong"}).`;
-    if (!whole(rate) || rate < 0) return `Tarif roll sampai ${max} jepretan harus bilangan bulat Rp0 ke atas.`;
+    if (!whole(rate) || rate < 0) return `Tarif roll sampai ${max} potretan harus bilangan bulat Rp0 ke atas.`;
   }
   for (const [min, pct] of disc) {
     if (!whole(min) || min < 1 || min > 5000) return `Jumlah tamu pada diskon harus bilangan bulat 1–5000 (sekarang: ${min || "kosong"}).`;
@@ -855,7 +855,7 @@ async function keuangan(body) {
             </div>
             <label>Batas waktu bayar (menit)<input type="number" name="payment_window_min" min="5" max="1440" value="${cfg.payment_window_min}" /></label>
           </fieldset>
-          <fieldset><legend>Paket Unlimited tamu & jepretan</legend>
+          <fieldset><legend>Paket Unlimited tamu & potretan</legend>
             <div class="date-row">
               <label>Harga Unlimited (Rp)<input type="number" name="price_unlimited" min="0" step="1000" value="${cfg.price_unlimited}" /></label>
               <label>Perkiraan foto per acara (kapasitas)<input type="number" name="unlimited_est_photos" min="1" value="${cfg.unlimited_est_photos}" /></label>
@@ -954,7 +954,7 @@ async function keuangan(body) {
       <div class="price-row">
         <span>${i ? st.tiers[i - 1][0] + 1 : 1}–</span>
         <label><span class="sr-only">Batas roll</span><input type="number" min="1" max="500" data-t="tiers" data-i="${i}" data-k="0" value="${max}" /></label>
-        <span>jepretan</span>
+        <span>potretan</span>
         <label>Rp<input type="number" min="0" step="100" data-t="tiers" data-i="${i}" data-k="1" value="${v}" aria-label="Tarif roll sampai ${max}" /></label>
         ${st.tiers.length > 1 ? `<button type="button" class="round-btn ghost-round" data-del="tiers" data-i="${i}" aria-label="Hapus rentang">${ICON.close}</button>` : ""}
       </div>`).join("");
@@ -972,7 +972,7 @@ async function keuangan(body) {
     const c = priceCfg();
     view.querySelector(".sim-rows").innerHTML = SIM_SIZES.map(([g, r]) => {
       const q = quote(c, g, r);
-      return `<div class="sim-row"><span>${g} tamu × ${r} jepretan</span><b>${q.total ? rp(q.total) : "Gratis"}</b></div>`;
+      return `<div class="sim-row"><span>${g} tamu × ${r} potretan</span><b>${q.total ? rp(q.total) : "Gratis"}</b></div>`;
     }).join("");
   }
   const priceCard = view.querySelector(".price-grid");
@@ -1363,7 +1363,7 @@ const limitText = (r) => (r.event_limit === null || r.event_limit === undefined
 // Kartu di atas tab Pengguna & peran: pengajuan terbuka (setujui / tolak + hubungi via WhatsApp),
 // riwayat yang sudah diputuskan di bawah lipatan.
 const waLink = (phone, name, event) =>
-  `https://wa.me/${encodeURIComponent(phone)}?text=${encodeURIComponent(`Halo ${name || ""}, kami dari Jepretin tentang pengajuan pembuat acara untuk "${event}".`)}`;
+  `https://wa.me/${encodeURIComponent(phone)}?text=${encodeURIComponent(`Halo ${name || ""}, kami dari TitipPotret tentang pengajuan pembuat acara untuk "${event}".`)}`;
 const waShow = (p) => `0${String(p).replace(/^62/, "")}`.replace(/(\d{4})(\d{4})(\d+)/, "$1 $2 $3");
 
 async function loadCreatorRequests(slot, onChange) {
@@ -1638,7 +1638,7 @@ async function pengaturan(body) {
       <p class="hint">Berlaku untuk semua acara. Resolusi dan mirror bisa ditimpa per acara dari Panel acara.</p>
 
       <fieldset><legend>Batas</legend>
-        <label>Maks. jepretan per peserta (batas untuk pembuat acara)
+        <label>Maks. potretan per peserta (batas untuk pembuat acara)
           <input type="number" name="max_shots_limit" min="1" max="500" value="${s.max_shots_limit}" /></label>
         <label>Maks. peserta per acara
           <input type="number" name="max_members_limit" min="1" max="5000" value="${s.max_members_limit}" /></label>
@@ -1788,7 +1788,7 @@ const SETTING_DEFAULTS = {
   storage_backend: "supabase", vapid_public_key: null,
 };
 const SETTING_LABELS = {
-  max_shots_limit: "Maks. jepretan per peserta", max_members_limit: "Maks. peserta per acara",
+  max_shots_limit: "Maks. potretan per peserta", max_members_limit: "Maks. peserta per acara",
   storage_quota_mb: "Kuota Supabase (MB)", r2_quota_mb: "Kuota R2 (MB)", creator_event_limit: "Batas acara pembuat baru",
   creator_storage_mb: "Kuota storage pembuat baru (MB)", photo_max_side: "Resolusi foto",
   jpeg_quality: "Kualitas JPEG", default_film: "Efek film bawaan", flash_enabled: "Tombol flash",
@@ -1838,7 +1838,7 @@ const ACTIONS = {
 const MODERATION = { hide: "menyembunyikan foto yang dilaporkan", block: "menyembunyikan foto dan memblokir pemotret", dismiss: "mengabaikan laporan foto" };
 const FIELDS = {
   name: "nama", max_shots: "jatah", max_members: "batas peserta",
-  max_shots_limit: "batas jepretan", max_members_limit: "batas peserta", storage_quota_mb: "kuota Supabase (MB)", r2_quota_mb: "kuota R2 (MB)",
+  max_shots_limit: "batas potretan", max_members_limit: "batas peserta", storage_quota_mb: "kuota Supabase (MB)", r2_quota_mb: "kuota R2 (MB)",
   jpeg_quality: "kualitas JPEG", creator_event_limit: "batas acara bawaan", creator_storage_mb: "kuota storage bawaan (MB)",
 };
 function describeChange(k, v) {

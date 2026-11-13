@@ -5,11 +5,11 @@ import { download, safeName, fmtRange, toast } from "./ui.js";
 
 const W = 1240, H = 1748;
 const C = {
-  bg: "#fff8f0", ink: "#2d1b33", muted: "#6e5d72", coral: "#d6336c", flash: "#ff5c8a",
-  soft: "#ffe3ec", line: "#efdccb",
+  bg: "#fff7ec", ink: "#1f2a44", muted: "#5b6475", coral: "#c4471f", flash: "#e8603c",
+  soft: "#fde4d8", line: "#e6dccd",
 };
-const DISPLAY = '"Fredoka", "Nunito", system-ui, sans-serif';
-const BODY = '"Nunito", system-ui, sans-serif';
+const DISPLAY = '"Plus Jakarta Sans", system-ui, sans-serif';
+const BODY = '"Plus Jakarta Sans", system-ui, sans-serif';
 
 function loadImage(src) {
   return new Promise((res, rej) => {
@@ -51,15 +51,17 @@ function wrap(ctx, text, maxW, maxLines) {
   return lines;
 }
 
-// Logo kamera Jepretin pada kotak 64×64, digambar di (x, y) dengan ukuran size
+// Logo TitipPotret (label titipan berbentuk kamera) pada kotak 100×100, digambar di (x, y) dengan ukuran size
 function drawMark(ctx, x, y, size) {
-  const k = size / 64;
+  const k = size / 100;
+  const dot = (cx, cy, r, fill) => { ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill(); };
   ctx.save();
   ctx.translate(x, y); ctx.scale(k, k);
-  ctx.fillStyle = C.ink; roundRect(ctx, 4, 14, 56, 38, 10); ctx.fill();
-  ctx.fillStyle = C.bg; roundRect(ctx, 42, 20, 12, 7, 2.5); ctx.fill();
-  ctx.beginPath(); ctx.arc(32, 35, 11.5, 0, Math.PI * 2); ctx.fill();
-  ctx.fillStyle = C.ink; ctx.beginPath(); ctx.arc(32, 35, 6.5, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = C.ink; ctx.fill(new Path2D("M34 12 H82 Q90 12 90 20 V80 Q90 88 82 88 H34 L10 50 Z"));
+  dot(24, 50, 4.5, C.bg);
+  ctx.fillStyle = C.flash; roundRect(ctx, 72, 19, 10, 6, 2); ctx.fill();
+  dot(60, 50, 18, C.bg);
+  dot(60, 50, 10, C.flash);
   ctx.restore();
 }
 
@@ -146,7 +148,7 @@ async function draw(ev, withCover) {
   spaced(ctx, ev.code, W / 2, y, 0.2 * 26 * s);
 
   // Tiga langkah, rata bawah di atas kaki kartu
-  const steps = [["1", "Scan QR"], ["2", "Login Google"], ["3", `${ev.maxShots} jepretan untukmu`]];
+  const steps = [["1", "Scan QR"], ["2", "Login Google"], ["3", `${ev.maxShots} potretan untukmu`]];
   const colW = (W - 64 * s) / 3;
   steps.forEach(([n, t], i) => {
     const cx = 32 * s + colW * i + colW / 2;
@@ -159,8 +161,16 @@ async function draw(ev, withCover) {
   // Kaki: garis putus-putus + wordmark
   ctx.strokeStyle = C.line; ctx.lineWidth = 1.5 * s; ctx.setLineDash([6 * s, 5 * s]);
   ctx.beginPath(); ctx.moveTo(0, foot); ctx.lineTo(W, foot); ctx.stroke(); ctx.setLineDash([]);
-  ctx.font = `600 ${15 * s}px ${DISPLAY}`; ctx.fillStyle = C.ink;
-  ctx.fillText("jepretin", W / 2, foot + 26 * s);
+  // Wordmark "Titip" Medium + "Potret" ExtraBold, di tengah
+  ctx.fillStyle = C.ink;
+  const wmPx = 15 * s, wmAlign = ctx.textAlign;
+  ctx.font = `500 ${wmPx}px ${DISPLAY}`; const wa = ctx.measureText("Titip").width;
+  ctx.font = `800 ${wmPx}px ${DISPLAY}`; const wb = ctx.measureText("Potret").width;
+  const wx = W / 2 - (wa + wb) / 2;
+  ctx.textAlign = "left";
+  ctx.font = `500 ${wmPx}px ${DISPLAY}`; ctx.fillText("Titip", wx, foot + 26 * s);
+  ctx.font = `800 ${wmPx}px ${DISPLAY}`; ctx.fillText("Potret", wx + wa, foot + 26 * s);
+  ctx.textAlign = wmAlign;
   return c;
 }
 

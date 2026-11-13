@@ -1,7 +1,7 @@
-// Halaman depan untuk pengunjung yang belum login: perkenalan Jepretin + tombol masuk.
+// Halaman depan untuk pengunjung yang belum login: perkenalan TitipPotret + tombol masuk.
 // Tombol "Masuk" memakai login Google (diikat di main.js); "Buat acara" menuju #/buat,
 // dan router meminta login Google dulu bila belum masuk.
-import { esc, brandLockup } from "./ui.js";
+import { esc, brandLockup, WORDMARK } from "./ui.js";
 import { inAppBrowser, isAndroid, chromeIntentUrl } from "./camera.js";
 import { t, langSwitch } from "./i18n.js";
 
@@ -19,7 +19,7 @@ const icon = (k, size = 24) =>
 
 export function landingHtml({ code, shareLink }) {
   const features = [
-    ["camera", "coral", t("Jatah jepretan, tanpa hapus"), t("Penyelenggara menentukan jatahnya. Setiap foto berarti karena nggak bisa diulang.")],
+    ["camera", "coral", t("Jatah potretan, tanpa hapus"), t("Penyelenggara menentukan jatahnya. Setiap foto berarti karena nggak bisa diulang.")],
     ["sun", "sun", t("Efek film"), t("Pilih nuansa foto dengan pratinjau langsung, dan efeknya tercatat di setiap foto.")],
     ["grid", "mint", t("Album bersama"), t("Foto muncul langsung tanpa muat ulang. Saring per tamu, foto saya, atau favorit.")],
     ["screen", "sky", t("Slideshow ke proyektor"), t("Tampilkan album di layar besar, lengkap dengan QR di pojok untuk tamu yang baru datang.")],
@@ -27,8 +27,8 @@ export function landingHtml({ code, shareLink }) {
     ["bell", "coral", t("Kabar saat album terbuka"), t("Notifikasi ke HP tamu, plus kolase otomatis yang siap dibagikan ke Instagram.")],
   ];
   const steps = [
-    [t("Buat acara"), t("Isi nama dan tanggal, atur jatah jepretan dan efek film. Kartu QR siap cetak langsung jadi.")],
-    [t("Tamu scan dan jepret"), t("Scan QR di meja tamu atau masukkan kode 6 huruf, login Google, lalu langsung memotret.")],
+    [t("Buat acara"), t("Isi nama dan tanggal, atur jatah potretan dan efek film. Kartu QR siap cetak langsung jadi.")],
+    [t("Tamu scan dan potret"), t("Scan QR di meja tamu atau masukkan kode 6 huruf, login Google, lalu langsung memotret.")],
     [t("Album terbuka"), t("Setiap gulungan yang habis masuk ke album bersama. Atau aktifkan mode cuci film supaya semua foto terbuka setelah acara.")],
   ];
   const uses = [t("Nikahan"), t("Wisuda"), t("Ulang tahun"), t("Gathering kantor"), t("Liburan bareng"), t("Acara komunitas")];
@@ -53,7 +53,7 @@ export function landingHtml({ code, shareLink }) {
   return `
     <div class="landing">
       <header class="lp-nav">
-        <a class="lp-logo" href="/" aria-label="Jepretin">${brandLockup(42)}</a>
+        <a class="lp-logo" href="/" aria-label="TitipPotret">${brandLockup(42)}</a>
         <nav aria-label="${t("Navigasi utama")}">
           <button type="button" class="lp-link" data-scroll="lp-cara">${t("Cara kerja")}</button>
           <button type="button" class="lp-link" data-scroll="lp-fitur">${t("Fitur")}</button>
@@ -66,8 +66,8 @@ export function landingHtml({ code, shareLink }) {
       <section class="lp-hero">
         <div class="lp-hero-text">
           <span class="lp-kicker">${t("Kamera sekali pakai untuk acaramu")}</span>
-          <h1>${t("Jepretin momennya,")} <span>${t("jadiin kenangannya.")}</span></h1>
-          <p class="lp-lead">${t("Tamu scan QR, login dengan Google, lalu dapat jatah jepretan. Nggak bisa dihapus, nggak bisa diulang. Begitu filmnya habis, fotonya masuk ke album bersama.")}</p>
+          <h1>${t("<b>Potretin</b> momennya,")} <span>${t("<b>jadiin</b> ceritanya.")}</span></h1>
+          <p class="lp-lead">${t("Tamu scan QR, login dengan Google, lalu dapat jatah potretan. Nggak bisa dihapus, nggak bisa diulang. Begitu filmnya habis, fotonya masuk ke album bersama.")}</p>
           ${code ? `<p class="pill lp-invite">${t("Undangan acara:")} <b>${esc(code)}</b></p>` : ""}
           ${warn}
           <div class="lp-cta">${cta}</div>
@@ -91,7 +91,7 @@ export function landingHtml({ code, shareLink }) {
               <div class="lp-screen-ctl"><span class="lp-thumb"></span><span class="lp-shutter"><span></span></span>${icon("bolt", 26)}</div>
             </div>
           </div>
-          <div class="lp-float lp-float-left"><b>${t("Sisa jepretan")}</b><span>${t("24 dari 30")}</span></div>
+          <div class="lp-float lp-float-left"><b>${t("Sisa potretan")}</b><span>${t("24 dari 30")}</span></div>
           <div class="lp-float lp-float-right">${t("Efek film: Senja Hangat")}</div>
         </div>
       </section>
@@ -122,7 +122,7 @@ export function landingHtml({ code, shareLink }) {
 
       <section class="lp-inner">
         <div class="lp-final">
-          <h2>${t("Siap jepret momen berikutnya?")}</h2>
+          <h2>${t("Siap potret momen berikutnya?")}</h2>
           <p>${t("Buat acaramu, cetak kartu QR-nya, dan biarkan tamu yang memotret.")}</p>
           <a class="btn primary lp-big" href="#/buat">${t("Buat acara")}</a>
         </div>
@@ -130,8 +130,8 @@ export function landingHtml({ code, shareLink }) {
 
       <footer class="lp-foot">
         <div class="lp-inner">
-          <span class="wordmark">jepretin</span>
-          <div><a href="#/harga">${t("Harga")}</a><a href="/syarat.html">${t("Syarat layanan")}</a><a href="/pengembalian-dana.html">${t("Kebijakan pengembalian dana")}</a><a href="/privacy.html">${t("Kebijakan privasi")}</a><span>© ${new Date().getFullYear()} Jepretin</span></div>
+          ${WORDMARK}
+          <div><a href="#/harga">${t("Harga")}</a><a href="/syarat.html">${t("Syarat layanan")}</a><a href="/pengembalian-dana.html">${t("Kebijakan pengembalian dana")}</a><a href="/privacy.html">${t("Kebijakan privasi")}</a><span>© ${new Date().getFullYear()} TitipPotret</span></div>
         </div>
       </footer>
     </div>`;

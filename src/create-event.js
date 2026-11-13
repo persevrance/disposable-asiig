@@ -24,11 +24,11 @@ const TYPES = [
   { id: "lainnya", name: "Lainnya" },
 ];
 const OPEN_MODES = [
-  { id: "roll", name: "Per gulungan", tag: "Khas Jepretin", desc: () => "Foto tamu terbuka begitu filmnya habis" },
+  { id: "roll", name: "Per gulungan", tag: "Khas TitipPotret", desc: () => "Foto tamu terbuka begitu filmnya habis" },
   { id: "after", name: "Setelah acara selesai", desc: (d) => `Semua terbuka serentak${d.ends ? ` pukul ${hhmm(d.ends)}` : " saat acara selesai"}` },
   { id: "delay", name: "Cuci film dulu", desc: (d) => `Terbuka ${d.delayH} jam setelah acara selesai` },
   { id: "time", name: "Waktu tertentu", desc: () => "Pilih tanggal dan jam sendiri" },
-  { id: "instant", name: "Langsung terlihat", desc: () => "Foto tamu tampil di album begitu dijepret, tanpa menunggu roll habis" },
+  { id: "instant", name: "Langsung terlihat", desc: () => "Foto tamu tampil di album begitu dipotret, tanpa menunggu roll habis" },
 ];
 const G_PRESETS = [5, 25, 50, 100, 200, 300];
 const R_PRESETS = [[12, "12"], [24, "24"], [27, "27 · klasik"], [36, "36"], [50, "50"]];
@@ -62,7 +62,7 @@ export async function renderCreate(setView, { me } = {}) {
   }
   const small = Boolean(gate && !gate.bypass && gate.mode === "limited");
   const paid = Boolean(price?.payments_enabled && !gate?.bypass);
-  // Batas jepretan mengikuti rentang harga tertinggi saat pembayaran aktif
+  // Batas potretan mengikuti rentang harga tertinggi saat pembayaran aktif
   const capShots = paid ? shotsCap(price) : settings.max_shots_limit;
   const maxShots = small ? Math.min(capShots, gate.max_shots) : capShots;
   const maxGuests = small ? Math.min(settings.max_members_limit, gate.max_guests) : settings.max_members_limit;
@@ -243,14 +243,14 @@ export async function renderCreate(setView, { me } = {}) {
       <div class="cr-chips" role="group" aria-label="Efek film">${Object.entries(FILMS).map(([id, x]) => `
         <button type="button" class="cr-chip" data-set="film" data-v="${id}" aria-pressed="${D.film === id}"><span class="film-swatch fs-${id}" aria-hidden="true"></span>${esc(x.name)}</button>`).join("")}</div>
       <div class="cr-field">
-        <span class="cr-label">Jatah jepretan per tamu</span>
+        <span class="cr-label">Jatah potretan per tamu</span>
         <div class="cr-stepper">
-          <button type="button" data-step="shots" data-by="-1" aria-label="Kurangi jepretan" ${D.shots <= 1 ? "disabled" : ""}>−</button>
-          <input type="number" name="shots" inputmode="numeric" min="1" max="${maxShots}" value="${D.shots}" aria-label="Jatah jepretan per tamu" />
-          <button type="button" data-step="shots" data-by="1" aria-label="Tambah jepretan" ${D.shots >= maxShots ? "disabled" : ""}>+</button>
+          <button type="button" data-step="shots" data-by="-1" aria-label="Kurangi potretan" ${D.shots <= 1 ? "disabled" : ""}>−</button>
+          <input type="number" name="shots" inputmode="numeric" min="1" max="${maxShots}" value="${D.shots}" aria-label="Jatah potretan per tamu" />
+          <button type="button" data-step="shots" data-by="1" aria-label="Tambah potretan" ${D.shots >= maxShots ? "disabled" : ""}>+</button>
         </div>
         <div class="chips">${R_PRESETS.filter(([v]) => v <= maxShots).map(([v, l]) => `<button type="button" class="chip" data-set="shots" data-v="${v}" aria-pressed="${D.shots === v}">${l}</button>`).join("")}</div>
-        <small class="hint">Bebas 1–${maxShots} jepretan${small ? " (sedang dibatasi)" : ""}.${paid ? ` Tarif per tamu untuk isi ini: <b>${rp(rate)}</b>` : ""}</small>
+        <small class="hint">Bebas 1–${maxShots} potretan${small ? " (sedang dibatasi)" : ""}.${paid ? ` Tarif per tamu untuk isi ini: <b>${rp(rate)}</b>` : ""}</small>
       </div>
       <div class="cr-toggles">
         ${sw("dateStamp", "Tanda tanggal", "Cap tanggal oranye di pojok foto")}
@@ -277,9 +277,9 @@ export async function renderCreate(setView, { me } = {}) {
       </div>
       ${canUnlimited ? `
       <button type="button" class="cr-unl" role="switch" data-flip="unlimited" aria-checked="${D.unlimited}">
-        <span><b>Unlimited tamu & jepretan</b><small>${rp(pc.price_unlimited)} · tanpa diskon dan kode promo. Album dibuka setelah acara selesai.</small></span>
+        <span><b>Unlimited tamu & potretan</b><small>${rp(pc.price_unlimited)} · tanpa diskon dan kode promo. Album dibuka setelah acara selesai.</small></span>
         <span class="switch bare" aria-hidden="true"><span class="knob"></span></span></button>` : ""}
-      ${D.unlimited ? `<div class="cr-card cr-unl-on"><b>Tamu dan jepretan tanpa batas</b><small class="hint">Bagikan QR ke siapa pun; tidak ada batas jumlah tamu maupun jepretan per tamu.</small></div>` : `
+      ${D.unlimited ? `<div class="cr-card cr-unl-on"><b>Tamu dan potretan tanpa batas</b><small class="hint">Bagikan QR ke siapa pun; tidak ada batas jumlah tamu maupun potretan per tamu.</small></div>` : `
       <div class="cr-card">
         <div class="cr-row"><label for="cr-g" class="cr-label">Jumlah tamu</label>
           <div class="cr-stepper small">
@@ -288,8 +288,8 @@ export async function renderCreate(setView, { me } = {}) {
             <button type="button" data-step="guests" data-by="1" aria-label="Tambah tamu" ${D.guests >= maxGuests ? "disabled" : ""}>+</button>
           </div></div>
         <div class="chips">${G_PRESETS.filter((v) => v <= maxGuests).map((v) => `<button type="button" class="chip" data-set="guests" data-v="${v}" aria-pressed="${D.guests === v}">${v}</button>`).join("")}</div>
-        ${q ? `<div class="cr-price"><span>${D.guests} tamu × ${D.shots} jepretan${q.discount_pct ? ` · diskon ${q.discount_pct}%` : ""}</span><b>${q.total ? rp(q.total) : "Gratis"}</b></div>
-        <small class="hint">Bisa tambah tamu atau jepretan kapan saja, cukup bayar selisihnya. <a href="#/harga" target="_blank" rel="noopener">Cara hitung</a></small>`
+        ${q ? `<div class="cr-price"><span>${D.guests} tamu × ${D.shots} potretan${q.discount_pct ? ` · diskon ${q.discount_pct}%` : ""}</span><b>${q.total ? rp(q.total) : "Gratis"}</b></div>
+        <small class="hint">Bisa tambah tamu atau potretan kapan saja, cukup bayar selisihnya. <a href="#/harga" target="_blank" rel="noopener">Cara hitung</a></small>`
           : `<small class="hint">Maksimal ${maxGuests} tamu${small ? " (sedang dibatasi)" : ""}.</small>`}
       </div>`}
       <div class="cr-field">
@@ -336,8 +336,8 @@ export async function renderCreate(setView, { me } = {}) {
         <b>Ringkasan</b>
         <div><span>Waktu</span><span>${esc(fmtRange(fromLocalInput(D.starts), fromLocalInput(D.ends)) || "Belum diatur")}${D.lockStart ? " · kamera aktif saat mulai" : ""}</span></div>
         <div><span>Album dibuka</span><span>${esc(openText)}${D.albumPrivate ? " · hanya penyelenggara" : ""}</span></div>
-        <div><span>Kamera</span><span>${D.unlimited ? "Jepretan tanpa batas" : `${D.shots} jepretan`} · ${esc(FILMS[D.film]?.name || "")}</span></div>
-        <div><span>Tamu</span><span>${D.unlimited ? "Unlimited tamu & jepretan" : `${D.guests} tamu`}${q ? ` · ${q.total ? rp(q.total) : "Gratis"}` : ""}</span></div>
+        <div><span>Kamera</span><span>${D.unlimited ? "Potretan tanpa batas" : `${D.shots} potretan`} · ${esc(FILMS[D.film]?.name || "")}</span></div>
+        <div><span>Tamu</span><span>${D.unlimited ? "Unlimited tamu & potretan" : `${D.guests} tamu`}${q ? ` · ${q.total ? rp(q.total) : "Gratis"}` : ""}</span></div>
         <div><span>Simpan foto</span><span>${D.keepDays} hari · ${kFee ? rp(kFee) : "Gratis"}</span></div>
         ${paid ? `<div class="cr-sum-total"><span>Total</span><b>${total ? rp(total) : "Gratis"}</b></div>` : ""}
       </div>`,
@@ -470,7 +470,7 @@ export async function renderCreate(setView, { me } = {}) {
       <div class="cr-in cr-done">
         <div class="cr-confetti" aria-hidden="true"></div>
         <div class="cr-done-head">
-          <span class="tag ok">${wasPaid ? "Pembayaran diterima" : st.pay_status === "paid" ? "Lunas" : "Aktif"} · ${st.max_members} tamu × ${st.max_shots} jepretan</span>
+          <span class="tag ok">${wasPaid ? "Pembayaran diterima" : st.pay_status === "paid" ? "Lunas" : "Aktif"} · ${st.max_members} tamu × ${st.max_shots} potretan</span>
           <h1>Acaramu sudah siap!</h1>
           <p>Bagikan ke tamu sebelum acara dimulai.</p>
         </div>

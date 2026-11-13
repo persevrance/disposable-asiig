@@ -185,7 +185,7 @@ language sql immutable as $$
 $$;
 
 -- Opsional: { ornament, allowed: [...], accent: "#rrggbb", logo_optional }.
--- logo_optional (logo Jepretin boleh dimatikan, BR-19) hanya bisa diubah superadmin.
+-- logo_optional (logo TitipPotret boleh dimatikan, BR-19) hanya bisa diubah superadmin.
 alter table events add column if not exists collage_theme jsonb
   check (collage_theme is null or jsonb_typeof(collage_theme) = 'object');
 -- Acara besar menunggu tinjauan superadmin: tamu bisa bergabung, tetapi belum bisa memotret
@@ -204,7 +204,7 @@ create or replace function valid_slug(p text) returns boolean
 language sql immutable as $$
   select p ~ '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$' and p !~ '--'
      and p not in ('admin', 'api', 'e', 'harga', 'buat', 'privacy', 'syarat', 'pengembalian-dana',
-                   'assets', 'index', 'manifest', 'sw', 'login', 'masuk', 'kode', 'jepretin', 'bantuan',
+                   'assets', 'index', 'manifest', 'sw', 'login', 'masuk', 'kode', 'jepretin', 'titippotret', 'bantuan',
                    'help', 'tentang', 'about', 'blog', 'app', 'www', 'layar', 'album', 'panel');
 $$;
 alter table events
@@ -218,9 +218,9 @@ alter table events
   add column if not exists allow_front boolean not null default true,     -- kamera depan / selfie
   -- Kamera baru aktif saat acara mulai (starts_at); sebelumnya tamu melihat hitung mundur
   add column if not exists lock_until_start boolean not null default false,
-  -- Paket Unlimited: tamu dan jepretan tanpa batas (max_members/max_shots diisi batas sistem)
+  -- Paket Unlimited: tamu dan potretan tanpa batas (max_members/max_shots diisi batas sistem)
   add column if not exists unlimited boolean not null default false,
-  -- Foto tamu langsung terlihat di album begitu dijepret (tanpa menunggu roll habis / acara selesai)
+  -- Foto tamu langsung terlihat di album begitu dipotret (tanpa menunggu roll habis / acara selesai)
   add column if not exists show_instantly boolean not null default false,
   -- Masa simpan foto (hari setelah acara); di atas batas gratis dibayar saat pembayaran.
   -- keep_basis = biaya masa simpan yang sudah dibayar (dasar selisih saat diperpanjang).
@@ -471,7 +471,7 @@ language sql stable security definer set search_path = public as $$
    where auth.uid() is not null and e.join_code = upper(trim(p_code));
 $$;
 
--- Memesan satu jepretan. Nama file tidak memuat user_id supaya
+-- Memesan satu potretan. Nama file tidak memuat user_id supaya
 -- foto dari orang yang sama tidak bisa dikelompokkan dari URL-nya.
 -- p_film: efek film yang dipakai HP (dicatat untuk penampil foto)
 drop function if exists reserve_shot(uuid, uuid);
@@ -837,7 +837,7 @@ begin
     raise exception 'BATAS_STORAGE_HABIS';
   end if;
   select * into s from app_settings;
-  -- Batas jepretan mengikuti rentang harga tertinggi saat pembayaran aktif (shots_cap)
+  -- Batas potretan mengikuti rentang harga tertinggi saat pembayaran aktif (shots_cap)
   if not v_unl and (p_max_shots is null or p_max_shots < 1 or p_max_shots > shots_cap()) then
     raise exception 'JATAH_MELEBIHI_BATAS';
   end if;
@@ -2476,7 +2476,7 @@ alter table app_settings
   add column if not exists price_min int not null default 25000 check (price_min between 0 and 100000000),
   add column if not exists free_events_per_user int not null default 2 check (free_events_per_user between 0 and 1000),
   add column if not exists payment_window_min int not null default 15 check (payment_window_min between 5 and 1440),
-  -- Paket Unlimited tamu & jepretan: harga tetap, tanpa diskon jumlah tamu dan kode promo
+  -- Paket Unlimited tamu & potretan: harga tetap, tanpa diskon jumlah tamu dan kode promo
   add column if not exists price_unlimited int not null default 999000 check (price_unlimited between 0 and 1000000000),
   add column if not exists unlimited_est_photos int not null default 21000 check (unlimited_est_photos between 1 and 10000000),
   -- Masa simpan foto: <= keep_free_days gratis; sampai keep_flat_days per hari; >= keep_flat_days flat
@@ -2540,7 +2540,7 @@ create index if not exists orders_status on orders (status, created_at desc);
 alter table promo_codes enable row level security;
 alter table orders enable row level security;
 
--- Batas jepretan per tamu: saat pembayaran aktif = rentang harga tertinggi (maks. 100, batas kolom);
+-- Batas potretan per tamu: saat pembayaran aktif = rentang harga tertinggi (maks. 100, batas kolom);
 -- kalau tidak, pengaturan global max_shots_limit
 create or replace function shots_cap() returns int
 language sql stable security definer set search_path = public as $$

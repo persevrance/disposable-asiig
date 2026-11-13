@@ -1,5 +1,5 @@
 // Service worker: menyimpan kerangka aplikasi di HP supaya aplikasi tetap terbuka
-// saat sinyal hilang (foto yang dijepret offline tetap masuk antrean IndexedDB).
+// saat sinyal hilang (foto yang dipotret offline tetap masuk antrean IndexedDB).
 // Tidak menyimpan data Supabase maupun /api/*: foto, album, dan login selalu lewat jaringan
 // (foto R2 memakai cache browser biasa; thumbnail album di cache "asiig-thumbs-v1" milik aplikasi).
 //
@@ -55,8 +55,8 @@ self.addEventListener("fetch", (event) => {
 // Notifikasi "album sudah terbuka" (dikirim Edge Function notify-album)
 self.addEventListener("push", (event) => {
   let d = {};
-  try { d = event.data?.json() || {}; } catch { d = { title: "Jepretin", body: event.data?.text() }; }
-  event.waitUntil(self.registration.showNotification(d.title || "Jepretin", {
+  try { d = event.data?.json() || {}; } catch { d = { title: "TitipPotret", body: event.data?.text() }; }
+  event.waitUntil(self.registration.showNotification(d.title || "TitipPotret", {
     body: d.body || "", icon: "/icon.svg", badge: "/icon.svg", tag: d.tag, data: { url: d.url || "/" },
   }));
 });

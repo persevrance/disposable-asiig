@@ -109,7 +109,7 @@ export async function renderPanel(root, status, { reload, home }) {
           <button class="btn sc-outline" data-act="toggle-open">${status.is_open ? "Tutup acara" : "Buka acara"}</button>
         </div>
         <div class="status-more">
-          <button class="linklike" data-act="upgrade" hidden>${ICON.people} Upgrade: tamu, jepretan, masa simpan</button>
+          <button class="linklike" data-act="upgrade" hidden>${ICON.people} Upgrade: tamu, potretan, masa simpan</button>
           <button class="linklike" data-act="share">${ICON.link} Salin link undangan</button>
           <a class="linklike" href="#/e/${status.event_id}/layar">${ICON.play} Mode layar</a>
         </div>
@@ -166,7 +166,7 @@ export async function renderPanel(root, status, { reload, home }) {
           <button class="btn small" data-act="member-csv">${ICON.download} Laporan (CSV)</button>
           <select aria-label="Urutkan peserta" data-act="member-sort">
             <option value="joined">Urut waktu masuk</option>
-            <option value="shots">Jepretan terbanyak</option>
+            <option value="shots">Potretan terbanyak</option>
             <option value="pending">Ada yang belum terunggah</option>
           </select>
         </div>
@@ -208,10 +208,10 @@ export async function renderPanel(root, status, { reload, home }) {
               <label class="check"><input type="checkbox" name="cl_allowed" value="${o.id}" ${!theme.allowed?.length || theme.allowed.includes(o.id) ? "checked" : ""}/> ${esc(o.name)}</label>`).join("")}
             </div>
             <label class="check"><input type="checkbox" name="cl_accent_on" ${theme.accent ? "checked" : ""}/> Warna aksen sendiri (konfeti)</label>
-            <input type="color" name="cl_accent" aria-label="Warna aksen kolase" value="${esc(theme.accent || "#ff5c8a")}" />
+            <input type="color" name="cl_accent" aria-label="Warna aksen kolase" value="${esc(theme.accent || "#e8603c")}" />
             ${status.is_admin ? `
-            <label class="check"><input type="checkbox" name="cl_logo_optional" ${theme.logo_optional ? "checked" : ""}/> Tamu boleh mematikan logo Jepretin (acara berbayar)</label>`
-            : `<p class="hint">Logo Jepretin ${theme.logo_optional ? "boleh dimatikan tamu di acara ini." : "wajib tampil di kolase acara gratis."}</p>`}
+            <label class="check"><input type="checkbox" name="cl_logo_optional" ${theme.logo_optional ? "checked" : ""}/> Tamu boleh mematikan logo TitipPotret (acara berbayar)</label>`
+            : `<p class="hint">Logo TitipPotret ${theme.logo_optional ? "boleh dimatikan tamu di acara ini." : "wajib tampil di kolase acara gratis."}</p>`}
           </fieldset>
           <details class="advanced">
             <summary>Pengaturan lanjutan</summary>
@@ -501,7 +501,7 @@ export async function renderPanel(root, status, { reload, home }) {
       n.querySelector('[data-act="roll"]').onclick = () => showRoll(status, m);
       n.querySelector('[data-act="menu"]').onclick = () => actionSheet(m.name, [
         { label: "Lihat gulungan", run: () => showRoll(status, m) },
-        ...(m.pending ? [{ label: `Lepas ${m.pending} jepretan macet…`, run: () => releasePending(m) }] : []),
+        ...(m.pending ? [{ label: `Lepas ${m.pending} potretan macet…`, run: () => releasePending(m) }] : []),
         ...(m.user_id === status.me ? [] : [{
           label: m.blocked ? "Pulihkan akses" : "Blokir dari acara ini", danger: !m.blocked,
           run: () => setBlocked(m, !m.blocked),
@@ -511,7 +511,7 @@ export async function renderPanel(root, status, { reload, home }) {
     }));
   }
   view.querySelector('[data-act="member-csv"]').onclick = () => downloadCsv(`laporan-${safeName(status.name, "acara")}`, [
-    ["name", "Nama"], ["email", "Email"], ["shots_used", "Jepretan"], [() => status.max_shots, "Jatah"],
+    ["name", "Nama"], ["email", "Email"], ["shots_used", "Potretan"], [() => status.max_shots, "Jatah"],
     [(m) => (m.shots_used >= status.max_shots ? "ya" : "tidak"), "Film habis"], ["pending", "Belum terunggah"],
     [(m) => (m.blocked ? "ya" : "tidak"), "Diblokir"], [(m) => fmtDate(m.joined_at), "Masuk"],
   ], members);
@@ -537,15 +537,15 @@ export async function renderPanel(root, status, { reload, home }) {
   }
   async function releasePending(m) {
     if (!(await confirmDialog({
-      title: "Lepas jepretan yang macet?",
-      text: "Jepretan yang belum terunggah dihapus dan jatahnya dikembalikan. Jika HP peserta masih menyimpan fotonya, foto itu akan dikirim ulang sebagai jepretan baru.",
-      ok: "Lepas jepretan",
+      title: "Lepas potretan yang macet?",
+      text: "Potretan yang belum terunggah dihapus dan jatahnya dikembalikan. Jika HP peserta masih menyimpan fotonya, foto itu akan dikirim ulang sebagai potretan baru.",
+      ok: "Lepas potretan",
     }))) return;
     try {
       const rows = await rpc("release_pending", { p_event: status.event_id, p_user: m.user_id });
       const paths = rows.map((r) => r.file_path ?? r.release_pending ?? r);
       await removeFiles(paths).catch(() => {});
-      toast("Jepretan macet dilepas.");
+      toast("Potretan macet dilepas.");
       loadMembers();
     } catch (e) { toast(friendly(e)); }
   }
@@ -636,12 +636,12 @@ export async function deleteEventFiles(eventId, coverPath) {
   if (vp.length) await removeVoices(vp).catch(() => {});
 }
 
-// Gulungan satu tamu: semua jepretannya, termasuk yang belum tampil di album
+// Gulungan satu tamu: semua potretannya, termasuk yang belum tampil di album
 export async function showRoll(status, member) {
   const { box, close } = modal(`
     <div class="roll">
       <div class="roll-head">
-        <div><h3>${esc(member.name)}</h3><p class="hint">${esc(member.email)} · ${member.shots_used}/${status.max_shots} jepretan</p></div>
+        <div><h3>${esc(member.name)}</h3><p class="hint">${esc(member.email)} · ${member.shots_used}/${status.max_shots} potretan</p></div>
         <button class="btn small" data-act="close">Tutup</button>
       </div>
       <div class="grid roll-grid"><p class="hint">Memuat…</p></div>

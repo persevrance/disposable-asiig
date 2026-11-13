@@ -158,7 +158,7 @@ begin
   return v_ev.id;
 end $$;
 
--- 3b. Memesan satu jepretan (penjaga jatah).
+-- 3b. Memesan satu potretan (penjaga jatah).
 -- Pengecekan id lama dilakukan sebelum cek acara tutup, supaya kiriman ulang
 -- foto yang sudah dipesan tetap bisa selesai walaupun acara baru ditutup.
 create function reserve_shot(p_event uuid, p_client_shot uuid)
@@ -426,7 +426,7 @@ begin
   update event_members set blocked = p_blocked where event_id = p_event and user_id = p_user;
 end $$;
 
--- Hapus jepretan pending yang macet dan kembalikan jatahnya.
+-- Hapus potretan pending yang macet dan kembalikan jatahnya.
 -- Mengembalikan nama file supaya panel bisa membersihkan sisa unggahan.
 create function release_pending(p_event uuid, p_user uuid)
 returns table (file_path text)

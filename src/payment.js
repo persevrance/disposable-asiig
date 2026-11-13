@@ -56,7 +56,7 @@ const METHOD_KEY = "payMethod";
 const loadMethod = () => { try { const v = localStorage.getItem(METHOD_KEY); return METHODS.some((m) => m.id === v) ? v : "qris"; } catch { return "qris"; } };
 const saveMethod = (v) => { try { localStorage.setItem(METHOD_KEY, v); } catch { /* abaikan */ } };
 const methodName = (id) => METHODS.find((m) => m.id === id)?.name || "";
-const metaLine = (ev) => [fmtRange(ev.starts_at, ev.ends_at), `${ev.max_shots} jepretan`].filter(Boolean).join(" · ");
+const metaLine = (ev) => [fmtRange(ev.starts_at, ev.ends_at), `${ev.max_shots} potretan`].filter(Boolean).join(" · ");
 
 // Layar pembayaran di dalam host. opts: { guests, shots, onPaid(order), onBack }
 // guests/shots kosong = ukuran acara sekarang (bayar draf).
@@ -79,17 +79,17 @@ export function mountPayment(host, ev, opts = {}) {
       <div class="pay">
         <div class="pay-head">
           ${opts.onBack ? `<button type="button" class="round-btn ghost-round" data-act="back" aria-label="Kembali">${ICON.back}</button>` : ""}
-          <h3>${upgrade ? "Tambah tamu atau jepretan" : "Pembayaran"}</h3>
+          <h3>${upgrade ? "Tambah tamu atau potretan" : "Pembayaran"}</h3>
         </div>
         <div class="pay-card pay-event">
           <span class="pay-thumb" aria-hidden="true">${ICON.camera}</span>
           <div><b>${esc(ev.name)}</b><small>${esc(metaLine({ ...ev, max_shots: shots }))}</small></div>
         </div>
         <div class="pay-card pay-lines">
-          ${q.unlimited ? `<div><span>Unlimited tamu & jepretan <small>(tanpa diskon)</small></span><span>${rp(q.subtotal)}</span></div>`
-            : `<div><span>${guests} tamu × ${rp(q.rate)} <small>(${shots} jepretan)</small></span><span>${rp(q.subtotal)}</span></div>`}
+          ${q.unlimited ? `<div><span>Unlimited tamu & potretan <small>(tanpa diskon)</small></span><span>${rp(q.subtotal)}</span></div>`
+            : `<div><span>${guests} tamu × ${rp(q.rate)} <small>(${shots} potretan)</small></span><span>${rp(q.subtotal)}</span></div>`}
           ${q.discount_pct ? `<div class="minus"><span>Diskon jumlah tamu (${q.discount_pct}%)</span><span>−${rp(q.volume_discount)}</span></div>` : ""}
-          ${q.free ? `<div class="minus"><span>Gratis (sampai ${cfg.free_guests} tamu × ${cfg.free_shots} jepretan)</span><span>−${rp(q.subtotal)}</span></div>` : ""}
+          ${q.free ? `<div class="minus"><span>Gratis (sampai ${cfg.free_guests} tamu × ${cfg.free_shots} potretan)</span><span>−${rp(q.subtotal)}</span></div>` : ""}
           ${!q.free && q.total > q.subtotal - q.volume_discount ? `<div><span>Pembayaran minimum</span><span>${rp(q.total)}</span></div>` : ""}
           ${q.credit ? `<div class="minus"><span>Sudah dibayar (sebelum promo)</span><span>−${rp(q.credit)}</span></div>` : ""}
           ${q.promo_discount ? `<div class="minus"><span>Kode promo ${esc(promo.toUpperCase())}</span><span>−${rp(q.promo_discount)}</span></div>` : ""}
@@ -112,7 +112,7 @@ export function mountPayment(host, ev, opts = {}) {
           <small class="hint">Jendela Midtrans langsung membuka metode ini.</small>
         </div>` : ""}
         <p class="pay-note">${ICON.shield}<span>${upgrade
-          ? "Tamu dan jepretan bertambah begitu pembayaran terkonfirmasi. Tamu yang sudah masuk tidak terganggu."
+          ? "Tamu dan potretan bertambah begitu pembayaran terkonfirmasi. Tamu yang sudah masuk tidak terganggu."
           : "Acara tersimpan sebagai draf. Begitu pembayaran terkonfirmasi, acara langsung aktif dan QR siap dibagikan."}</span></p>
         <div class="pay-actions">
           <button type="button" class="btn primary" data-act="pay">${q.amount ? `Bayar ${rp(q.amount)} dengan ${methodName(method)}` : "Aktifkan tanpa biaya"}</button>
@@ -248,7 +248,7 @@ export function openPayment(ev, opts = {}) {
   obs.observe(document.body, { childList: true });
 }
 
-// Upgrade acara aktif: tamu, jepretan per rentang harga (bertahap), Unlimited, perpanjang masa simpan.
+// Upgrade acara aktif: tamu, potretan per rentang harga (bertahap), Unlimited, perpanjang masa simpan.
 // Semua dibayar sebagai selisih dari yang sudah dibayar.
 export async function openUpgrade(ev, { members = null, onPaid } = {}) {
   const cfg = await priceSettings();
@@ -270,13 +270,13 @@ export async function openUpgrade(ev, { members = null, onPaid } = {}) {
       const now = i === curTier, below = i < curTier;
       const target = Math.max(t.to, ev.max_shots);
       return `<button type="button" class="up-tier" role="radio" data-tier="${target}" aria-checked="${!st.unl && st.r === target}" ${below || st.unl ? "disabled" : ""}>
-        <b>${t.from}–${t.to} jepretan</b><small>${rp(t.rate)}/tamu${now ? " · sekarang" : ""}</small></button>`;
+        <b>${t.from}–${t.to} potretan</b><small>${rp(t.rate)}/tamu${now ? " · sekarang" : ""}</small></button>`;
     };
     host.innerHTML = `
       <div class="pay upgrade">
         ${!ev.unlimited && members !== null && members >= ev.max_members ? `<p class="pay-warn" role="status">${ICON.bell}<span><b>Peserta sudah penuh (${members}/${ev.max_members}).</b> Tamu baru tertahan di layar gabung.</span></p>` : ""}
         <h3>Upgrade acara</h3>
-        ${ev.unlimited ? `<p class="hint">Acara ini sudah Unlimited tamu & jepretan.</p>` : `
+        ${ev.unlimited ? `<p class="hint">Acara ini sudah Unlimited tamu & potretan.</p>` : `
         <div class="pay-card steppers">
           <div class="stepper">
             <span><b>Jumlah tamu</b><small>sekarang ${ev.max_members}</small></span>
@@ -286,12 +286,12 @@ export async function openUpgrade(ev, { members = null, onPaid } = {}) {
           </div>
         </div>
         <div class="up-section">
-          <b id="up-tier-l">Jepretan per tamu</b>
+          <b id="up-tier-l">Potretan per tamu</b>
           <div class="up-tiers" role="radiogroup" aria-labelledby="up-tier-l">${T.map(tierBtn).join("")}</div>
-          <small class="hint">Naik ke rentang berikutnya; berlaku juga untuk tamu lama. Maksimal ${cap} jepretan.</small>
+          <small class="hint">Naik ke rentang berikutnya; berlaku juga untuk tamu lama. Maksimal ${cap} potretan.</small>
         </div>
         <button type="button" class="up-unl" role="switch" data-act="unl" aria-checked="${st.unl}">
-          <span><b>Unlimited tamu & jepretan</b><small>${rp(cfg.price_unlimited)} · tanpa diskon & promo · album dibuka setelah acara selesai</small></span>
+          <span><b>Unlimited tamu & potretan</b><small>${rp(cfg.price_unlimited)} · tanpa diskon & promo · album dibuka setelah acara selesai</small></span>
           <span class="switch bare" aria-hidden="true"><span class="knob"></span></span></button>`}
         ${keepOpts.length > 1 ? `
         <div class="up-section">

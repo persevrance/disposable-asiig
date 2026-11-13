@@ -52,7 +52,7 @@ export const filmName = (id) => FILMS[id]?.name || FILMS.asli.name;
 
 const clamp01 = (x) => (x < 0 ? 0 : x > 1 ? 1 : x);
 
-// Kurva 256 nilai per kanal (dihitung sekali per jepretan)
+// Kurva 256 nilai per kanal (dihitung sekali per potretan)
 function buildLut(f, c) {
   const lut = new Uint8ClampedArray(256);
   const contrast = f.contrast ?? 1, gain = f.gain?.[c] ?? 1, offset = f.offset?.[c] ?? 0;
