@@ -499,6 +499,24 @@ export default {
   "Dengan masuk, kamu setuju fotomu dibagikan ke penyelenggara acara.": "By joining, you agree to share your photos with the event host.",
   "Tautan acara tidak ditemukan. Minta kode undangan ke penyelenggara.": "Event link not found. Ask the host for the invite code.",
 
+  // Timer jepret dan hitung mundur
+  "Timer jepret": "Self-timer",
+  "Timer jepret: {n} detik": "Self-timer: {n} seconds",
+  "Timer jepret: mati": "Self-timer: off",
+  "Timer {n} detik": "{n}-second timer",
+  "Timer mati": "Timer off",
+  "Timer dibatalkan.": "Timer cancelled.",
+  "Ketuk untuk batal": "Tap to cancel",
+  "Kamera aktif dalam": "Camera opens in",
+  "Acara mulai {d}. Jepretan belum terpakai.": "The event starts {d}. None of your shots have been used.",
+  "Acara sudah mulai. Selamat memotret!": "The event has started. Happy shooting!",
+  "Acara belum mulai. Kamera aktif saat acara dimulai.": "The event hasn't started yet. The camera opens when it begins.",
+  "Semua foto terbuka dalam {x}.": "All photos are revealed in {x}.",
+  "Semua foto terbuka dalam": "All photos are revealed in",
+  "Album terbuka dalam": "The album opens in",
+  "Album sudah terbuka.": "The album is open.",
+  "{d} hari {h} jam": "{d} d {h} h",
+
   // Pengajuan pembuat acara
   "Pengajuan pembuat acara sedang ditinjau": "Your host request is under review",
   "Pengajuan pembuat acara ditolak": "Your host request was declined",

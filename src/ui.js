@@ -29,6 +29,31 @@ export function fmtDate(iso) {
   return new Date(iso).toLocaleString(locale, { dateStyle: "medium", timeStyle: "short" });
 }
 
+// Sisa waktu yang mudah dibaca: "2 hari 4 jam" bila lebih dari sehari, kalau tidak "01:45:20"
+export function fmtCountdown(ms) {
+  const sec = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  if (d) return t("{d} hari {h} jam", { d, h });
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(h)}:${p(m)}:${p(s)}`;
+}
+
+// Hitung mundur hidup ke waktu iso: render(sisaTeks) tiap detik selama node masih di halaman,
+// lalu onDone() sekali saat waktunya tiba. Mengembalikan fungsi untuk menghentikan.
+export function liveCountdown(node, iso, render, onDone) {
+  const end = new Date(iso).getTime();
+  let timer = 0;
+  const tick = () => {
+    if (!node.isConnected) return clearInterval(timer);
+    const left = end - Date.now();
+    if (left <= 0) { clearInterval(timer); onDone?.(); return; }
+    render(fmtCountdown(left));
+  };
+  timer = setInterval(tick, 1000);
+  tick();
+  return () => clearInterval(timer);
+}
+
 // ISO -> nilai <input type="datetime-local"> (jam lokal)
 export function toLocalInput(iso) {
   if (!iso) return "";

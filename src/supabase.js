@@ -46,6 +46,7 @@ const MESSAGES = {
   TEMA_KOLASE_TIDAK_VALID: "Pengaturan tema kolase tidak dikenal.",
   STATUS_TIDAK_DIKENAL: "Status pembuatan acara tidak dikenal.",
   ACARA_TIDAK_ADA: "Acara tidak ditemukan.",
+  ACARA_BELUM_MULAI: "Acara belum mulai. Kamera aktif saat acara dimulai.",
   ACARA_BELUM_DIBAYAR: "Acara ini belum aktif karena pembayarannya belum selesai.",
   BATAS_ACARA_GRATIS: "Batas acara gratis yang aktif sudah tercapai. Tutup acara gratis lain atau pilih ukuran berbayar.",
   PERLU_PEMBAYARAN: "Menambah tamu atau jepretan perlu pembayaran. Pakai tombol \"Tambah tamu atau jepretan\" di Panel.",

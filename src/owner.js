@@ -197,6 +197,7 @@ export async function renderPanel(root, status, { reload, home }) {
           <label class="check"><input type="checkbox" name="date_stamp" ${status.date_stamp !== false ? "checked" : ""}/> Cap tanggal di foto</label>
           <label class="check"><input type="checkbox" name="allow_gallery" ${status.allow_gallery ? "checked" : ""}/> Tamu boleh mengunggah dari galeri</label>
           <label class="check"><input type="checkbox" name="allow_front" ${status.allow_front !== false ? "checked" : ""}/> Tamu boleh memakai kamera depan</label>
+          <label class="check"><input type="checkbox" name="lock_until_start" ${status.lock_until_start ? "checked" : ""}/> Kamera baru aktif saat acara dimulai (tamu melihat hitung mundur)</label>
           <fieldset class="collage-theme">
             <legend>Kolase tamu</legend>
             <label>Ornamen bawaan
@@ -422,6 +423,7 @@ export async function renderPanel(root, status, { reload, home }) {
     if (f.reveal.checked && !reveal) return toast("Isi waktu cuci film.");
     const startsAt = fromLocalInput(f.starts_at.value), endsAt = fromLocalInput(f.ends_at.value);
     if (startsAt && endsAt && new Date(endsAt) <= new Date(startsAt)) return toast("Waktu selesai harus setelah waktu mulai.");
+    if (f.lock_until_start.checked && !startsAt) return toast("Isi waktu mulai supaya kamera bisa aktif otomatis saat acara dimulai.");
     const patch = {
       name: f.name.value,
       welcome_text: f.welcome_text.value,
@@ -433,6 +435,7 @@ export async function renderPanel(root, status, { reload, home }) {
       date_stamp: f.date_stamp.checked,
       allow_gallery: f.allow_gallery.checked,
       allow_front: f.allow_front.checked,
+      lock_until_start: f.lock_until_start.checked,
       allow_film_choice: f.allow_film_choice.checked,
       reveal_at: reveal,
       purge_at: f.purge_at.value ? new Date(f.purge_at.value + "T00:00").toISOString() : null,

@@ -73,7 +73,7 @@ export async function renderCreate(setView, { me } = {}) {
   const meta = me?.user_metadata || {};
   const D = Object.assign({
     step: 1, type: "", name: "", host: meta.full_name || meta.name || "", starts: "", ends: "",
-    open: "roll", delayH: 2, openAt: "", keepDays: 30, film: defFilm, shots: Math.min(24, maxShots),
+    lockStart: false, open: "roll", delayH: 2, openAt: "", keepDays: 30, film: defFilm, shots: Math.min(24, maxShots),
     creatorEmail: me?.email || "", dateStamp: true, gallery: false, front: true, filmChoice: true, inviteOnly: false, guests: Math.min(50, maxGuests),
     albumPrivate: false, showNames: true, welcome: "", slug: "", slugTouched: false,
   }, saved || {}, preset ? { guests: Math.min(preset.guests, maxGuests), shots: Math.min(preset.shots, maxShots) } : {});
@@ -175,6 +175,7 @@ export async function renderCreate(setView, { me } = {}) {
         <label>Selesai<input type="datetime-local" name="ends" value="${esc(D.ends)}" /></label>
       </div>
       <p class="hint cr-tight">Kamera berhenti otomatis saat acara selesai.</p>
+      <div class="cr-toggles">${sw("lockStart", "Kamera aktif saat acara dimulai", D.starts ? `Sebelum ${hhmm(fromLocalInput(D.starts))}, tamu yang sudah bergabung melihat hitung mundur` : "Butuh waktu mulai. Sebelum itu tamu melihat hitung mundur")}</div>
       <fieldset class="cr-radios"><legend>Kapan album dibuka?</legend>
         ${OPEN_MODES.map((m) => `
           <button type="button" class="cr-radio" role="radio" aria-checked="${D.open === m.id}" data-set="open" data-v="${m.id}">
@@ -287,7 +288,7 @@ export async function renderCreate(setView, { me } = {}) {
       <small id="cr-slug-msg" class="cr-slug-msg"></small>
       <div class="cr-summary">
         <b>Ringkasan</b>
-        <div><span>Waktu</span><span>${esc(fmtRange(fromLocalInput(D.starts), fromLocalInput(D.ends)) || "Belum diatur")}</span></div>
+        <div><span>Waktu</span><span>${esc(fmtRange(fromLocalInput(D.starts), fromLocalInput(D.ends)) || "Belum diatur")}${D.lockStart ? " · kamera aktif saat mulai" : ""}</span></div>
         <div><span>Album dibuka</span><span>${esc(openText)}${D.albumPrivate ? " · hanya penyelenggara" : ""}</span></div>
         <div><span>Kamera</span><span>${D.shots} jepretan · ${esc(FILMS[D.film]?.name || "")}</span></div>
         <div><span>Tamu</span><span>${D.guests} tamu${q ? ` · ${q.total ? rp(q.total) : "Gratis"}` : ""}</span></div>
@@ -346,6 +347,7 @@ export async function renderCreate(setView, { me } = {}) {
       const s = fromLocalInput(D.starts), e = fromLocalInput(D.ends);
       if (s && e && new Date(e) <= new Date(s)) { toast("Waktu selesai harus setelah waktu mulai."); return false; }
       if ((D.open === "after" || D.open === "delay") && !e) { toast("Pilihan ini butuh waktu selesai acara."); return false; }
+      if (D.lockStart && !s) { toast("Isi waktu mulai supaya kamera bisa aktif otomatis saat acara dimulai."); return false; }
       if (D.open === "time" && !D.openAt) { toast("Pilih waktu album dibuka."); return false; }
     }
     if (D.step === 5 && D.slug && !slugState.ok) { toast("Tautan khusus belum bisa dipakai. Ubah atau kosongkan."); return false; }
@@ -376,7 +378,7 @@ export async function renderCreate(setView, { me } = {}) {
       reveal_at: revealIso(), purge_at: purgeIso(), welcome_text: D.welcome,
       hide_names: !D.showNames, allow_film_choice: D.filmChoice, event_type: D.type || null,
       host_name: D.host, album_private: D.albumPrivate, date_stamp: D.dateStamp,
-      allow_gallery: D.gallery, allow_front: D.front,
+      allow_gallery: D.gallery, allow_front: D.front, lock_until_start: Boolean(D.lockStart && D.starts),
       ...(paid && D.creatorEmail ? { creator_email: D.creatorEmail } : {}),
     };
     try { await rpc("set_event", { p_event: id, p_patch: patch }); }
