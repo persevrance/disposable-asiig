@@ -2450,6 +2450,9 @@ create table if not exists orders (
   paid_at         timestamptz,
   updated_at      timestamptz not null default now()
 );
+-- Metode yang dipilih di layar Pembayaran; token Snap dibuat khusus untuk metode ini
+alter table orders add column if not exists pay_method text
+  check (pay_method is null or pay_method in ('qris', 'gopay', 'shopeepay', 'va'));
 create index if not exists orders_event on orders (event_id, created_at desc);
 create index if not exists orders_status on orders (status, created_at desc);
 alter table promo_codes enable row level security;
@@ -2586,19 +2589,25 @@ begin
 end $$;
 
 -- Buat pesanan untuk acara: draf (bayar pertama) atau tambah tamu/roll acara yang sudah aktif.
--- Dipanggil Edge Function create-order dengan sesi pengguna. Pesanan tertunda yang sama dipakai ulang.
+-- Dipanggil Worker (/api/pay/checkout) dengan sesi pengguna. Pesanan tertunda yang sama (termasuk
+-- metode bayarnya) dipakai ulang; ganti metode = pesanan baru, karena token Snap terikat ke metode.
+drop function if exists start_order(uuid, int, int, text);
 create or replace function start_order(p_event uuid, p_guests int default null, p_shots int default null,
-                                       p_promo text default null)
+                                       p_promo text default null, p_method text default null)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
   s app_settings%rowtype; e events%rowtype; o orders%rowtype;
   v_g int; v_r int; v_kind text; v_credit int := 0; v_list int; v_sub int; v_disc int := 0;
   v_code text := nullif(upper(trim(coalesce(p_promo, ''))), ''); v_gate jsonb; v_id text;
+  v_method text := nullif(lower(trim(coalesce(p_method, ''))), '');
 begin
   perform assert_not_banned();
   select * into s from app_settings;
   if not s.payments_enabled then raise exception 'PEMBAYARAN_NONAKTIF'; end if;
+  if v_method is not null and v_method not in ('qris', 'gopay', 'shopeepay', 'va') then
+    raise exception 'METODE_TIDAK_DIKENAL';
+  end if;
   select * into e from events where id = p_event for update;
   if not found then raise exception 'ACARA_TIDAK_ADA'; end if;
   if e.owner_id <> auth.uid() and not is_superadmin() then raise exception 'BUKAN_PEMILIK'; end if;
@@ -2626,6 +2635,7 @@ begin
    where event_id = p_event and status = 'pending' and expires_at > now() + interval '1 minute'
      and guests = v_g and shots = v_r and amount = v_sub - v_disc
      and coalesce(promo_code, '') = coalesce(v_code, '')
+     and coalesce(pay_method, '') = coalesce(v_method, '')
    order by created_at desc limit 1;
   if not found then
     update orders set status = 'expired', updated_at = now() where event_id = p_event and status = 'pending';
@@ -2635,9 +2645,9 @@ begin
       exit when not exists (select 1 from orders where id = v_id);
     end loop;
     insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, credit,
-                        promo_code, promo_discount, amount, expires_at)
+                        promo_code, promo_discount, amount, expires_at, pay_method)
     values (v_id, p_event, auth.uid(), e.name, v_kind, v_g, v_r, v_list, v_credit,
-            v_code, v_disc, v_sub - v_disc, now() + make_interval(mins => s.payment_window_min))
+            v_code, v_disc, v_sub - v_disc, now() + make_interval(mins => s.payment_window_min), v_method)
     returning * into o;
     if o.amount = 0 then
       perform apply_order_paid(o.id, 'tanpa_biaya');
@@ -2844,7 +2854,7 @@ grant execute on function
   set_creation_mode(text, text, timestamptz, int, int), join_creation_waitlist(boolean),
   admin_capacity(), capacity_tick(), review_event(uuid),
   price_settings(), price_quote_raw(int, int), price_quote(int, int, text, uuid),
-  start_order(uuid, int, int, text), order_status(text), event_orders(uuid),
+  start_order(uuid, int, int, text, text), order_status(text), event_orders(uuid),
   admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text), valid_slug(text), slug_available(text, uuid), resolve_slug(text)
 to authenticated;

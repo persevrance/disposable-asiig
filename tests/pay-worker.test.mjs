@@ -58,6 +58,24 @@ ok(snap.init.headers.Authorization === "Basic " + btoa("Mid-server-API:"), "snap
 ok(snap.body.transaction_details.gross_amount === 89100 && snap.body.item_details[0].price === 89100 && snap.body.expiry.duration === 15, "snap payload amount and expiry");
 ok(saved.init.headers.apikey === "sb_secret_x" && saved.body.p_token === "snap-tok", "token saved with service key");
 
+ok(!("enabled_payments" in snap.body), "no method + no env = all Midtrans methods");
+
+// Metode dipilih di layar: diteruskan ke start_order dan membatasi popup Snap ke metode itu
+for (const [method, want] of [["qris", ["other_qris"]], ["gopay", ["gopay"]], ["shopeepay", ["shopeepay"]], ["va", ["bca_va", "bni_va", "bri_va", "permata_va", "cimb_va", "echannel"]]]) {
+  order = { ...order, snap_token: null, pay_method: method };
+  calls = [];
+  [s, b] = await call("/api/pay/checkout", { event_id: "e1", method }, { Authorization: "Bearer user-jwt" });
+  const so2 = calls.find((c) => c.url.endsWith("/rpc/start_order"));
+  const sn2 = calls.find((c) => c.url.includes("/snap/v1/transactions"));
+  ok(so2.body.p_method === method && JSON.stringify(sn2.body.enabled_payments) === JSON.stringify(want) && b.pay_method === method, `method ${method} -> ${want.join(",")}`);
+}
+// Tanpa metode: memakai rahasia MIDTRANS_ENABLED_PAYMENTS
+order = { ...order, snap_token: null, pay_method: null };
+calls = [];
+await worker.fetch(req("/api/pay/checkout", { event_id: "e1" }, { Authorization: "Bearer user-jwt" }), { ...env, MIDTRANS_ENABLED_PAYMENTS: "other_qris, gopay" }, {});
+ok(JSON.stringify(calls.find((c) => c.url.includes("/snap/v1/transactions")).body.enabled_payments) === '["other_qris","gopay"]', "no method uses env list");
+order = { ...order, snap_token: null };
+
 // Mode berbeda antara pengaturan dan Worker
 order = { ...order, production: true };
 [s, b] = await call("/api/pay/checkout", { event_id: "e1" }, { Authorization: "Bearer user-jwt" });

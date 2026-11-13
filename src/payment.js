@@ -45,6 +45,17 @@ const PAY_LABEL = {
   qris: "QRIS", other_qris: "QRIS", gopay: "GoPay", shopeepay: "ShopeePay", bank_transfer: "Virtual account",
   echannel: "Mandiri Bill", credit_card: "Kartu kredit", cstore: "Gerai retail", akulaku: "Akulaku", tanpa_biaya: "Tanpa biaya",
 };
+// Metode yang bisa dipilih di layar Pembayaran (dipetakan ke enabled_payments di worker/pay.js)
+const METHODS = [
+  { id: "qris", name: "QRIS", desc: "Scan dari semua e-wallet & m-banking" },
+  { id: "gopay", name: "GoPay", desc: "Buka aplikasi GoPay" },
+  { id: "shopeepay", name: "ShopeePay", desc: "Buka aplikasi ShopeePay" },
+  { id: "va", name: "Virtual account", desc: "BCA, BNI, BRI, Permata, Mandiri" },
+];
+const METHOD_KEY = "payMethod";
+const loadMethod = () => { try { const v = localStorage.getItem(METHOD_KEY); return METHODS.some((m) => m.id === v) ? v : "qris"; } catch { return "qris"; } };
+const saveMethod = (v) => { try { localStorage.setItem(METHOD_KEY, v); } catch { /* abaikan */ } };
+const methodName = (id) => METHODS.find((m) => m.id === id)?.name || "";
 const metaLine = (ev) => [fmtRange(ev.starts_at, ev.ends_at), `${ev.max_shots} jepretan`].filter(Boolean).join(" · ");
 
 // Layar pembayaran di dalam host. opts: { guests, shots, onPaid(order), onBack }
@@ -52,7 +63,7 @@ const metaLine = (ev) => [fmtRange(ev.starts_at, ev.ends_at), `${ev.max_shots} j
 export function mountPayment(host, ev, opts = {}) {
   const guests = opts.guests ?? ev.max_members, shots = opts.shots ?? ev.max_shots;
   const upgrade = ev.pay_status !== "draft";
-  let promo = "", order = null, timer = 0, poll = 0, stopped = false;
+  let promo = "", order = null, timer = 0, poll = 0, stopped = false, method = loadMethod();
   const stop = () => { stopped = true; clearInterval(timer); clearInterval(poll); };
 
   async function summary() {
@@ -87,28 +98,52 @@ export function mountPayment(host, ev, opts = {}) {
           </form>
           ${q.promo_error ? `<p class="pay-err" role="alert">${esc(friendly(q.promo_error))}</p>` : ""}
         </div>
-        <div class="pay-methods">
-          <b>Metode yang bisa dipakai</b>
-          <div class="chips">${["QRIS", "GoPay", "ShopeePay", "Virtual account bank"].map((m) => `<span class="chip static">${m}</span>`).join("")}</div>
-          <small class="hint">Kamu memilih metode di jendela pembayaran Midtrans.</small>
-        </div>
+        ${q.amount ? `<div class="pay-methods">
+          <b id="pay-m-label">Metode pembayaran</b>
+          <div class="pay-method-grid" role="radiogroup" aria-labelledby="pay-m-label">${METHODS.map((m) => `
+            <button type="button" class="pay-method-opt" role="radio" data-method="${m.id}" aria-checked="${m.id === method}" tabindex="${m.id === method ? 0 : -1}">
+              <i aria-hidden="true"></i><span><b>${m.name}</b><small>${m.desc}</small></span></button>`).join("")}
+          </div>
+          <small class="hint">Jendela Midtrans langsung membuka metode ini.</small>
+        </div>` : ""}
         <p class="pay-note">${ICON.shield}<span>${upgrade
           ? "Tamu dan jepretan bertambah begitu pembayaran terkonfirmasi. Tamu yang sudah masuk tidak terganggu."
           : "Acara tersimpan sebagai draf. Begitu pembayaran terkonfirmasi, acara langsung aktif dan QR siap dibagikan."}</span></p>
         <div class="pay-actions">
-          <button type="button" class="btn primary" data-act="pay">${q.amount ? `Bayar ${rp(q.amount)}` : "Aktifkan tanpa biaya"}</button>
+          <button type="button" class="btn primary" data-act="pay">${q.amount ? `Bayar ${rp(q.amount)} dengan ${methodName(method)}` : "Aktifkan tanpa biaya"}</button>
           <p class="hint">Dengan membayar, kamu menyetujui <a href="/syarat.html" target="_blank" rel="noopener">Syarat layanan</a> dan <a href="/pengembalian-dana.html" target="_blank" rel="noopener">Kebijakan pengembalian dana</a>.</p>
         </div>
       </div>`;
     host.querySelector('[data-act="back"]')?.addEventListener("click", () => { stop(); opts.onBack(); });
     host.querySelector(".pay-promo").onsubmit = (e) => { e.preventDefault(); promo = e.target.promo.value.trim(); summary(); };
-    host.querySelector('[data-act="pay"]').onclick = (e) => pay(e.currentTarget, cfg);
+    host.querySelector('[data-act="pay"]').onclick = (e) => pay(e.currentTarget, cfg, q.amount);
+    // Pilih metode: klik, atau panah kiri/kanan/atas/bawah di dalam grup (pola radio)
+    const group = host.querySelector(".pay-method-grid");
+    if (group) {
+      const pick = (id, focus) => {
+        method = id; saveMethod(id);
+        group.querySelectorAll("[data-method]").forEach((b) => {
+          const on = b.dataset.method === id;
+          b.setAttribute("aria-checked", String(on)); b.tabIndex = on ? 0 : -1;
+          if (on && focus) b.focus();
+        });
+        host.querySelector('[data-act="pay"]').textContent = `Bayar ${rp(q.amount)} dengan ${methodName(id)}`;
+      };
+      group.onclick = (e) => { const b = e.target.closest("[data-method]"); if (b) pick(b.dataset.method); };
+      group.onkeydown = (e) => {
+        const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+        if (!d) return;
+        e.preventDefault();
+        const ids = METHODS.map((m) => m.id);
+        pick(ids[(ids.indexOf(method) + d + ids.length) % ids.length], true);
+      };
+    }
   }
 
-  async function pay(btn, cfg) {
+  async function pay(btn, cfg, amount) {
     btn.disabled = true; btn.textContent = "Menyiapkan pembayaran…";
     try {
-      order = await payFetch("checkout", { event_id: ev.event_id, guests, shots, promo: promo || null });
+      order = await payFetch("checkout", { event_id: ev.event_id, guests, shots, promo: promo || null, method: amount ? method : null });
       if (order.status === "paid") return done();
       await openSnap(cfg);
       waiting();
@@ -148,20 +183,23 @@ export function mountPayment(host, ev, opts = {}) {
         <p>${dead ? "Buat pembayaran baru; acaramu tetap tersimpan." : "Selesaikan pembayaran di jendela Midtrans. Halaman ini otomatis berganti begitu pembayaran diterima."}</p>
         <div class="pay-card pay-lines">
           <div><span>Total</span><b>${rp(order.amount)}</b></div>
-          <div><span>Metode</span><b class="pay-method">${esc(PAY_LABEL[order.payment_type] || order.payment_type || "Belum dipilih")}</b></div>
+          <div><span>Metode</span><b class="pay-method">${esc(PAY_LABEL[order.payment_type] || methodName(order.pay_method) || order.payment_type || "Belum dipilih")}</b></div>
           <div><span>Bayar sebelum</span><b class="pay-deadline"></b></div>
           <div><span>No. pesanan</span><code>${esc(order.id)}</code></div>
         </div>
         <div class="pay-actions">
           ${dead ? `<button type="button" class="btn primary" data-act="again">Buat pembayaran baru</button>`
             : `<button type="button" class="btn primary" data-act="reopen">Buka lagi jendela pembayaran</button>
-               <button type="button" class="btn" data-act="check">Saya sudah bayar, cek status</button>`}
+               <button type="button" class="btn" data-act="check">Saya sudah bayar, cek status</button>
+               <button type="button" class="btn ghost" data-act="change">Ganti metode pembayaran</button>`}
           <p class="hint">Acaramu aman tersimpan${upgrade ? "" : " sebagai draf"} di <a href="#/">beranda</a> dan Panel acara.</p>
         </div>
       </div>`;
     host.querySelector('[data-act="reopen"]')?.addEventListener("click", () => openSnap().catch((e) => toast(friendly(e))));
     host.querySelector('[data-act="check"]')?.addEventListener("click", () => check(true));
     host.querySelector('[data-act="again"]')?.addEventListener("click", summary);
+    // Ganti metode: kembali ke ringkasan; checkout berikutnya membuat pesanan baru dengan metode lain
+    host.querySelector('[data-act="change"]')?.addEventListener("click", summary);
     renderStatus();
     if (dead) return;
     timer = setInterval(renderStatus, 1000);

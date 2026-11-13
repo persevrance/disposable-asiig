@@ -75,7 +75,7 @@ drop function if exists
   admin_capacity(), capacity_tick(), review_event(uuid),
   -- pembayaran
   valid_price_steps(jsonb, int), price_settings(), price_quote_raw(int, int), promo_discount(text, int),
-  price_quote(int, int, text, uuid), apply_order_paid(text, text), start_order(uuid, int, int, text),
+  price_quote(int, int, text, uuid), apply_order_paid(text, text), start_order(uuid, int, int, text), start_order(uuid, int, int, text, text),
   set_order_snap(text, text, text), midtrans_notify(text, text, text, text, numeric), order_status(text),
   event_orders(uuid), admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text),

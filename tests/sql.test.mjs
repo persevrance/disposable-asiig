@@ -692,6 +692,16 @@ ok(granted?.role === "creator" && granted.event_limit === null, "paid event gran
 ok((await db.query(`select count(*)::int n from audit_log where action = 'ubah_peran' and target = 'klien@kantor.id'`)).rows[0].n === 1, "role grant audited");
 for (const id of [draft, fr1, d2, fEv]) await as("admin", `select delete_event($1)`, [id]);
 ok((await db.query(`select count(*)::int n from orders where event_id is null`)).rows[0].n === 5, "orders kept after event deleted");
+// Metode bayar dipilih di layar Pembayaran: disimpan di pesanan, ganti metode = pesanan baru
+const dm = (await as("host", `select create_event('Metode', 24, 50) id`))[0].id;
+const mq = (await as("host", `select start_order($1, null, null, null, 'QRIS') o`, [dm]))[0].o;
+ok(mq.pay_method === "qris" && mq.status === "pending", "order stores pay_method");
+ok((await as("host", `select start_order($1, null, null, null, 'qris') o`, [dm]))[0].o.id === mq.id, "same method reuses pending order");
+const mv = (await as("host", `select start_order($1, null, null, null, 'va') o`, [dm]))[0].o;
+ok(mv.id !== mq.id && mv.pay_method === "va", "other method creates new order");
+ok((await db.query(`select status from orders where id = $1`, [mq.id])).rows[0].status === "expired", "previous method order expired");
+await expectErr("host", `select start_order($1, null, null, null, 'bitcoin')`, [dm], "METODE_TIDAK_DIKENAL");
+await as("admin", `select delete_event($1)`, [dm]);
 await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: false }]);
 
 await as("host", `select delete_event($1)`, [ev]);

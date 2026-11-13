@@ -11,7 +11,8 @@
 //
 // Rute:
 //   GET  /api/pay/health    status konfigurasi (tanpa membuka rahasia)
-//   POST /api/pay/checkout  { event_id, guests?, shots?, promo? } -> pesanan + token Snap (sesi pengguna)
+//   POST /api/pay/checkout  { event_id, guests?, shots?, promo?, method? } -> pesanan + token Snap (sesi pengguna)
+//                           method: qris | gopay | shopeepay | va (tanpa method: MIDTRANS_ENABLED_PAYMENTS)
 //   POST /api/pay/status    { order_id } -> status pesanan; cek ulang ke Midtrans bila masih tertunda
 //   POST /api/pay/webhook   Payment Notification URL di dasbor Midtrans
 
@@ -19,6 +20,14 @@ const isProd = (env) => String(env.MIDTRANS_PRODUCTION || "").toLowerCase() === 
 const snapBase = (env) => (isProd(env) ? "https://app.midtrans.com" : "https://app.sandbox.midtrans.com");
 const apiBase = (env) => (isProd(env) ? "https://api.midtrans.com" : "https://api.sandbox.midtrans.com");
 const basicAuth = (env) => "Basic " + btoa(`${env.MIDTRANS_SERVER_KEY}:`);
+
+// Metode yang dipilih di layar Pembayaran -> enabled_payments Snap (popup langsung ke metode itu)
+export const METHOD_PAYMENTS = {
+  qris: ["other_qris"],
+  gopay: ["gopay"],
+  shopeepay: ["shopeepay"],
+  va: ["bca_va", "bni_va", "bri_va", "permata_va", "cimb_va", "echannel"],
+};
 
 export async function payApi(req, env, url, h) {
   const route = url.pathname.slice("/api/pay/".length);
@@ -44,6 +53,7 @@ async function checkout(req, env, h, jwt, body) {
   if (!body.event_id) h.fail(400, "ACARA_TIDAK_ADA");
   const order = await h.rpc(env, jwt, "start_order", {
     p_event: body.event_id, p_guests: body.guests ?? null, p_shots: body.shots ?? null, p_promo: body.promo || null,
+    p_method: body.method || null,
   });
   if (order.production !== isProd(env)) h.fail(500, "MODE_MIDTRANS_TIDAK_SAMA");
   if (order.status !== "pending" || order.snap_token) return h.json(publicOrder(order));
@@ -61,7 +71,8 @@ async function checkout(req, env, h, jwt, body) {
     expiry: { unit: "minute", duration: order.window_min || 15 },
     callbacks: { finish: `${origin}/#/e/${order.event_id}/panel` },
   };
-  const enabled = String(env.MIDTRANS_ENABLED_PAYMENTS || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const enabled = METHOD_PAYMENTS[order.pay_method]
+    || String(env.MIDTRANS_ENABLED_PAYMENTS || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (enabled.length) payload.enabled_payments = enabled;
   const res = await fetch(`${snapBase(env)}/snap/v1/transactions`, {
     method: "POST",
@@ -130,7 +141,7 @@ async function serviceRpc(env, h, fn, args) {
 
 // Yang dikirim ke browser: tanpa data internal
 function publicOrder(o) {
-  const keep = ["id", "event_id", "event_name", "kind", "guests", "shots", "list_price", "credit", "promo_code",
+  const keep = ["id", "event_id", "event_name", "kind", "guests", "shots", "list_price", "credit", "promo_code", "pay_method",
     "promo_discount", "amount", "status", "snap_token", "snap_url", "payment_type", "expires_at", "paid_at", "pay_status"];
   return Object.fromEntries(keep.filter((k) => k in o).map((k) => [k, o[k]]));
 }
