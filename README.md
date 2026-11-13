@@ -141,10 +141,10 @@ pukul 07.00 WIB. Bila hari itu sudah terkirim sebanyak **Batas email per hari**,
 ke hari berikutnya, sedangkan email langsung tetap terkirim.
 
 1. Jalankan ulang `supabase/v2.sql`.
-2. Resend: daftar, verifikasi domain pengirim `send.titippotret.my.id` (catatan DNS di Cloudflare), buat API key.
+2. Resend: daftar, verifikasi domain pengirim `titippotret.my.id` (catatan DNS di Cloudflare), buat API key.
 3. Supabase -> Edge Functions -> deploy `supabase/functions/send-email` (atau
    `npx supabase functions deploy send-email --no-verify-jwt`), lalu matikan **Verify JWT**.
-4. Edge Functions -> Secrets: `RESEND_API_KEY`, `EMAIL_FROM` (mis. `TitipPotret <notifikasi@send.titippotret.my.id>`),
+4. Edge Functions -> Secrets: `RESEND_API_KEY`, `EMAIL_FROM` (mis. `TitipPotret <notifikasi@titippotret.my.id>`),
    `APP_URL` (`https://titippotret.my.id`), dan `CRON_SECRET` (sama dengan purge-events).
 5. SQL Editor: simpan URL fungsi dan `CRON_SECRET` di Vault, lalu pasang tiga jadwal email.
    Keduanya ada di bagian "Notifikasi email" pada `supabase/cron.sql`.
