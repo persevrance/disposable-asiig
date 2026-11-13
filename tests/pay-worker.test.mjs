@@ -23,7 +23,7 @@ globalThis.fetch = async (url, init = {}) => {
   const j = (d, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { "Content-Type": "application/json" } });
   if (url.endsWith("/rest/v1/rpc/start_order")) return j(order);
   if (url.endsWith("/rest/v1/rpc/order_status")) return j(order);
-  if (url.endsWith("/rest/v1/rpc/set_order_snap")) return j(null);
+  if (url.endsWith("/rest/v1/rpc/set_order_snap")) return new Response(null, { status: 204 });  // seperti PostgREST untuk fungsi void
   if (url.endsWith("/rest/v1/rpc/midtrans_notify")) { if (body.p_status === "settlement") order = { ...order, status: "paid" }; return j("paid"); }
   if (url.endsWith("/auth/v1/user")) return j({ email: "host@x.id", user_metadata: { full_name: "Host" } });
   if (url === "https://app.sandbox.midtrans.com/snap/v1/transactions") return j({ token: "snap-tok", redirect_url: "https://pay/x" }, 201);

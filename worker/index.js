@@ -193,8 +193,10 @@ async function rpc(env, jwt, fn, args) {
     body: JSON.stringify(args),
   });
   if (res.status === 401) fail(401, "BELUM_LOGIN");
-  if (!res.ok) fail(403, (await res.text()).slice(0, 200));
-  return res.json();
+  const text = await res.text();
+  if (!res.ok) fail(403, text.slice(0, 200));
+  // Fungsi "returns void" dijawab 204 tanpa isi: bukan JSON
+  return text ? JSON.parse(text) : null;
 }
 
 // Fungsi "returns setof text" bisa dikembalikan PostgREST sebagai ["a"] atau [{fn: "a"}]

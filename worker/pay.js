@@ -139,8 +139,10 @@ async function serviceRpc(env, h, fn, args) {
     headers: { ...h.serviceHeaders(env), "Content-Type": "application/json" },
     body: JSON.stringify(args),
   });
-  if (!res.ok) h.fail(502, (await res.text()).slice(0, 200));
-  return res.json();
+  const text = await res.text();
+  if (!res.ok) h.fail(502, text.slice(0, 200));
+  // Fungsi "returns void" (mis. set_order_snap) dijawab 204 tanpa isi: bukan JSON
+  return text ? JSON.parse(text) : null;
 }
 
 // Yang dikirim ke browser: tanpa data internal
