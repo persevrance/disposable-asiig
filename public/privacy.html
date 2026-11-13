@@ -6,46 +6,73 @@
   <title>Kebijakan Privasi · Jepretin</title>
   <style>
     body { margin: 0; background: #fff7ec; color: #2d1b33; font: 16px/1.6 system-ui, sans-serif; }
-    main { max-width: 640px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
-    h1 { font-size: 1.4rem; color: #ff5c8a; } h2 { font-size: 1.05rem; margin-top: 1.75rem; }
-    a { color: #3a9de8; } p, li { color: #5a4a5e; }
+    main { max-width: 680px; margin: 0 auto; padding: 2rem 1.25rem 3rem; }
+    h1 { font-size: 1.5rem; color: #d6336c; margin-bottom: .25rem; } h2 { font-size: 1.1rem; margin-top: 1.75rem; }
+    a { color: #2b7bc4; } p, li { color: #5a4a5e; } .meta { font-size: .9rem; color: #7a6a7e; margin-top: 0; }
+    .todo { background: #fff1c9; color: #8a5a00; padding: .05rem .35rem; border-radius: 4px; }
+    nav { margin-top: 2.5rem; font-size: .9rem; display: flex; flex-wrap: wrap; gap: .5rem 1rem; }
   </style>
 </head>
 <body>
 <main>
   <h1>Kebijakan Privasi</h1>
-  <p>Jepretin adalah kamera sekali pakai berbasis web untuk acara. Halaman ini menjelaskan data apa yang disimpan, siapa yang bisa melihatnya, dan kapan dihapus.</p>
+  <p class="meta">Berlaku sejak 13 November 2026</p>
+  <p>Jepretin adalah kamera sekali pakai berbasis web untuk acara. Halaman ini menjelaskan data apa yang kami simpan, untuk apa, siapa yang bisa melihatnya, berapa lama disimpan, dan hakmu sesuai Undang-Undang Pelindungan Data Pribadi (UU PDP).</p>
 
-  <h2>Data yang disimpan</h2>
+  <h2>Data yang kami simpan</h2>
   <ul>
-    <li>Nama dan alamat email dari akun Google yang Anda pakai untuk login.</li>
-    <li>Foto yang Anda jepret di sebuah acara, beserta waktu jepretannya.</li>
-    <li>Keanggotaan acara, jumlah jepretan yang sudah dipakai, dan foto yang Anda unduh ukuran penuh (untuk menghitung kuota unduhan).</li>
-    <li>Catatan perubahan oleh pemilik acara dan admin (misalnya mengubah pengaturan atau memblokir peserta).</li>
+    <li><b>Akun:</b> nama dan alamat email dari akun Google yang kamu pakai untuk masuk.</li>
+    <li><b>Foto:</b> foto yang kamu jepret di sebuah acara (dalam tiga ukuran), waktu jepretan, dan efek film yang dipakai. Foto digambar ulang di perangkat sebelum dikirim, sehingga lokasi (GPS) dan metadata kamera tidak ikut tersimpan.</li>
+    <li><b>Keikutsertaan:</b> acara yang kamu ikuti, jumlah jepretan yang sudah dipakai, foto favorit, foto yang kamu unduh ukuran penuh (untuk menghitung kuota), dan laporan foto yang kamu kirim.</li>
+    <li><b>Buku tamu:</b> ucapan teks dan rekaman suara yang kamu kirim.</li>
+    <li><b>Notifikasi:</b> alamat langganan notifikasi browser bila kamu meminta kabar saat album terbuka atau saat pembuatan acara dibuka lagi.</li>
+    <li><b>Penyelenggara:</b> pengaturan acara, sampul undangan, email pembuat acara yang dicantumkan saat membayar, dan nomor WhatsApp bila kamu mengajukan diri menjadi pembuat acara.</li>
+    <li><b>Pembayaran:</b> nomor pesanan, rincian paket, nominal, metode, dan status pembayaran. Data kartu atau rekening tidak kami simpan; pembayaran diproses langsung oleh Midtrans.</li>
+    <li><b>Teknis:</b> catatan perubahan oleh penyelenggara dan admin, serta laporan kegagalan kamera berisi jenis perangkat dan browser untuk memperbaiki masalah.</li>
   </ul>
-  <p>Foto digambar ulang di HP sebelum dikirim, sehingga data lokasi (GPS) dan metadata kamera tidak ikut tersimpan.</p>
 
   <h2>Siapa yang bisa melihat</h2>
   <ul>
-    <li>Foto Anda terlihat oleh semua peserta acara setelah jatah jepretan Anda habis, setelah acara ditutup, atau pada waktu "cuci film" yang ditetapkan pemilik acara.</li>
-    <li>Nama Anda ditampilkan bersama foto Anda, kecuali pemilik acara menyalakan "sembunyikan nama pengunggah". Dalam mode itu nama hanya diketahui pemilik acara dan admin.</li>
-    <li>Pemilik acara dan admin aplikasi bisa melihat semua foto (untuk moderasi), nama dan email peserta, serta bisa menyembunyikan foto.</li>
-    <li>Peserta lain bisa mengunduh foto Anda ukuran penuh, paling banyak sejumlah jatah jepretan acara.</li>
-    <li>Sampul atau kartu undangan acara bersifat publik bagi siapa pun yang memegang tautannya.</li>
-    <li>Foto disimpan di bucket tertutup dan hanya dibuka lewat tautan sementara yang berlaku satu jam.</li>
+    <li><b>Peserta acara</b> melihat foto tamu lain sesuai pengaturan penyelenggara: setelah jatah jepretan pemotretnya habis, langsung setelah dijepret, setelah acara selesai, atau pada waktu "cuci film". Bila penyelenggara memilih album "hanya penyelenggara", tamu hanya melihat fotonya sendiri.</li>
+    <li>Nama pemotret ditampilkan bersama fotonya, kecuali penyelenggara menyembunyikan nama.</li>
+    <li><b>Penyelenggara dan admin</b> dapat melihat semua foto di acaranya (untuk moderasi), nama dan email peserta, serta dapat menyembunyikan foto dan memblokir peserta.</li>
+    <li>Peserta dapat mengunduh foto ukuran penuh sesuai kuota acara.</li>
+    <li>Sampul undangan dan halaman pratinjau tautan acara bersifat publik bagi siapa pun yang memegang tautannya.</li>
+    <li>Foto disimpan tertutup dan hanya dibuka lewat tautan sementara yang berlaku satu jam.</li>
   </ul>
 
-  <h2>Penyimpanan dan penghapusan</h2>
-  <p>Data disimpan di layanan Supabase; foto juga dapat disimpan di Cloudflare R2. Tampilan aplikasi memuat huruf dari Google Fonts, sehingga alamat IP Anda terlihat oleh Google saat huruf diunduh. Pemilik acara mengunduh album lalu menghapus acara beserta seluruh fotonya, rencananya 30 hari setelah acara kecuali disepakati lain.</p>
-  <p>Ucapan di buku tamu (teks dan rekaman suara) terlihat oleh peserta acara dan disimpan bersama acara. Jika Anda meminta kabar saat album terbuka, alamat langganan notifikasi browser Anda disimpan sampai notifikasi tidak lagi berlaku.</p>
+  <h2>Pihak ketiga yang memproses data</h2>
+  <ul>
+    <li><b>Supabase:</b> database, login, dan penyimpanan sampul serta rekaman suara.</li>
+    <li><b>Cloudflare:</b> penyajian aplikasi dan penyimpanan foto (R2).</li>
+    <li><b>Google:</b> login akun dan huruf tampilan (Google Fonts; alamat IP terlihat oleh Google saat huruf diunduh).</li>
+    <li><b>Midtrans:</b> pemrosesan pembayaran. Data pembayaran yang kamu masukkan di jendela Midtrans tunduk pada kebijakan privasi Midtrans.</li>
+  </ul>
+  <p>Kami tidak menjual data pribadi dan tidak memakainya untuk iklan.</p>
 
-  <h2>Hak Anda atas data (UU PDP)</h2>
-  <p>Anda bisa melaporkan foto yang keberatan Anda bagikan langsung dari penampil foto. Dari beranda aplikasi, menu <b>Data &amp; privasi</b>, Anda bisa meminta foto Anda di sebuah acara dihapus, atau meminta akun Anda beserta semua foto, unduhan, dan ucapan dihapus permanen. Admin memproses permintaan, biasanya dalam 3 hari kerja, dan statusnya terlihat di menu yang sama.</p>
+  <h2>Berapa lama disimpan</h2>
+  <ul>
+    <li>Foto, buku tamu, dan data acara disimpan selama masa simpan yang dipilih penyelenggara (30 hari setelah acara selesai, atau lebih lama bila diperpanjang), lalu dihapus otomatis.</li>
+    <li>Data akun disimpan selama akun aktif atau sampai kamu meminta penghapusan.</li>
+    <li>Catatan pesanan dan pembayaran disimpan lebih lama untuk keperluan pembukuan, walaupun acaranya sudah dihapus.</li>
+  </ul>
+
+  <h2>Penyimpanan di perangkatmu</h2>
+  <p>Aplikasi menyimpan sesi login, pilihan bahasa, tema, efek film, timer, suara rana, dan jepretan yang belum terkirim di penyimpanan browser perangkatmu. Data ini tidak dipakai untuk melacakmu dan bisa dihapus dengan keluar dari aplikasi atau membersihkan data situs di browser.</p>
+
+  <h2>Hakmu atas data (UU PDP)</h2>
+  <ul>
+    <li>Melaporkan foto yang kamu keberatan dibagikan, langsung dari penampil foto.</li>
+    <li>Dari beranda aplikasi, menu <b>Data &amp; privasi</b>: meminta foto-fotomu di suatu acara dihapus, atau meminta akunmu beserta semua foto, unduhan, dan ucapan dihapus permanen.</li>
+    <li>Meminta salinan atau perbaikan data pribadimu lewat kontak di bawah.</li>
+  </ul>
+  <p>Admin memproses permintaan, biasanya dalam 3 hari kerja, dan statusnya terlihat di menu Data &amp; privasi.</p>
 
   <h2>Kontak</h2>
-  <p>Pertanyaan tentang data Anda dapat disampaikan kepada pemilik acara yang mengundang Anda, atau lewat menu Data &amp; privasi.</p>
+  <p>Pertanyaan tentang data pribadi dapat disampaikan kepada penyelenggara acara yang mengundangmu, lewat menu Data &amp; privasi, atau ke layanan pelanggan Jepretin di <a href="mailto:yogadhi02@gmail.com">yogadhi02@gmail.com</a>.</p>
+  <p>Pengelola data: Jepretin, Badung, Bali 80361.</p>
 
-  <p><a href="/">Kembali ke aplikasi</a></p>
+  <nav><a href="/syarat.html">Syarat Layanan</a><a href="/pengembalian-dana.html">Kebijakan Pengembalian Dana</a><a href="/">Kembali ke Jepretin</a></nav>
 </main>
 </body>
 </html>
