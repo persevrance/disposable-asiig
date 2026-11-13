@@ -2,7 +2,7 @@
 // diperbarui tiap 15 detik, unduh dengan kuota, favorit, dan laporan foto.
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
-import { getUrls } from "./storage.js";
+import { getUrls, thumbUrls } from "./storage.js";
 import { attachZoom } from "./zoom.js";
 import { filmName } from "./film.js";
 import { canInstall, promptInstall } from "./install.js";
@@ -350,7 +350,8 @@ export async function renderAlbum(root, status) {
   async function addRows(rows, myGen) {
     const fresh = rows.filter((r) => !items.has(r.photo_id));
     if (!fresh.length) return;
-    const urls = await getUrls(fresh.map((r) => r.thumb_path));
+    // Bundel 60 per request + cache di HP: hemat kuota Worker (lihat thumbUrls)
+    const urls = await thumbUrls(fresh.map((r) => r.thumb_path));
     if (myGen !== gen) return;                     // saringan berganti selama menunggu
     for (const r of fresh) {
       if (items.has(r.photo_id)) continue;

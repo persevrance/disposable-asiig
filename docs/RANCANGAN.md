@@ -118,7 +118,8 @@ Jalankan ulang `supabase/v2.sql`; untuk R2 dan notifikasi ikuti README bagian 1c
 - [x] Suara rana dan tik timer lewat elemen <audio> (WAV di memori, dibuka saat ketukan), tetap berbunyi saat iPhone dalam mode senyap; Web Audio sebagai cadangan
 - [x] Opsi foto tamu langsung terlihat tanpa menunggu roll habis (`events.show_instantly`), di langkah 2 Buat acara dan Panel
 - [x] Kolase: ornamen Koran lama, Kamera retro, Scrapbook & perangko (referensi gaya fremio.id, desain sendiri); sakelar Nama acara dan Tanggal terpisah, tanggal selalu tampil (tanggal acara atau hari ini)
-- [x] Realtime hanya untuk acara sampai 300 tamu; di atasnya album memakai polling 30–60 detik dengan jeda acak
+- [x] Realtime hanya untuk acara sampai 150 tamu (batas Supabase Free 200 koneksi); di atasnya album memakai polling 30–60 detik dengan jeda acak
+- [x] Hemat kuota Worker (paket gratis 100rb request/hari): ubin album diambil per 60 dalam satu request (`/api/r2/thumbs`) dan disimpan di Cache Storage HP; URL foto stabil per jendela 3 jam supaya cache browser kena; service worker tidak menyentuh `/api/*`
 - [x] Foto di Cloudflare R2 lewat Worker situs (`worker/index.js`); hak akses tetap dari fungsi database; foto lama dipindah otomatis saat dibaca atau sekaligus dari Pengaturan (`r2_objects`, `stored_objects`)
 - [x] Album realtime: broadcast Supabase per acara, polling jadi cadangan 60 detik
 - [x] Bahasa Inggris untuk layar tamu (`src/i18n.js`), deteksi otomatis + tombol ID/EN

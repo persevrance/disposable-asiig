@@ -2,7 +2,7 @@
 import QRCode from "qrcode";
 import { zipSync } from "fflate";
 import { rpc, friendly } from "./supabase.js";
-import { getUrls, removeFiles, uploadCover, coverUrl, removeCover, copyCover, removeVoices } from "./storage.js";
+import { getUrls, thumbUrls, removeFiles, uploadCover, coverUrl, removeCover, copyCover, removeVoices } from "./storage.js";
 import { pingAlbum } from "./realtime.js";
 import { kickNotify } from "./push.js";
 import { FILMS } from "./film.js";
@@ -651,7 +651,7 @@ export async function showRoll(status, member) {
   try {
     const rows = await rpc("get_roll", { p_event: status.event_id, p_user: member.user_id });
     const ready = rows.filter((r) => r.status === "ready");
-    const urls = await getUrls(ready.map((r) => r.thumb_path));
+    const urls = await thumbUrls(ready.map((r) => r.thumb_path));
     const time = (iso) => new Date(iso).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const slots = [];
     const total = Math.max(status.max_shots, ...rows.map((r) => r.seq));

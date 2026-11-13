@@ -11,7 +11,7 @@ import { renderAdmin } from "./admin.js";
 import { mountPayment } from "./payment.js";
 import { renderGuestbook } from "./guestbook.js";
 import { openPrivacy } from "./privacy.js";
-import { coverUrl, setStorageBackend } from "./storage.js";
+import { coverUrl, setStorageBackend, clearThumbCache } from "./storage.js";
 import { setVapidKey } from "./push.js";
 import { noteEventSize } from "./realtime.js";
 import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial, confirmDialog, liveCountdown } from "./ui.js";
@@ -260,6 +260,7 @@ async function renderHome() {
     box.querySelector('[data-act="logout"]').onclick = async () => {
       close();
       forgetJoined();
+      await clearThumbCache();
       await supabase.auth.signOut();
     };
   };

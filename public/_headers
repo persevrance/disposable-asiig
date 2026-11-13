@@ -1,0 +1,9 @@
+# Header cache untuk static assets Cloudflare (Workers Assets membaca file ini dari dist/).
+# File di /assets/* memakai hash di namanya (hasil build Vite), jadi isinya tak pernah berubah:
+# simpan setahun di browser. File lain tetap dicek ulang (bawaan Cloudflare) supaya
+# index.html dan sw.js selalu versi terbaru setelah deploy.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/icon.svg
+  Cache-Control: public, max-age=86400

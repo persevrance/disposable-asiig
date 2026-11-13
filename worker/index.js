@@ -12,7 +12,8 @@
 // Rute:
 //   GET    /api/r2/health         status konfigurasi
 //   PUT    /api/r2/o/<path>       unggah foto (pemotret, jepretan masih pending)
-//   POST   /api/r2/sign           { paths } -> { path: url } URL bertanda tangan 1 jam
+//   POST   /api/r2/sign           { paths } -> { path: url } URL bertanda tangan (berlaku 3-6 jam)
+//   POST   /api/r2/thumbs         { paths } -> bundel maks. 60 thumbnail dalam satu respons
 //   GET    /api/r2/o/<path>?e&s   baca foto (URL bertanda tangan); foto lama diambil dari Supabase
 //   POST   /api/r2/delete         { paths } hapus (pengelola acara / superadmin)
 //   POST   /api/r2/migrate        { limit } pindahkan foto lama dari Supabase ke R2 (superadmin)
@@ -21,7 +22,14 @@
 import { payApi } from "./pay.js";
 
 const MAX_PHOTO = 15 * 1024 * 1024;
-const URL_TTL = 3600;
+// Masa berlaku URL dibulatkan ke jendela 3 jam: selama satu jendela, foto yang sama selalu
+// mendapat URL yang sama, jadi cache browser kena dan foto tidak diunduh ulang dari Worker/R2.
+// URL berlaku paling sedikit 3 jam (maks. 6 jam) sejak ditandatangani.
+const URL_WINDOW = 3 * 3600;
+// Bundel thumbnail: satu request Worker untuk satu halaman ubin album, bukan satu per foto
+// (paket gratis Workers: 100rb request/hari). Klien menyimpan isinya di Cache Storage HP.
+const BUNDLE_MAX = 60;
+const BUNDLE_BYTES = 6 * 1024 * 1024;
 // <acara>/<foto>.jpg, <acara>/<foto>_m.jpg, <acara>/<foto>_t.jpg; foto v1: <acara>/<pengguna>/<foto>.jpg
 const PATH_RE = /^[0-9a-f-]{36}(\/[0-9a-f-]{36}){1,2}(_m|_t)?\.jpg$/;
 
@@ -69,6 +77,7 @@ async function api(req, env, ctx, url) {
   const body = await req.json().catch(() => ({}));
   const jwt = bearer(req);
   if (route === "sign") return sign(env, jwt, body);
+  if (route === "thumbs") return thumbs(env, jwt, body);
   if (route === "delete") return remove(env, jwt, body);
   if (route === "migrate") return migrate(env, jwt, body);
   fail(404, "RUTE_TIDAK_ADA");
@@ -92,10 +101,36 @@ async function sign(env, jwt, body) {
   const paths = (Array.isArray(body.paths) ? body.paths : []).filter((p) => PATH_RE.test(p)).slice(0, 200);
   if (!paths.length) return json({});
   const allowed = scalars(await rpc(env, jwt, "r2_viewable", { p_paths: paths }), "r2_viewable");
-  const exp = Math.floor(Date.now() / 1000) + URL_TTL;
+  const exp = (Math.floor(Date.now() / 1000 / URL_WINDOW) + 2) * URL_WINDOW;
   const out = {};
   for (const p of allowed) out[p] = `/api/r2/o/${p}?e=${exp}&s=${await hmac(env, `${p}:${exp}`)}`;
   return json(out);
+}
+
+// ---------- bundel thumbnail ----------
+// Respons biner: [4 byte panjang header][header JSON [[path, ukuran], ...]][isi file berurutan].
+// File yang belum ada di R2 (foto lama di Supabase) tidak disertakan; klien memakai URL biasa.
+async function thumbs(env, jwt, body) {
+  const paths = [...new Set((Array.isArray(body.paths) ? body.paths : []).filter((p) => PATH_RE.test(p)))].slice(0, BUNDLE_MAX);
+  const allowed = paths.length ? scalars(await rpc(env, jwt, "r2_viewable", { p_paths: paths }), "r2_viewable") : [];
+  const objs = await Promise.all(allowed.map(async (p) => {
+    const o = await env.PHOTOS.get(p);
+    return o ? [p, new Uint8Array(await o.arrayBuffer())] : null;
+  }));
+  const parts = [];
+  let total = 0;
+  for (const x of objs) {
+    if (!x || total + x[1].byteLength > BUNDLE_BYTES) continue;
+    parts.push(x);
+    total += x[1].byteLength;
+  }
+  const head = new TextEncoder().encode(JSON.stringify(parts.map(([p, b]) => [p, b.byteLength])));
+  const out = new Uint8Array(4 + head.byteLength + total);
+  new DataView(out.buffer).setUint32(0, head.byteLength);
+  out.set(head, 4);
+  let at = 4 + head.byteLength;
+  for (const [, b] of parts) { out.set(b, at); at += b.byteLength; }
+  return new Response(out, { headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" } });
 }
 
 async function getPhoto(req, env, ctx, url, path) {
@@ -103,10 +138,14 @@ async function getPhoto(req, env, ctx, url, path) {
   const sig = url.searchParams.get("s") || "";
   if (!exp || exp < Date.now() / 1000) fail(403, "URL_KEDALUWARSA");
   if (!timingSafeEqual(sig, await hmac(env, `${path}:${exp}`))) fail(403, "TANDA_TANGAN_SALAH");
-  const headers = { "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=3600" };
-  const obj = await env.PHOTOS.get(path);
+  // Isi file tidak pernah berubah (nama file unik), jadi boleh disimpan browser sampai URL kedaluwarsa
+  const maxAge = Math.max(0, exp - Math.floor(Date.now() / 1000));
+  const headers = { "Content-Type": "image/jpeg", "Cache-Control": `private, max-age=${maxAge}, immutable` };
+  const obj = await env.PHOTOS.get(path, { onlyIf: req.headers });
   if (obj) {
     headers.ETag = obj.httpEtag;
+    // Prasyarat (If-None-Match) cocok: browser sudah punya salinannya
+    if (!("body" in obj)) return new Response(null, { status: 304, headers });
     return new Response(req.method === "HEAD" ? null : obj.body, { headers });
   }
   // Belum dipindah: ambil dari Supabase Storage, simpan salinannya ke R2 di belakang layar
@@ -226,9 +265,14 @@ async function unrecord(env, names) {
   }).catch(() => {});
 }
 
+// Kunci HMAC diimpor sekali per isolate, bukan sekali per path (hemat CPU, batas 10 ms)
+let hmacKey = null;
 async function hmac(env, msg) {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.SIGN_SECRET),
-    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  if (!hmacKey || hmacKey.secret !== env.SIGN_SECRET) {
+    hmacKey = { secret: env.SIGN_SECRET, key: crypto.subtle.importKey("raw", new TextEncoder().encode(env.SIGN_SECRET),
+      { name: "HMAC", hash: "SHA-256" }, false, ["sign"]) };
+  }
+  const key = await hmacKey.key;
   const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(msg));
   return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

@@ -2169,8 +2169,9 @@ alter table app_settings
     check (capacity_realtime between 10 and 1000000),
   add column if not exists capacity_worker_req bigint not null default 10000000
     check (capacity_worker_req between 100000 and 100000000000),
-  -- Model: request Worker per foto (unggah 3 + tampil di album, penampil, slideshow, unduhan)
-  add column if not exists worker_req_per_photo int not null default 46
+  -- Model: request Worker per foto (unggah 3 + ubin album lewat bundel 60 foto/request dan cache
+  -- di HP, penampil, slideshow, unduhan). Dulu 46 saat tiap ubin satu request; atur di Pengaturan.
+  add column if not exists worker_req_per_photo int not null default 10
     check (worker_req_per_photo between 1 and 10000),
   add column if not exists capacity_auto_warn  boolean not null default true,
   add column if not exists capacity_auto_limit boolean not null default true,
@@ -2319,14 +2320,15 @@ begin
   v_db := pg_database_size(current_database());
   select count(*) into v_mau from auth.users where last_sign_in_at > now() - interval '30 days';
   select count(*) into v_writes from r2_objects where at >= date_trunc('month', now());
-  -- Realtime (perkiraan): 60% peserta acara terbuka sampai 300 tamu tersambung bersamaan.
+  -- Realtime (perkiraan): 60% peserta acara terbuka sampai 150 tamu (REALTIME_MAX di
+  -- src/realtime.js) tersambung bersamaan.
   -- Perkiraan puncak = hari terjadwal dengan jumlah tamu acara kecil terbanyak.
   select coalesce(sum(n) * 0.6, 0) into v_rt
     from (select (select count(*) from event_members m where m.event_id = e.id) n
-            from events e where open_now(e) and e.max_members <= 300) x;
+            from events e where open_now(e) and e.max_members <= 150) x;
   select coalesce(max(day_guests) * 0.6, 0) into v_rt_proj
     from (select sum(e.max_members) day_guests from events e
-           where e.max_members <= 300 and e.starts_at >= now() and e.starts_at < now() + interval '30 days'
+           where e.max_members <= 150 and e.starts_at >= now() and e.starts_at < now() + interval '30 days'
            group by date_trunc('day', e.starts_at)) d;
   -- Request Worker (perkiraan model): foto bulan ini × request per foto
   select count(*) into v_taken from photos where taken_at >= date_trunc('month', now());

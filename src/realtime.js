@@ -5,9 +5,10 @@ import { supabase } from "./supabase.js";
 
 const channels = new Map(); // eventId -> { ch, ready, listeners:Set }
 
-// Acara di atas 300 tamu tanpa realtime: koneksi serentak tetap di bawah batas paket Supabase
-// (500). Album acara besar memakai polling berjeda acak (album.js). Diisi saat status dimuat.
-export const REALTIME_MAX = 300;
+// Acara di atas 150 tamu tanpa realtime: koneksi serentak tetap di bawah batas paket Supabase
+// (Free 200, Pro 500; dibagi semua acara yang berjalan). Album acara besar memakai polling
+// berjeda acak (album.js). Sama dengan angka di capacity_meters (supabase/v2.sql).
+export const REALTIME_MAX = 150;
 const large = new Set();
 export function noteEventSize(eventId, maxMembers) {
   if ((maxMembers || 0) > REALTIME_MAX) large.add(eventId); else large.delete(eventId);

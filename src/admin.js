@@ -4,7 +4,7 @@ import { supabase, rpc, friendly } from "./supabase.js";
 import { themeSwitch, bindThemeSwitch } from "./theme.js";
 import { FILMS, filmName } from "./film.js";
 import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData } from "./owner.js";
-import { coverUrl, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
+import { coverUrl, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend, clearThumbCache } from "./storage.js";
 import { pingAlbum } from "./realtime.js";
 import { kickNotify, setVapidKey, joinCreationWaitlist } from "./push.js";
 import { downloadQrCard } from "./qrcard.js";
@@ -85,6 +85,7 @@ export async function renderAdmin(app, tab, { setView, me }) {
     box.querySelector('[data-act="logout"]').onclick = async () => {
       close();
       try { localStorage.removeItem(`joined:${me?.id}`); } catch { /* abaikan */ }  // sama seperti keluar dari beranda
+      await clearThumbCache();
       await supabase.auth.signOut();
       location.hash = "#/";
     };

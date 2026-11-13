@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:sql": "node tests/sql.test.mjs",
-    "test:pay": "node tests/pay-worker.test.mjs"
+    "test:pay": "node tests/pay-worker.test.mjs",
+    "test:r2": "node tests/r2-worker.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

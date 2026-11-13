@@ -109,7 +109,8 @@ API foto R2. Harga, pesanan, dan kode promo ada di database (`supabase/v2.sql`);
    meminta aktivasi produksi.
 
 Tes: `npm run test:sql` (harga, pesanan, webhook di database) dan `npm run test:pay` (rute Worker
-dengan Midtrans tiruan: tanda tangan, cek ulang status, Snap).
+dengan Midtrans tiruan: tanda tangan, cek ulang status, Snap), serta `npm run test:r2` (bundel
+thumbnail dan URL foto stabil di Worker).
 
 ## Uji di HP (daftar periksa)
 
