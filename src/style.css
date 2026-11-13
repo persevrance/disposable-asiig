@@ -781,3 +781,17 @@ input[type="datetime-local"], input[type="date"] { min-width: 0; max-width: 100%
   .show-img, .tc-bar { transition: none; }
   .btn, .shutter, .ctl, .switch .knob, .switch .knob::after { transition: none; }
 }
+
+/* Crop sampul (dialog crop manual) */
+.crop { display: grid; gap: .75rem; }
+.crop h3 { margin: 0; font-family: "Fredoka", system-ui, sans-serif; }
+.crop-stage { position: relative; overflow: hidden; border-radius: 14px; background: #1a1220; touch-action: none; user-select: none; -webkit-user-select: none; }
+.crop-img { position: absolute; top: 0; left: 0; max-width: none; pointer-events: none; }
+.crop-box { position: absolute; top: 0; left: 0; box-sizing: border-box; border: 1.5px solid rgba(255, 255, 255, .95); box-shadow: 0 0 0 9999px rgba(0, 0, 0, .5); cursor: move; touch-action: none; }
+.crop-box i { position: absolute; width: 24px; height: 24px; border: 2px solid #fff; border-radius: 50%; background: var(--primary); box-shadow: 0 1px 4px rgba(0, 0, 0, .4); }
+.crop-box i[data-h="nw"] { top: -13px; left: -13px; cursor: nwse-resize; }
+.crop-box i[data-h="ne"] { top: -13px; right: -13px; cursor: nesw-resize; }
+.crop-box i[data-h="sw"] { bottom: -13px; left: -13px; cursor: nesw-resize; }
+.crop-box i[data-h="se"] { bottom: -13px; right: -13px; cursor: nwse-resize; }
+.crop-actions { display: flex; gap: .6rem; justify-content: flex-end; }
+

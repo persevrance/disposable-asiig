@@ -6,14 +6,15 @@ import { renderCamera } from "./camera-view.js";
 import { renderAlbum } from "./album.js";
 import { renderSlideshow } from "./slideshow.js";
 import "./install.js"; // tangkap prompt pasang aplikasi sedini mungkin
-import { renderPanel } from "./owner.js";
+import { renderPanel, deleteEventFiles } from "./owner.js";
 import { renderAdmin } from "./admin.js";
+import { mountPayment } from "./payment.js";
 import { renderGuestbook } from "./guestbook.js";
 import { openPrivacy } from "./privacy.js";
 import { coverUrl, setStorageBackend } from "./storage.js";
 import { setVapidKey } from "./push.js";
 import { noteEventSize } from "./realtime.js";
-import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial } from "./ui.js";
+import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial, confirmDialog } from "./ui.js";
 import { landingHtml } from "./landing.js";
 import { renderPricing } from "./pricing-page.js";
 import { renderCreate } from "./create-event.js";
@@ -292,7 +293,25 @@ async function renderHome() {
     const shown = events.filter((ev) => ev.is_owner || here.includes(ev.event_id));
     view.querySelector(".home-events").hidden = !shown.length;
     view.querySelector(".events-empty").hidden = shown.length > 0;
+    // Peringatan: acara milik sendiri yang belum dibayar
+    const drafts = shown.filter((ev) => ev.is_owner && ev.pay_status === "draft");
+    view.querySelector(".draft-warn")?.remove();
+    if (drafts.length) {
+      view.querySelector(".home-events").before(el(`
+        <a class="draft-warn" href="#/e/${drafts[0].event_id}">${ICON.lock}
+          <span><b>${drafts.length === 1 ? `“${esc(drafts[0].name)}” belum dibayar` : `${drafts.length} acara belum dibayar`}</b>
+          <small>Selesaikan pembayaran supaya acara aktif dan tamu bisa bergabung.</small></span>
+          <span class="btn small primary">Bayar</span></a>`));
+    }
     view.querySelector(".events").replaceChildren(...shown.map((ev) => {
+      if (ev.is_owner && ev.pay_status === "draft") {
+        return el(`
+          <a class="home-event draft" href="#/e/${ev.event_id}">
+            <span class="he-thumb" aria-hidden="true">${ICON.lock}</span>
+            <span class="he-text"><b>${esc(ev.name)}</b><small>Draf · selesaikan pembayaran untuk mengaktifkan</small></span>
+            <span class="tag bad">Belum dibayar</span>
+          </a>`);
+      }
       const left = Math.max(0, ev.max_shots - ev.shots_used);
       const photos = ev.photos ? ` · ${t("{n} foto", { n: ev.photos })}` : "";
       const sub = ev.is_owner && !ev.shots_used ? t("Acara Anda") + photos
@@ -316,6 +335,45 @@ async function renderHome() {
   }
 }
 
+// ---------- Draf belum dibayar: wajib selesaikan pembayaran ----------
+function renderPayGate(status) {
+  const view = el(`
+    <main class="pay-gate">
+      <div class="pg-in">
+        <a class="round-btn ghost-round pg-back" href="#/" aria-label="${t("Kembali ke beranda")}">${ICON.back}</a>
+        <div class="pg-body">
+          <span class="pg-icon" aria-hidden="true">${ICON.lock}</span>
+          <h1>Selesaikan pembayaran dulu</h1>
+          <p><b>${esc(status.name)}</b> masih draf karena pembayarannya belum selesai, jadi acara ini belum bisa dibuka.</p>
+          <ul class="pg-list">
+            <li>${ICON.people}<span>Tamu belum bisa bergabung lewat QR atau kode undangan.</span></li>
+            <li>${ICON.camera}<span>Kamera, album, dan Panel acara terkunci sampai lunas.</span></li>
+            <li>${ICON.check}<span>Pengaturan acaramu aman tersimpan (${status.max_members} tamu × ${status.max_shots} jepretan).</span></li>
+          </ul>
+          <div class="pg-actions">
+            <button type="button" class="btn primary" data-act="pay">Selesaikan pembayaran</button>
+            <button type="button" class="btn ghost" data-act="delete">Hapus draf</button>
+          </div>
+        </div>
+      </div>
+    </main>`);
+  setView(view);
+  view.querySelector('[data-act="pay"]').onclick = () => {
+    const host = el(`<div class="dialog pay-host"></div>`);
+    view.querySelector(".pg-body").replaceWith(host);
+    cleanup = mountPayment(host, status, { onPaid: () => { toast("Acara aktif. Selamat!"); route(); } }) || cleanup;
+  };
+  view.querySelector('[data-act="delete"]').onclick = async () => {
+    if (!(await confirmDialog({ title: "Hapus draf acara?", text: `“${status.name}” dan pengaturannya dihapus. Belum ada pembayaran yang tercatat lunas untuk draf ini.`, ok: "Hapus draf", danger: true }))) return;
+    try {
+      await deleteEventFiles(status.event_id, status.cover_path).catch(() => {});
+      await rpc("delete_event", { p_event: status.event_id });
+      toast("Draf dihapus.");
+      location.hash = "#/";
+    } catch (e) { toast(friendly(e)); }
+  };
+}
+
 // ---------- Halaman acara dengan tab ----------
 async function renderEvent(eventId, tab) {
   let status;
@@ -331,6 +389,9 @@ async function renderEvent(eventId, tab) {
     return;
   }
   status.me = session.user.id;
+  // Draf belum dibayar: pemilik tidak bisa membuka acara, hanya halaman penyelesaian pembayaran.
+  // Superadmin tetap bisa masuk (mis. untuk menandai lunas manual dari Panel).
+  if (status.pay_status === "draft" && !status.is_admin) return renderPayGate(status);
   // Acara yang dibuka lewat link di perangkat ini ikut tampil di beranda
   if (status.is_member) rememberJoined(eventId);
   if (tab === "layar") {

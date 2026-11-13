@@ -10,6 +10,7 @@ import { ORNAMENTS } from "./collage-layouts.js";
 import { openPayment, openUpgrade, paymentsOn } from "./payment.js";
 import { rp } from "./price.js";
 import { downloadQrCard, printQrCard } from "./qrcard.js";
+import { openCrop } from "./crop.js";
 import { renderReports } from "./moderation.js";
 import { attachZoom } from "./zoom.js";
 import {
@@ -184,10 +185,6 @@ export async function renderPanel(root, status, { reload, home }) {
           </label>
           <label>Efek film bawaan <select name="film">${filmOptions(status.ev_film || status.film)}</select></label>
           <label class="check"><input type="checkbox" name="allow_film_choice" ${status.allow_film_choice ? "checked" : ""}/> Tamu boleh memilih efek film sendiri</label>
-          <label>Jatah jepretan per peserta
-            <input type="number" name="max_shots" min="${status.is_admin ? 1 : status.max_shots}" max="${status.max_shots_limit}" value="${status.max_shots}" />
-          </label>
-          <p class="hint">Batas admin: ${status.max_shots_limit}. ${status.is_admin ? "" : "Jatah hanya bisa dinaikkan. "}Menaikkan jatah membuka lagi gulungan yang sudah habis, dan fotonya tersembunyi lagi sampai gulungan itu habis.</p>
           <label class="check"><input type="checkbox" name="hide_names" ${status.hide_names ? "checked" : ""}/> Sembunyikan nama pengunggah (hanya Anda dan superadmin yang tahu)</label>
           <label>Ditampilkan sebagai penyelenggara <input name="host_name" maxlength="60" placeholder="Contoh: Panitia Wisuda" value="${esc(status.host_name || "")}" /></label>
           <label>Tautan khusus
@@ -216,7 +213,6 @@ export async function renderPanel(root, status, { reload, home }) {
             <label class="check"><input type="checkbox" name="reveal" ${status.reveal_at ? "checked" : ""}/> Mode cuci film: semua foto tampil bersamaan pada</label>
             <input type="datetime-local" name="reveal_at" aria-label="Waktu cuci film" value="${toLocalInput(status.reveal_at)}" />
             <label style="margin-top:.75rem">Rencana hapus foto <input type="date" name="purge_at" value="${status.purge_at ? toLocalInput(status.purge_at).slice(0, 10) : ""}" /></label>
-            <label>Batas jumlah peserta <input type="number" name="max_members" min="1" max="${status.max_members_limit}" value="${status.max_members}" /></label>
             <label class="check"><input type="checkbox" name="invite_only" ${status.invite_only ? "checked" : ""}/> Hanya email di daftar undangan</label>
             <textarea name="invites" rows="4" placeholder="Satu email per baris" aria-label="Daftar email undangan" ${status.invite_only ? "" : "hidden"}></textarea>
             ${status.is_admin ? `
@@ -386,11 +382,12 @@ export async function renderPanel(root, status, { reload, home }) {
     const file = e.target.files[0];
     e.target.value = "";
     if (!file) return;
+    const cropped = await openCrop(file).catch(() => null);
+    if (!cropped) return; // dibatalkan / gagal dibaca
     try {
       toast("Mengunggah sampul…", 20000);
-      const blob = await resizeImage(file, 1600, 0.85);
       const path = `${status.event_id}/${crypto.randomUUID()}.jpg`;
-      await uploadCover(path, blob);
+      await uploadCover(path, cropped);
       const old = await rpc("set_cover", { p_event: status.event_id, p_path: path });
       await removeCover(old).catch(() => {});
       toast("Sampul tersimpan.");
@@ -436,12 +433,10 @@ export async function renderPanel(root, status, { reload, home }) {
       allow_film_choice: f.allow_film_choice.checked,
       reveal_at: reveal,
       purge_at: f.purge_at.value ? new Date(f.purge_at.value + "T00:00").toISOString() : null,
-      max_members: Number(f.max_members.value),
       invite_only: f.invite_only.checked,
       starts_at: startsAt,
       ends_at: endsAt,
     };
-    if (Number(f.max_shots.value) !== status.max_shots) patch.max_shots = Number(f.max_shots.value);
     // Tema kolase: semua ornamen dicentang = tanpa batasan; ornamen bawaan selalu ikut diizinkan
     const allowed = [...form.querySelectorAll('[name="cl_allowed"]:checked')].map((x) => x.value);
     if (!allowed.length) return toast("Pilih paling sedikit satu ornamen kolase.");
@@ -722,19 +717,4 @@ function openRollViewer(member, list, start) {
   box.querySelector('[data-act="prev"]').onclick = () => step(-1);
   box.querySelector('[data-act="next"]').onclick = () => step(1);
   show();
-}
-
-// Perkecil gambar menjadi JPEG (untuk sampul)
-export async function resizeImage(file, maxSide, quality) {
-  const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });
-  const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
-  const c = document.createElement("canvas");
-  c.width = Math.round(bmp.width * scale);
-  c.height = Math.round(bmp.height * scale);
-  const ctx = c.getContext("2d");
-  ctx.fillStyle = "#fff";
-  ctx.fillRect(0, 0, c.width, c.height);
-  ctx.drawImage(bmp, 0, 0, c.width, c.height);
-  bmp.close?.();
-  return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error("Gagal memproses gambar"))), "image/jpeg", quality));
 }

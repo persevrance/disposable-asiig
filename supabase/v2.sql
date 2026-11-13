@@ -672,12 +672,13 @@ drop function if exists my_events();
 create function my_events()
 returns table (event_id uuid, name text, is_owner boolean, is_open boolean,
                max_shots int, shots_used int, created_at timestamptz,
-               cover_path text, starts_at timestamptz, ends_at timestamptz, photos int)
+               cover_path text, starts_at timestamptz, ends_at timestamptz, photos int,
+               pay_status text)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name, e.owner_id = auth.uid(), open_now(e), e.max_shots,
          coalesce(m.shots_used, 0), e.created_at,
          e.cover_path, e.starts_at, e.ends_at,
-         (select count(*)::int from visible_photos(e.id))
+         (select count(*)::int from visible_photos(e.id)), e.pay_status
     from events e
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
    where e.owner_id = auth.uid() or m.user_id is not null
@@ -789,7 +790,7 @@ create or replace function create_event(p_name text, p_max_shots int default 30,
 returns uuid
 language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_try int := 0; s app_settings%rowtype; r user_roles%rowtype; v_gate jsonb;
-        v_pay text := 'free';
+        v_pay text := 'free'; v_limit int; v_used int;
 begin
   perform assert_not_banned();
   if not can_create_event() then raise exception 'TIDAK_BOLEH_MEMBUAT'; end if;
@@ -798,15 +799,25 @@ begin
   if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
   -- Kunci baris peran supaya dua permintaan bersamaan tidak melewati batas
   select * into r from user_roles where email = my_verified_email() for update;
-  if r.role <> 'superadmin' and r.event_limit is not null
-     and r.events_created >= r.event_limit then
-    raise exception 'BATAS_ACARA_HABIS';
-  end if;
-  if r.role <> 'superadmin' and r.storage_limit_mb is not null
-     and owner_bytes(auth.uid()) >= r.storage_limit_mb::bigint * 1048576 then
-    raise exception 'BATAS_STORAGE_HABIS';
-  end if;
   select * into s from app_settings;
+  -- Batas jumlah acara berlaku juga untuk layanan mandiri (belum punya peran):
+  -- pakai batas bawaan creator_event_limit, dihitung dari semua acara miliknya (termasuk draf).
+  if coalesce(r.role, '') <> 'superadmin' then
+    if r.role is null then
+      v_limit := s.creator_event_limit;
+      v_used := (select count(*)::int from events e where e.owner_id = auth.uid());
+    else
+      v_limit := r.event_limit;
+      v_used := r.events_created;
+    end if;
+    if v_limit is not null and v_used >= v_limit then
+      raise exception 'BATAS_ACARA_HABIS';
+    end if;
+    if r.storage_limit_mb is not null
+       and owner_bytes(auth.uid()) >= r.storage_limit_mb::bigint * 1048576 then
+      raise exception 'BATAS_STORAGE_HABIS';
+    end if;
+  end if;
   if p_max_shots is null or p_max_shots < 1 or p_max_shots > s.max_shots_limit then
     raise exception 'JATAH_MELEBIHI_BATAS';
   end if;
@@ -2562,8 +2573,15 @@ begin
   if o.event_id is not null then
     select * into e from events where id = o.event_id for update;
     if o.list_price > 0 and coalesce(e.creator_email, '') <> '' then
-      insert into user_roles (email, role, added_by, event_limit, storage_limit_mb)
-      values (e.creator_email, 'creator', o.user_id, null, s.creator_storage_mb)
+      -- Pembuat acara baru lewat pembayaran ikut batas bawaan (creator_event_limit),
+      -- sama seperti ditambahkan manual di Dashboard; bukan tanpa batas. events_created
+      -- diisi jumlah acara milik email tersebut supaya hitungan batas tetap konsisten
+      -- (akun yang membuat acara untuk dirinya sendiri tidak mulai dari nol lagi).
+      insert into user_roles (email, role, added_by, event_limit, storage_limit_mb, events_created)
+      select e.creator_email, 'creator', o.user_id, s.creator_event_limit, s.creator_storage_mb,
+             (select count(*)::int from events ev
+               where ev.owner_id = (select au.id from auth.users au
+                                     where lower(au.email) = lower(e.creator_email)))
       on conflict (email) do nothing;
       if found then
         insert into audit_log (actor_id, action, target, detail)

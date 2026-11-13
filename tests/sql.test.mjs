@@ -609,6 +609,7 @@ await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: true, fr
 const draft = (await as("host", `select create_event('Wisuda Lunas', 24, 50) id`))[0].id;
 let dr = (await db.query(`select pay_status, join_code from events where id = $1`, [draft])).rows[0];
 ok(dr.pay_status === "draft", "paid-size event starts as draft");
+ok((await as("host", `select pay_status from my_events() where event_id = $1`, [draft]))[0]?.pay_status === "draft", "my_events shows draft status");
 await expectErr("d", `select join_event($1)`, [dr.join_code], "ACARA_BELUM_DIBAYAR");
 await expectErr("host", `select * from reserve_shot($1, gen_random_uuid())`, [draft], "ACARA_BELUM_DIBAYAR");
 const fr1 = (await as("host", `select create_event('Kecil Gratis', 24, 5) id`))[0].id;
@@ -676,21 +677,26 @@ const fin = (await as("admin", `select admin_orders() r`))[0].r;
 ok(fin.summary.revenue_total === 89100 + 88000 && fin.rows.length === 4, `admin_orders revenue ${fin.summary.revenue_total}`);
 await expectErr("host", `select admin_orders()`, [], "BUKAN_SUPERADMIN");
 // Layanan mandiri: akun tanpa peran bisa membuat acara saat pembayaran aktif;
-// email pembuat acara mendapat peran setelah lunas
+// email pembuat acara mendapat peran setelah lunas, dengan batas bawaan creator_event_limit
+await as("admin", `select admin_set_settings($1)`, [{ creator_event_limit: 3 }]);
 U.f = ["00000000-0000-0000-0000-00000000000f", "fani@x.id", "Fani"];
 await db.query(`insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values ($1, $2, $3, now())`, [U.f[0], U.f[1], { full_name: "Fani" }]);
 ok((await as("f", `select can_create_event() v`))[0].v === true && (await as("f", `select my_role() r`))[0].r === null, "self-serve: no role but can create");
 const fEv = (await as("f", `select create_event('Ultah Fani', 24, 30) id`))[0].id;
 let fRow = (await db.query(`select pay_status, creator_email from events where id = $1`, [fEv])).rows[0];
 ok(fRow.pay_status === "draft" && fRow.creator_email === "fani@x.id", "self-serve event is draft, creator_email = own email");
+// Layanan mandiri juga dibatasi saat membuat draf (sebelum bayar): creator_event_limit berlaku
+const fDraft2 = (await as("f", `select create_event('Ultah Fani 2', 24, 30) id`))[0].id;
+const fDraft3 = (await as("f", `select create_event('Ultah Fani 3', 24, 30) id`))[0].id;
+await expectErr("f", `select create_event('Ultah Fani 4', 24, 30)`, [], "BATAS_ACARA_HABIS");
 await expectErr("f", `select set_event($1, $2)`, [fEv, { creator_email: "bukan-email" }], "EMAIL_TIDAK_VALID");
 await as("f", `select set_event($1, $2)`, [fEv, { creator_email: " Klien@Kantor.ID " }]);
 const fo = (await as("f", `select start_order($1) o`, [fEv]))[0].o;
 await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [fo.id, fo.amount]);
 const granted = (await db.query(`select role, event_limit from user_roles where email = 'klien@kantor.id'`)).rows[0];
-ok(granted?.role === "creator" && granted.event_limit === null, "paid event grants creator role to creator_email");
+ok(granted?.role === "creator" && granted.event_limit === 3, "paid event grants creator role with default event limit");
 ok((await db.query(`select count(*)::int n from audit_log where action = 'ubah_peran' and target = 'klien@kantor.id'`)).rows[0].n === 1, "role grant audited");
-for (const id of [draft, fr1, d2, fEv]) await as("admin", `select delete_event($1)`, [id]);
+for (const id of [draft, fr1, d2, fEv, fDraft2, fDraft3]) await as("admin", `select delete_event($1)`, [id]);
 ok((await db.query(`select count(*)::int n from orders where event_id is null`)).rows[0].n === 5, "orders kept after event deleted");
 // Metode bayar dipilih di layar Pembayaran: disimpan di pesanan, ganti metode = pesanan baru
 const dm = (await as("host", `select create_event('Metode', 24, 50) id`))[0].id;

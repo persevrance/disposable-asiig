@@ -6,7 +6,8 @@ import QRCode from "qrcode";
 import { rpc, friendly } from "./supabase.js";
 import { FILMS } from "./film.js";
 import { uploadCover } from "./storage.js";
-import { duplicateEvent, cardData, inviteLink, resizeImage } from "./owner.js";
+import { openCrop } from "./crop.js";
+import { duplicateEvent, cardData, inviteLink } from "./owner.js";
 import { downloadQrCard } from "./qrcard.js";
 import { creationClosedDialog } from "./admin.js";
 import { priceSettings, mountPayment } from "./payment.js";
@@ -272,7 +273,7 @@ export async function renderCreate(setView, { me } = {}) {
       <div class="cr-cover">
         <div class="cr-cover-pick">
           <label class="cr-upload">${ICON.album}<span>${coverFile ? "Ganti sampul" : "Pilih sampul"}</span><input type="file" name="cover" accept="image/*" hidden /></label>
-          <small class="hint">Foto atau kartu undangan. Dipotong otomatis.</small>
+          <small class="hint">Foto atau kartu undangan. Bisa dipotong manual.</small>
         </div>
         <div class="cr-phone" role="img" aria-label="Pratinjau layar tamu">
           <div><span class="cr-ph-cover"${coverUrl ? ` style="background-image:url('${coverUrl}')"` : ""}></span>
@@ -294,10 +295,15 @@ export async function renderCreate(setView, { me } = {}) {
       </div>`,
     { nextLabel: q?.total ? "Lanjut bayar" : "Buat acara" });
     const fe = f();
-    fe.cover.onchange = () => {
-      coverFile = fe.cover.files[0] || null;
+    fe.cover.onchange = async () => {
+      const file = fe.cover.files[0];
+      fe.cover.value = ""; // supaya file yang sama bisa dipilih lagi
+      if (!file) return;
+      const cropped = await openCrop(file);
+      if (!cropped) return; // dibatalkan
       if (coverUrl) URL.revokeObjectURL(coverUrl);
-      coverUrl = coverFile ? URL.createObjectURL(coverFile) : "";
+      coverFile = cropped;
+      coverUrl = URL.createObjectURL(cropped);
       readStep(); render();
     };
     fe.welcome.oninput = () => { D.welcome = fe.welcome.value; save(); };
@@ -387,9 +393,8 @@ export async function renderCreate(setView, { me } = {}) {
     }
     if (coverFile) {
       try {
-        const blob = await resizeImage(coverFile, 1600, 0.85);
         const path = `${id}/${crypto.randomUUID()}.jpg`;
-        await uploadCover(path, blob);
+        await uploadCover(path, coverFile);
         await rpc("set_cover", { p_event: id, p_path: path });
       } catch { toast("Sampul gagal diunggah. Pasang lagi dari Panel.", 5000); }
     }
