@@ -156,7 +156,7 @@ export function mountPayment(host, ev, opts = {}) {
           ${dead ? `<button type="button" class="btn primary" data-act="again">Buat pembayaran baru</button>`
             : `<button type="button" class="btn primary" data-act="reopen">Buka lagi jendela pembayaran</button>
                <button type="button" class="btn" data-act="check">Saya sudah bayar, cek status</button>`}
-          <p class="hint">Acaramu aman tersimpan${upgrade ? "" : " sebagai draf"} di <a href="#/admin/acara">Acara saya</a>.</p>
+          <p class="hint">Acaramu aman tersimpan${upgrade ? "" : " sebagai draf"} di <a href="#/">beranda</a> dan Panel acara.</p>
         </div>
       </div>`;
     host.querySelector('[data-act="reopen"]')?.addEventListener("click", () => openSnap().catch((e) => toast(friendly(e))));

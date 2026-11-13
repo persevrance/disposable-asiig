@@ -7,7 +7,7 @@ import { renderAlbum } from "./album.js";
 import { renderSlideshow } from "./slideshow.js";
 import "./install.js"; // tangkap prompt pasang aplikasi sedini mungkin
 import { renderPanel } from "./owner.js";
-import { renderAdmin, createEventDialog } from "./admin.js";
+import { renderAdmin } from "./admin.js";
 import { renderGuestbook } from "./guestbook.js";
 import { openPrivacy } from "./privacy.js";
 import { coverUrl, setStorageBackend } from "./storage.js";
@@ -16,6 +16,7 @@ import { noteEventSize } from "./realtime.js";
 import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial } from "./ui.js";
 import { landingHtml } from "./landing.js";
 import { renderPricing } from "./pricing-page.js";
+import { renderCreate } from "./create-event.js";
 import { themeSwitch, bindThemeSwitch } from "./theme.js";
 import { myCreatorRequest, openCreatorRequest, requestStatusCard } from "./creator-request.js";
 import { t, langSwitch, bindLangSwitch } from "./i18n.js";
@@ -31,6 +32,19 @@ if (params.get("kode")) {
   params.delete("kode");
   const q = params.toString();
   history.replaceState(null, "", location.pathname + (q ? "?" + q : "") + location.hash);
+}
+
+// ---------- Tautan khusus acara: domain/<slug> -> kode undangan ----------
+// Worker menyajikan index.html untuk alamat yang tidak dikenal (single-page-application).
+async function resolveSlugPath() {
+  const m = location.pathname.match(/^\/([A-Za-z0-9][A-Za-z0-9-]{1,38}[A-Za-z0-9])\/?$/);
+  if (!m) return;
+  try {
+    const code = await rpc("resolve_slug", { p_slug: m[1].toLowerCase() });
+    if (code) localStorage.setItem("pendingCode", code);
+    else toast(t("Tautan acara tidak ditemukan. Minta kode undangan ke penyelenggara."), 6000);
+  } catch { /* tetap buka halaman utama */ }
+  history.replaceState(null, "", "/" + location.search + location.hash);
 }
 
 // ---------- Acara yang dimasuki dengan kode DI PERANGKAT INI ----------
@@ -56,7 +70,7 @@ function forgetJoined() {
 // yang selalu kembali ke halaman utama.
 const PENDING_HASH = "pendingHash";
 function savePendingHash() {
-  if (/^#\/e\//.test(location.hash)) {
+  if (/^#\/(e\/|buat)/.test(location.hash)) {
     try { localStorage.setItem(PENDING_HASH, location.hash); } catch { /* abaikan */ }
   }
 }
@@ -80,6 +94,14 @@ function setView(node) {
   app.replaceChildren(node);
 }
 
+async function googleLogin() {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: location.origin },
+  });
+  if (error) toast(friendly(error));
+}
+
 // ---------- Halaman depan (belum login) ----------
 function renderLogin() {
   savePendingHash();
@@ -88,13 +110,7 @@ function renderLogin() {
   setView(el(landingHtml({ code, shareLink })));
   bindLangSwitch(app);
 
-  const login = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: location.origin },
-    });
-    if (error) toast(friendly(error));
-  };
+  const login = googleLogin;
   app.querySelectorAll('[data-act="google"]').forEach((b) => (b.onclick = () => {
     // Ingat maksud "buat acara" melewati login Google
     if (b.dataset.intent) { try { localStorage.setItem(INTENT, b.dataset.intent); } catch { /* abaikan */ } }
@@ -142,6 +158,7 @@ async function renderJoin(code) {
       <div class="join-body">
         <div class="join-title">
           <h1>${ev ? esc(ev.name) : t("Masuk acara")}</h1>
+          ${ev?.host_name ? `<span>${esc(t("oleh {h}", { h: ev.host_name }))}</span>` : ""}
           ${ev?.starts_at || ev?.ends_at ? `<span>${esc(fmtRange(ev.starts_at, ev.ends_at))}</span>` : ""}
         </div>
         ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
@@ -149,11 +166,13 @@ async function renderJoin(code) {
         <ul class="join-rules">
           <li><span class="jr-ic coral jr-num">${ev ? ev.max_shots : ICON.film}</span><div><b>${ev ? t("{n} jepretan untukmu", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Nggak bisa dihapus, nggak bisa diulang.")}</span></div></li>
           <li><span class="jr-ic sun">${ICON.clock}</span><div><b>${t("Hasil terlihat setelah film habis")}</b><span>${t("Seperti kamera film, fotonya dicuci dulu.")}</span></div></li>
-          <li><span class="jr-ic mint">${ICON.people}</span><div><b>${t("Masuk album bersama")}</b><span>${t("Semua tamu bisa melihat fotomu.")}</span></div></li>
+          ${ev?.album_private
+            ? `<li><span class="jr-ic mint">${ICON.lock}</span><div><b>${t("Album khusus penyelenggara")}</b><span>${t("Kamu melihat fotomu sendiri; semua foto dikumpulkan untuk penyelenggara.")}</span></div></li>`
+            : `<li><span class="jr-ic mint">${ICON.people}</span><div><b>${t("Masuk album bersama")}</b><span>${t("Semua tamu bisa melihat fotomu.")}</span></div></li>`}
         </ul>
         <div class="join-actions">
           <button class="btn primary lp-big" data-act="yes">${t("Setuju dan mulai memotret")}</button>
-          <p class="fine">${t("Dengan masuk, kamu setuju foto dibagikan ke peserta acara.")} <a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
+          <p class="fine">${ev?.album_private ? t("Dengan masuk, kamu setuju fotomu dibagikan ke penyelenggara acara.") : t("Dengan masuk, kamu setuju foto dibagikan ke peserta acara.")} <a href="/privacy.html">${t("Kebijakan privasi")}</a></p>
         </div>
       </div>
     </main>`));
@@ -208,7 +227,7 @@ async function renderHome() {
       </section>
       <div class="events-empty empty-home" hidden><p>${t("Belum ada acara di perangkat ini.")}<br>${t("Masukkan kode di atas untuk mulai memotret.")}</p></div>
       <div class="req-slot"></div>
-      <p class="home-create" hidden>${t("Mau bikin acara sendiri?")} <button type="button" class="linklike" data-act="create">${t("Buat acara")}</button></p>
+      <p class="home-create" hidden>${t("Mau bikin acara sendiri?")} <a class="linklike" href="#/buat" data-act="create">${t("Buat acara")}</a></p>
     </main>`);
   setView(view);
 
@@ -251,9 +270,10 @@ async function renderHome() {
     view.querySelector(".home-create").hidden = !canCreate && request?.status === "open";
   };
   async function refreshRequest() { request = await myCreatorRequest(); showRequest(); }
-  const startCreate = () => {
-    if (canCreate) createEventDialog();
-    else if (request?.status === "open") toast(t("Pengajuan Anda masih ditinjau."));
+  const startCreate = (e) => {
+    if (canCreate) { if (!e) location.hash = "#/buat"; return; }   // klik tautan: biarkan menuju #/buat
+    e?.preventDefault();
+    if (request?.status === "open") toast(t("Pengajuan Anda masih ditinjau."));
     else openCreatorRequest({ prev: request, onDone: refreshRequest });
   };
   createBtn.onclick = startCreate;
@@ -373,12 +393,15 @@ async function loadSettings() {
 // ---------- Router ----------
 async function route() {
   if (/^#\/harga/.test(location.hash)) return renderPricing(setView, { loggedIn: Boolean(session) });
+  // Buat acara tanpa login: langsung ke login Google, lalu kembali ke #/buat
+  if (!session && /^#\/buat/.test(location.hash)) { savePendingHash(); renderLogin(); return googleLogin(); }
   if (!session) return renderLogin();
   await loadSettings();
   const pending = localStorage.getItem("pendingCode");
   if (pending) return renderJoin(pending);
   const back = takePendingHash();
   if (back && back !== location.hash) { location.hash = back; return; } // hashchange memanggil route lagi
+  if (/^#\/buat/.test(location.hash)) return renderCreate(setView, { me: session.user });
   const a = location.hash.match(/^#\/admin(?:\/(\w+))?/);
   if (a) return renderAdmin(app, a[1] || "ringkasan", { setView, me: session.user });
   const m = location.hash.match(/^#\/e\/([0-9a-f-]{36})(?:\/(album|panel|layar|ucapan))?/);
@@ -393,6 +416,7 @@ async function boot() {
       <p class="lead">Isi VITE_SUPABASE_URL dan VITE_SUPABASE_ANON_KEY di file .env (lokal) atau di variabel lingkungan Cloudflare Pages, lalu build ulang.</p></main>`;
     return;
   }
+  await resolveSlugPath();
   const { data } = await supabase.auth.getSession();
   session = data.session;
   supabase.auth.onAuthStateChange((event, s) => {

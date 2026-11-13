@@ -111,13 +111,11 @@ export async function renderPricing(setView, { loggedIn }) {
     if (r) st.r = Number(r.dataset.r);
     if (g || r) render();
   });
-  // Buat acara dengan ukuran ini: lanjut lewat beranda (juga setelah login Google)
+  // Buat acara dengan ukuran ini: ke #/buat (router meminta login Google bila perlu)
   view.querySelector('[data-act="create"]').onclick = () => {
-    try {
-      localStorage.setItem("intent", "create");
-      localStorage.setItem("createPreset", JSON.stringify({ guests: st.g, shots: st.r }));
-    } catch { /* penyimpanan diblokir: wizard memakai angka bawaan */ }
-    if (loggedIn) location.hash = "#/"; else login();
+    try { localStorage.setItem("createPreset", JSON.stringify({ guests: st.g, shots: st.r })); }
+    catch { /* penyimpanan diblokir: halaman memakai angka bawaan */ }
+    location.hash = "#/buat";
   };
   render();
 }

@@ -64,7 +64,7 @@ const saveFilm = (eventId, id) => { try { localStorage.setItem(filmKey(eventId),
 
 export async function renderCamera(root, status, go) {
   let stream = null;
-  let facing = "environment";
+  let facing = "environment";   // kamera depan hanya bila acara mengizinkan (allow_front)
   let busy = false;
   let flashOn = loadFlash();
   let soundOn = loadSound();
@@ -75,7 +75,8 @@ export async function renderCamera(root, status, go) {
         <canvas class="vf-canvas"></canvas>
         <div class="vf-top">
           <button class="vf-btn icon-only" data-act="sound" aria-pressed="true" aria-label="${t("Suara rana")}">${ICON_SOUND}</button>
-          <button class="vf-btn icon-only" data-act="flip" aria-label="${t("Tukar kamera")}" disabled>${ICON.flip}</button>
+          ${status.allow_gallery ? `<label class="vf-btn icon-only vf-gallery" aria-label="${t("Unggah dari galeri")}" title="${t("Unggah dari galeri")}">${ICON.album}<input type="file" accept="image/*" hidden /></label>` : ""}
+          <button class="vf-btn icon-only" data-act="flip" aria-label="${t("Tukar kamera")}" disabled ${status.allow_front === false ? "hidden" : ""}>${ICON.flip}</button>
         </div>
         <div class="film-chips" role="group" aria-label="${t("Efek film")}"></div>
         <div class="vf-diag" hidden></div>
@@ -172,6 +173,7 @@ export async function renderCamera(root, status, go) {
     quality: (status.jpeg_quality || 88) / 100,
     mirror: fromVideo && facing === "user" && status.mirror_photo,
     film: currentFilm(),
+    stamp: status.date_stamp !== false,
   });
 
   // Laporkan kegagalan ke server (dibatasi di server; diam saja jika gagal)
@@ -451,7 +453,7 @@ export async function renderCamera(root, status, go) {
       openBtn.disabled = true;
       msg.textContent = t("Membuka kamera…");
       stream = await openCamera(video, facing, status.photo_max_side || 2560);
-      flip.disabled = (await cameraCount()) < 2;
+      flip.disabled = status.allow_front === false || (await cameraCount()) < 2;
       updateFlashBtn();
       startPreview();
       if (!stream.needsTap && (await waitLive(2000))) {
@@ -519,6 +521,13 @@ export async function renderCamera(root, status, go) {
   fileInput.onchange = () => {
     const f = fileInput.files[0];
     fileInput.value = "";
+    if (f) take(() => { developing.hidden = false; return captureFromFile(f, devOpts(false)); });
+  };
+  // Unggah dari galeri (hanya bila penyelenggara mengizinkan); tetap memakai jatah jepretan
+  const galleryInput = view.querySelector(".vf-gallery input");
+  if (galleryInput) galleryInput.onchange = () => {
+    const f = galleryInput.files[0];
+    galleryInput.value = "";
     if (f) take(() => { developing.hidden = false; return captureFromFile(f, devOpts(false)); });
   };
 

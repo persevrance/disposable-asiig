@@ -549,6 +549,44 @@ ok((await as("d", `select * from reserve_shot($1, gen_random_uuid())`, [rev])).l
 ok((await db.query(`select needs_review, reviewed_at from events where id = $1`, [rev])).rows[0].reviewed_at !== null, "review_event marks reviewed");
 for (const id of [small, big, rev]) await as("admin", `select delete_event($1)`, [id]);
 
+// ---- Buat acara v2: tautan khusus, penyelenggara, akses album, kamera ----
+await as("host", `select set_event($1, $2)`, [ev, { slug: "Nikahan-Rara", host_name: "Rara & Ilham", event_type: "nikahan", date_stamp: false, allow_gallery: true, allow_front: false }]);
+let ms = (await as("host", `select slug, host_name, event_type, date_stamp, allow_gallery, allow_front from my_status($1)`, [ev]))[0];
+ok(ms.slug === "nikahan-rara" && ms.host_name === "Rara & Ilham" && ms.event_type === "nikahan" && !ms.date_stamp && ms.allow_gallery && !ms.allow_front, "v2 settings saved");
+await expectErr("host", `select set_event($1, $2)`, [ev, { slug: "admin" }], "TAUTAN_TIDAK_VALID");
+await expectErr("host", `select set_event($1, $2)`, [ev, { slug: "a b" }], "TAUTAN_TIDAK_VALID");
+const evB = (await as("host", `select create_event('Kedua', 3) id`))[0].id;
+await expectErr("host", `select set_event($1, $2)`, [evB, { slug: "nikahan-rara" }], "TAUTAN_DIPAKAI");
+ok((await as("host", `select slug_available('nikahan-rara') v`))[0].v.reason === "taken", "slug_available taken");
+ok((await as("host", `select slug_available('nikahan-rara', $1) v`, [ev]))[0].v.ok === true, "own slug available for same event");
+ok((await as("host", `select slug_available('x') v`))[0].v.reason === "invalid", "slug_available invalid");
+await db.exec("set role anon");
+const viaSlug = (await db.query(`select resolve_slug('NIKAHAN-RARA') c`)).rows[0].c;
+await db.exec("reset role");
+ok(viaSlug === code, "resolve_slug works without login");
+const pv = (await as("d", `select host_name, album_private from event_preview($1)`, [code]))[0];
+ok(pv.host_name === "Rara & Ilham" && pv.album_private === false, "event_preview host_name");
+const dupV2 = (await as("host", `select duplicate_event($1) id`, [ev]))[0].id;
+const dupRow2 = (await db.query(`select slug, host_name, allow_front from events where id = $1`, [dupV2])).rows[0];
+ok(dupRow2.slug === null && dupRow2.host_name === "Rara & Ilham" && dupRow2.allow_front === false, "duplicate copies v2 settings, not slug");
+// Album hanya penyelenggara: tamu cuma melihat fotonya sendiri (acara 1 jepretan, dua pemotret)
+const evP = (await as("host", `select create_event('Pribadi', 1, 10) id`))[0].id;
+const codeP = (await db.query(`select join_code from events where id = $1`, [evP])).rows[0].join_code;
+await as("d", `select join_event($1)`, [codeP]);
+for (const who of ["host", "d"]) {
+  const r = (await as(who, `select * from reserve_shot($1, gen_random_uuid())`, [evP]))[0];
+  for (const pth of [r.o_file_path, r.o_medium_path, r.o_thumb_path])
+    await as(who, `insert into storage.objects (bucket_id, name, metadata) values ('photos', $1, '{"size": 1000}')`, [pth]);
+  await as(who, `select confirm_shot($1)`, [r.o_photo_id]);
+}
+const albumAll = await as("d", `select * from get_album($1)`, [evP]);
+await as("host", `select set_event($1, $2)`, [evP, { album_private: true }]);
+const albumPriv = await as("d", `select * from get_album($1)`, [evP]);
+ok(albumAll.length === 2 && albumPriv.length === 1 && albumPriv[0].is_mine, `album_private hides others (${albumAll.length} -> ${albumPriv.length})`);
+ok((await as("host", `select * from get_album($1)`, [evP])).length === 2, "owner still sees everything");
+await as("host", `select set_event($1, $2)`, [ev, { slug: null }]);
+for (const id of [evB, dupV2, evP]) await as("host", `select delete_event($1)`, [id]);
+
 // ---- Pembayaran: rumus harga (SQL = src/price.js) ----
 const cfg = (await as("host", `select price_settings() p`))[0].p;
 ok(cfg.payments_enabled === false && cfg.min === 25000, "price_settings defaults");
@@ -637,8 +675,23 @@ ok((await db.query(`select pay_status from events where id = $1`, [d2])).rows[0]
 const fin = (await as("admin", `select admin_orders() r`))[0].r;
 ok(fin.summary.revenue_total === 89100 + 88000 && fin.rows.length === 4, `admin_orders revenue ${fin.summary.revenue_total}`);
 await expectErr("host", `select admin_orders()`, [], "BUKAN_SUPERADMIN");
-for (const id of [draft, fr1, d2]) await as("admin", `select delete_event($1)`, [id]);
-ok((await db.query(`select count(*)::int n from orders where event_id is null`)).rows[0].n === 4, "orders kept after event deleted");
+// Layanan mandiri: akun tanpa peran bisa membuat acara saat pembayaran aktif;
+// email pembuat acara mendapat peran setelah lunas
+U.f = ["00000000-0000-0000-0000-00000000000f", "fani@x.id", "Fani"];
+await db.query(`insert into auth.users (id, email, raw_user_meta_data, email_confirmed_at) values ($1, $2, $3, now())`, [U.f[0], U.f[1], { full_name: "Fani" }]);
+ok((await as("f", `select can_create_event() v`))[0].v === true && (await as("f", `select my_role() r`))[0].r === null, "self-serve: no role but can create");
+const fEv = (await as("f", `select create_event('Ultah Fani', 24, 30) id`))[0].id;
+let fRow = (await db.query(`select pay_status, creator_email from events where id = $1`, [fEv])).rows[0];
+ok(fRow.pay_status === "draft" && fRow.creator_email === "fani@x.id", "self-serve event is draft, creator_email = own email");
+await expectErr("f", `select set_event($1, $2)`, [fEv, { creator_email: "bukan-email" }], "EMAIL_TIDAK_VALID");
+await as("f", `select set_event($1, $2)`, [fEv, { creator_email: " Klien@Kantor.ID " }]);
+const fo = (await as("f", `select start_order($1) o`, [fEv]))[0].o;
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [fo.id, fo.amount]);
+const granted = (await db.query(`select role, event_limit from user_roles where email = 'klien@kantor.id'`)).rows[0];
+ok(granted?.role === "creator" && granted.event_limit === null, "paid event grants creator role to creator_email");
+ok((await db.query(`select count(*)::int n from audit_log where action = 'ubah_peran' and target = 'klien@kantor.id'`)).rows[0].n === 1, "role grant audited");
+for (const id of [draft, fr1, d2, fEv]) await as("admin", `select delete_event($1)`, [id]);
+ok((await db.query(`select count(*)::int n from orders where event_id is null`)).rows[0].n === 5, "orders kept after event deleted");
 await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: false }]);
 
 await as("host", `select delete_event($1)`, [ev]);

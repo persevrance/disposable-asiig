@@ -11,7 +11,7 @@ const POLL_MS = 20000;
 const URL_TTL = 50 * 60 * 1000; // URL bertanda tangan berlaku 1 jam; perbarui sebelum habis
 
 export async function renderSlideshow(root, status, { exit }) {
-  const link = `${location.origin}/?kode=${status.join_code}`;
+  const link = status.slug ? `${location.origin}/${status.slug}` : `${location.origin}/?kode=${status.join_code}`;
   let speed = 8;
   try { speed = Number(localStorage.getItem("slideSpeed")) || 8; } catch { /* abaikan */ }
   const view = el(`

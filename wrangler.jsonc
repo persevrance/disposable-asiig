@@ -11,7 +11,9 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*"],
+    // Alamat tak dikenal (tautan khusus acara, mis. /wisuda2026) menyajikan index.html
+    "not_found_handling": "single-page-application"
   },
   "r2_buckets": [
     { "binding": "PHOTOS", "bucket_name": "disposable-asiig-photos" }

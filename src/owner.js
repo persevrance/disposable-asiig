@@ -33,9 +33,12 @@ const triOptions = (v) => `
   <option value="false" ${v === false ? "selected" : ""}>Tidak</option>`;
 const triValue = (s) => (s === "" ? null : s === "true");
 
+// Link undangan: tautan khusus (domain/<slug>) bila ada, kalau tidak ?kode=. Kode tetap berlaku.
+export const inviteLink = (ev) => (ev.slug ? `${location.origin}/${ev.slug}` : `${location.origin}/?kode=${ev.join_code}`);
+
 // Data kartu QR siap cetak dari status acara
 export const cardData = (ev) => ({
-  name: ev.name, code: ev.join_code, link: `${location.origin}/?kode=${ev.join_code}`,
+  name: ev.name, code: ev.join_code, link: inviteLink(ev),
   coverUrl: coverUrl(ev.cover_path), maxShots: ev.max_shots, starts: ev.starts_at, ends: ev.ends_at,
 });
 
@@ -61,7 +64,7 @@ export async function duplicateEvent(ev) {
 
 export async function renderPanel(root, status, { reload, home }) {
   const theme = status.collage_theme || {};
-  const link = `${location.origin}/?kode=${status.join_code}`;
+  const link = inviteLink(status);
   const tabKey = `panelTab:${status.event_id}`;
   const endedBySchedule = !status.is_open && status.ends_at && new Date(status.ends_at) <= new Date();
   const when = fmtRange(status.starts_at, status.ends_at);
@@ -186,6 +189,14 @@ export async function renderPanel(root, status, { reload, home }) {
           </label>
           <p class="hint">Batas admin: ${status.max_shots_limit}. ${status.is_admin ? "" : "Jatah hanya bisa dinaikkan. "}Menaikkan jatah membuka lagi gulungan yang sudah habis, dan fotonya tersembunyi lagi sampai gulungan itu habis.</p>
           <label class="check"><input type="checkbox" name="hide_names" ${status.hide_names ? "checked" : ""}/> Sembunyikan nama pengunggah (hanya Anda dan superadmin yang tahu)</label>
+          <label>Ditampilkan sebagai penyelenggara <input name="host_name" maxlength="60" placeholder="Contoh: Panitia Wisuda" value="${esc(status.host_name || "")}" /></label>
+          <label>Tautan khusus
+            <span class="slug-field"><span>${esc(location.host)}/</span><input name="slug" maxlength="40" autocomplete="off" spellcheck="false" placeholder="wisuda2026" value="${esc(status.slug || "")}" /></span></label>
+          <p class="hint">Huruf kecil, angka, dan tanda hubung (3–40). Kode ${esc(status.join_code || "")} tetap berlaku.</p>
+          <label class="check"><input type="checkbox" name="album_private" ${status.album_private ? "checked" : ""}/> Album hanya untuk penyelenggara (tamu cuma melihat fotonya sendiri)</label>
+          <label class="check"><input type="checkbox" name="date_stamp" ${status.date_stamp !== false ? "checked" : ""}/> Cap tanggal di foto</label>
+          <label class="check"><input type="checkbox" name="allow_gallery" ${status.allow_gallery ? "checked" : ""}/> Tamu boleh mengunggah dari galeri</label>
+          <label class="check"><input type="checkbox" name="allow_front" ${status.allow_front !== false ? "checked" : ""}/> Tamu boleh memakai kamera depan</label>
           <fieldset class="collage-theme">
             <legend>Kolase tamu</legend>
             <label>Ornamen bawaan
@@ -257,10 +268,11 @@ export async function renderPanel(root, status, { reload, home }) {
   // --- pembayaran ---
   view.querySelector('[data-act="pay"]')?.addEventListener("click", () => openPayment(status, { onPaid: reload }));
   view.querySelector('[data-act="mark-paid"]')?.addEventListener("click", async (e) => {
+    const btn = e.currentTarget;   // e.currentTarget kosong lagi setelah await
     if (!(await confirmDialog({ title: "Tandai acara sudah dibayar?", text: "Pakai bila pembayaran diterima di luar Midtrans. Tercatat di log.", ok: "Tandai lunas" }))) return;
-    e.currentTarget.disabled = true;
+    btn.disabled = true;
     try { await rpc("admin_set_pay_status", { p_event: status.event_id, p_status: "paid" }); toast("Acara ditandai lunas."); reload(); }
-    catch (err) { toast(friendly(err)); e.currentTarget.disabled = false; }
+    catch (err) { toast(friendly(err)); btn.disabled = false; }
   });
   let membersNow = null;
   paymentsOn().then((on) => {
@@ -281,9 +293,10 @@ export async function renderPanel(root, status, { reload, home }) {
   }).catch(() => {});
 
   view.querySelector('[data-act="review"]')?.addEventListener("click", async (e) => {
-    e.currentTarget.disabled = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
     try { await rpc("review_event", { p_event: status.event_id }); toast("Acara ditandai sudah ditinjau."); reload(); }
-    catch (err) { toast(friendly(err)); e.currentTarget.disabled = false; }
+    catch (err) { toast(friendly(err)); btn.disabled = false; }
   });
   const form = view.querySelector("form.settings");
 
@@ -414,6 +427,12 @@ export async function renderPanel(root, status, { reload, home }) {
       welcome_text: f.welcome_text.value,
       film: f.film.value,
       hide_names: f.hide_names.checked,
+      host_name: f.host_name.value,
+      slug: f.slug.value.trim().toLowerCase(),
+      album_private: f.album_private.checked,
+      date_stamp: f.date_stamp.checked,
+      allow_gallery: f.allow_gallery.checked,
+      allow_front: f.allow_front.checked,
       allow_film_choice: f.allow_film_choice.checked,
       reveal_at: reveal,
       purge_at: f.purge_at.value ? new Date(f.purge_at.value + "T00:00").toISOString() : null,

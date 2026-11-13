@@ -172,22 +172,23 @@ function getWorker() {
 async function developInWorker(source, sw, sh, opts, stamp) {
   const w = getWorker();
   if (!w) return null;
-  const [bitmap, stampImage] = await Promise.all([createImageBitmap(source), createImageBitmap(stamp.image)]);
+  const [bitmap, stampImage] = await Promise.all([createImageBitmap(source), stamp ? createImageBitmap(stamp.image) : null]);
   const id = ++jobSeq;
   const res = await new Promise((resolve) => {
     waiting.set(id, resolve);
-    w.postMessage({ id, bitmap, opts, stamp: { image: stampImage, x: stamp.x, y: stamp.y } }, [bitmap, stampImage]);
+    const st = stampImage ? { image: stampImage, x: stamp.x, y: stamp.y } : null;
+    w.postMessage({ id, bitmap, opts, stamp: st }, stampImage ? [bitmap, stampImage] : [bitmap]);
     setTimeout(() => { if (waiting.delete(id)) resolve({ ok: false, error: "timeout" }); }, 20000);
   });
   if (!res.ok) { workerBroken = true; return null; } // jepretan berikutnya langsung di thread utama
   return { photo: res.photo, medium: res.medium, thumb: res.thumb };
 }
 
-// opts: { maxSide, quality (0..1), mirror, film }
+// opts: { maxSide, quality (0..1), mirror, film, stamp (false = tanpa cap tanggal) }
 // Hasil: { photo (penuh), medium (1080 px, untuk album), thumb (400 px) }
 async function process(source, sw, sh, opts) {
   const [w, h] = fitSize(sw, sh, opts.maxSide || 2560);
-  const stamp = makeStamp(w, h, FILMS[opts.film]?.stamp || "#ff9a2e");
+  const stamp = opts.stamp === false ? null : makeStamp(w, h, FILMS[opts.film]?.stamp || "#ff9a2e");
   const out = await developInWorker(source, sw, sh, opts, stamp).catch(() => null);
   return out || develop(domEnv, source, sw, sh, opts, stamp);
 }

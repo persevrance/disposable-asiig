@@ -78,5 +78,7 @@ drop function if exists
   price_quote(int, int, text, uuid), apply_order_paid(text, text), start_order(uuid, int, int, text),
   set_order_snap(text, text, text), midtrans_notify(text, text, text, text, numeric), order_status(text),
   event_orders(uuid), admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
-  admin_set_pay_status(uuid, text)
+  admin_set_pay_status(uuid, text),
+  -- buat acara v2
+  valid_slug(text), slug_available(text, uuid), resolve_slug(text)
 cascade;

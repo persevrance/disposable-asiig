@@ -491,6 +491,14 @@ export default {
   "QRIS, e-wallet, dan virtual account bank lewat Midtrans.": "QRIS, e-wallets and bank virtual accounts via Midtrans.",
   "Acara ini belum aktif karena pembayarannya belum selesai.": "This event isn't active yet because its payment hasn't been completed.",
 
+  // Buat acara v2: layar tamu
+  "Unggah dari galeri": "Upload from gallery",
+  "oleh {h}": "by {h}",
+  "Album khusus penyelenggara": "Album for the host only",
+  "Kamu melihat fotomu sendiri; semua foto dikumpulkan untuk penyelenggara.": "You see your own photos; all photos are collected for the host.",
+  "Dengan masuk, kamu setuju fotomu dibagikan ke penyelenggara acara.": "By joining, you agree to share your photos with the event host.",
+  "Tautan acara tidak ditemukan. Minta kode undangan ke penyelenggara.": "Event link not found. Ask the host for the invite code.",
+
   // Pengajuan pembuat acara
   "Pengajuan pembuat acara sedang ditinjau": "Your host request is under review",
   "Pengajuan pembuat acara ditolak": "Your host request was declined",

@@ -1,5 +1,6 @@
 // Halaman depan untuk pengunjung yang belum login: perkenalan Jepretin + tombol masuk.
-// Semua tombol "Masuk" / "Buat acara" memakai login Google (diikat di main.js).
+// Tombol "Masuk" memakai login Google (diikat di main.js); "Buat acara" menuju #/buat,
+// dan router meminta login Google dulu bila belum masuk.
 import { esc, brandLockup } from "./ui.js";
 import { inAppBrowser, isAndroid, chromeIntentUrl } from "./camera.js";
 import { t, langSwitch } from "./i18n.js";
@@ -46,7 +47,7 @@ export function landingHtml({ code, shareLink }) {
   // Datang lewat undangan: satu tombol saja, langsung login lalu masuk acara
   const cta = code
     ? `<button type="button" class="btn primary lp-big" data-act="google">${t("Masuk dengan Google")}</button>`
-    : `<button type="button" class="btn primary lp-big" data-act="google" data-intent="create">${t("Buat acara")}</button>
+    : `<a class="btn primary lp-big" href="#/buat">${t("Buat acara")}</a>
        <button type="button" class="btn lp-big" data-act="show-code" aria-expanded="false" aria-controls="lp-code">${t("Gabung pakai kode")}</button>`;
 
   return `
@@ -123,7 +124,7 @@ export function landingHtml({ code, shareLink }) {
         <div class="lp-final">
           <h2>${t("Siap jepret momen berikutnya?")}</h2>
           <p>${t("Buat acaramu, cetak kartu QR-nya, dan biarkan tamu yang memotret.")}</p>
-          <button type="button" class="btn primary lp-big" data-act="google" data-intent="create">${t("Buat acara")}</button>
+          <a class="btn primary lp-big" href="#/buat">${t("Buat acara")}</a>
         </div>
       </section>
 

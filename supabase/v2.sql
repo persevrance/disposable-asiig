@@ -199,6 +199,28 @@ alter table events
     check (pay_status in ('free', 'draft', 'paid')),
   add column if not exists price_basis int not null default 0 check (price_basis >= 0);
 
+-- Buat acara v2: jenis acara, nama penyelenggara, tautan khusus, akses album, kamera
+create or replace function valid_slug(p text) returns boolean
+language sql immutable as $$
+  select p ~ '^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$' and p !~ '--'
+     and p not in ('admin', 'api', 'e', 'harga', 'buat', 'privacy', 'syarat', 'pengembalian-dana',
+                   'assets', 'index', 'manifest', 'sw', 'login', 'masuk', 'kode', 'jepretin', 'bantuan',
+                   'help', 'tentang', 'about', 'blog', 'app', 'www', 'layar', 'album', 'panel');
+$$;
+alter table events
+  add column if not exists event_type text
+    check (event_type is null or event_type in ('nikahan', 'wisuda', 'ulang_tahun', 'gathering', 'trip', 'lainnya')),
+  add column if not exists host_name text check (host_name is null or length(host_name) between 1 and 60),
+  add column if not exists slug text check (slug is null or valid_slug(slug)),
+  add column if not exists album_private boolean not null default false,  -- hanya penyelenggara lihat semua foto
+  add column if not exists date_stamp boolean not null default true,      -- cap tanggal di foto
+  add column if not exists allow_gallery boolean not null default false,  -- unggah dari galeri HP
+  add column if not exists allow_front boolean not null default true,     -- kamera depan / selfie
+  -- Email yang otomatis menjadi pembuat acara (user_roles) begitu pesanan acara ini lunas
+  add column if not exists creator_email text
+    check (creator_email is null or creator_email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$');
+create unique index if not exists events_slug on events (slug) where slug is not null;
+
 
 -- Penyimpanan foto: 'supabase' (Storage) atau 'r2' (Cloudflare R2 lewat Worker situs)
 alter table app_settings
@@ -430,9 +452,10 @@ end $$;
 drop function if exists event_preview(text);
 create function event_preview(p_code text)
 returns table (name text, cover_path text, welcome_text text, is_open boolean, max_shots int,
-               starts_at timestamptz, ends_at timestamptz)
+               starts_at timestamptz, ends_at timestamptz, host_name text, album_private boolean)
 language sql stable security definer set search_path = public as $$
-  select e.name, e.cover_path, e.welcome_text, open_now(e), e.max_shots, e.starts_at, e.ends_at
+  select e.name, e.cover_path, e.welcome_text, open_now(e), e.max_shots, e.starts_at, e.ends_at,
+         e.host_name, e.album_private
     from events e
    where auth.uid() is not null and e.join_code = upper(trim(p_code));
 $$;
@@ -528,6 +551,7 @@ language sql stable security definer set search_path = public as $$
          and exists (select 1 from event_members me join profiles pr on pr.id = me.user_id
                       where me.event_id = p_event and me.user_id = auth.uid()
                         and not me.blocked and not pr.banned)
+         and (not e.album_private or p.user_id = auth.uid())
          and case
                when e.reveal_at is not null then now() >= e.reveal_at
                else m.shots_used >= e.max_shots or not open_now(e)
@@ -614,7 +638,8 @@ returns table (event_id uuid, name text, join_code text, max_shots int, max_memb
                ev_photo_max_side int, downloads_used int,
                max_shots_limit int, max_members_limit int, allow_film_choice boolean,
                starts_at timestamptz, ends_at timestamptz, collage_theme jsonb, needs_review boolean,
-               pay_status text, price_basis int)
+               pay_status text, price_basis int, event_type text, host_name text, slug text,
+               album_private boolean, date_stamp boolean, allow_gallery boolean, allow_front boolean)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name,
          case when can_manage(e.id) then e.join_code end,
@@ -632,7 +657,8 @@ language sql stable security definer set search_path = public as $$
            where d.event_id = e.id and d.user_id = auth.uid() and p.user_id <> auth.uid()),
          s.max_shots_limit, s.max_members_limit, e.allow_film_choice,
          e.starts_at, e.ends_at, e.collage_theme, e.needs_review,
-         e.pay_status, e.price_basis
+         e.pay_status, e.price_basis, e.event_type, e.host_name, e.slug,
+         e.album_private, e.date_stamp, e.allow_gallery, e.allow_front
     from events e
     cross join app_settings s
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
@@ -789,7 +815,7 @@ begin
   end if;
   if p_film is not null and not valid_film(p_film) then raise exception 'FILM_TIDAK_DIKENAL'; end if;
   -- Pembayaran aktif: acara berbayar tersimpan sebagai draf sampai lunas; gratis dibatasi per akun
-  if s.payments_enabled and r.role <> 'superadmin' then
+  if s.payments_enabled and coalesce(r.role, '') <> 'superadmin' then
     if (price_quote_raw(p_max_members, p_max_shots)->>'total')::int > 0 then
       v_pay := 'draft';
     elsif (select count(*) from events e where e.owner_id = auth.uid() and e.pay_status = 'free'
@@ -799,9 +825,10 @@ begin
   end if;
   loop
     begin
-      insert into events (owner_id, name, join_code, max_shots, max_members, invite_only, film, pay_status)
+      insert into events (owner_id, name, join_code, max_shots, max_members, invite_only, film, pay_status,
+                          creator_email)
       values (auth.uid(), trim(p_name), gen_code(), p_max_shots, p_max_members, p_invite_only,
-              coalesce(p_film, s.default_film), v_pay)
+              coalesce(p_film, s.default_film), v_pay, my_verified_email())
       returning id into v_id;
       exit;
     exception when unique_violation then
@@ -811,7 +838,7 @@ begin
   end loop;
   insert into event_members (event_id, user_id) values (v_id, auth.uid());
   -- Acara besar masuk "Perlu ditinjau" supaya superadmin memastikan kapasitas pada tanggalnya
-  if r.role <> 'superadmin' and (p_max_members >= s.review_guests
+  if coalesce(r.role, '') <> 'superadmin' and (p_max_members >= s.review_guests
        or event_photo_estimate(p_max_members, p_max_shots) * s.photo_mb_estimate
           >= s.capacity_storage_gb * 1024 * 0.05) then
     update events set needs_review = true where id = v_id;
@@ -833,7 +860,10 @@ begin
                        e.invite_only, e.film);
   update events set hide_names = e.hide_names, allow_film_choice = e.allow_film_choice,
                     welcome_text = e.welcome_text, mirror_preview = e.mirror_preview,
-                    mirror_photo = e.mirror_photo, photo_max_side = e.photo_max_side
+                    mirror_photo = e.mirror_photo, photo_max_side = e.photo_max_side,
+                    event_type = e.event_type, host_name = e.host_name, album_private = e.album_private,
+                    date_stamp = e.date_stamp, allow_gallery = e.allow_gallery, allow_front = e.allow_front,
+                    collage_theme = e.collage_theme - 'logo_optional'
    where id = v_id;
   insert into event_invites (event_id, email)
   select v_id, email from event_invites where event_id = p_event;
@@ -932,6 +962,26 @@ begin
     end if;
   end if;
 
+  if p_patch ? 'event_type' then e.event_type := nullif(p_patch->>'event_type', ''); end if;
+  if p_patch ? 'creator_email' then
+    e.creator_email := nullif(lower(trim(coalesce(p_patch->>'creator_email', ''))), '');
+    if e.creator_email is not null and e.creator_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' then
+      raise exception 'EMAIL_TIDAK_VALID';
+    end if;
+  end if;
+  if p_patch ? 'host_name' then e.host_name := nullif(left(trim(coalesce(p_patch->>'host_name', '')), 60), ''); end if;
+  if p_patch ? 'album_private' then e.album_private := (p_patch->>'album_private')::boolean; end if;
+  if p_patch ? 'date_stamp' then e.date_stamp := (p_patch->>'date_stamp')::boolean; end if;
+  if p_patch ? 'allow_gallery' then e.allow_gallery := (p_patch->>'allow_gallery')::boolean; end if;
+  if p_patch ? 'allow_front' then e.allow_front := (p_patch->>'allow_front')::boolean; end if;
+  if p_patch ? 'slug' then
+    e.slug := nullif(lower(trim(coalesce(p_patch->>'slug', ''))), '');
+    if e.slug is not null and not valid_slug(e.slug) then raise exception 'TAUTAN_TIDAK_VALID'; end if;
+    if e.slug is not null and exists (select 1 from events where slug = e.slug and id <> p_event) then
+      raise exception 'TAUTAN_DIPAKAI';
+    end if;
+  end if;
+
   -- Tema kolase. logo_optional hanya bisa diubah superadmin (nilai lama dipertahankan).
   if p_patch ? 'collage_theme' then
     v_theme := p_patch->'collage_theme';
@@ -967,7 +1017,11 @@ begin
                     photo_max_side = e.photo_max_side, film = e.film,
                     max_members = e.max_members, max_shots = e.max_shots,
                     starts_at = e.starts_at, ends_at = e.ends_at,
-                    collage_theme = e.collage_theme, needs_review = e.needs_review
+                    collage_theme = e.collage_theme, needs_review = e.needs_review,
+                    event_type = e.event_type, host_name = e.host_name, slug = e.slug,
+                    album_private = e.album_private, date_stamp = e.date_stamp,
+                    allow_gallery = e.allow_gallery, allow_front = e.allow_front,
+                    creator_email = e.creator_email
    where id = p_event;
   perform log_audit('ubah_acara', p_event::text, p_patch);
 end $$;
@@ -1970,7 +2024,7 @@ begin
   if auth.uid() is null then raise exception 'BELUM_LOGIN'; end if;
   if v_email is null then raise exception 'EMAIL_BELUM_TERVERIFIKASI'; end if;
   perform assert_not_banned();
-  if can_create_event() then raise exception 'SUDAH_PEMBUAT_ACARA'; end if;
+  if exists (select 1 from user_roles where email = my_verified_email()) then raise exception 'SUDAH_PEMBUAT_ACARA'; end if;
   if exists (select 1 from creator_requests where user_id = auth.uid() and status = 'open') then
     raise exception 'PENGAJUAN_SUDAH_ADA';
   end if;
@@ -2481,6 +2535,16 @@ begin
                                  'promo_error', v_err, 'amount', v_sub - v_disc);
 end $$;
 
+-- Boleh membuat acara: punya peran, atau pembayaran aktif (layanan mandiri). Akun diblokir dan
+-- email belum terverifikasi tidak boleh. Menggantikan versi di bagian "Pembantu peran".
+create or replace function can_create_event() returns boolean
+language sql stable security definer set search_path = public as $$
+  select my_verified_email() is not null
+     and not coalesce((select banned from profiles where id = auth.uid()), false)
+     and (exists (select 1 from user_roles where email = my_verified_email())
+          or coalesce((select payments_enabled from app_settings), false));
+$$;
+
 -- Lunasi pesanan (dari webhook Midtrans, atau langsung bila nominalnya 0). Aman diulang.
 create or replace function apply_order_paid(p_order text, p_type text default null) returns boolean
 language plpgsql security definer set search_path = public as $$
@@ -2494,6 +2558,16 @@ begin
    where id = p_order;
   if o.event_id is not null then
     select * into e from events where id = o.event_id for update;
+    if o.list_price > 0 and coalesce(e.creator_email, '') <> '' then
+      insert into user_roles (email, role, added_by, event_limit, storage_limit_mb)
+      values (e.creator_email, 'creator', o.user_id, null, s.creator_storage_mb)
+      on conflict (email) do nothing;
+      if found then
+        insert into audit_log (actor_id, action, target, detail)
+        values (o.user_id, 'ubah_peran', e.creator_email,
+                jsonb_build_object('role', 'creator', 'via', 'pembayaran', 'order', o.id));
+      end if;
+    end if;
     update events set
       max_members = greatest(max_members, o.guests),
       max_shots   = greatest(max_shots, o.shots),
@@ -2706,6 +2780,24 @@ begin
   perform log_audit('ubah_status_bayar', p_event::text, jsonb_build_object('status', p_status));
 end $$;
 
+-- ---------- Tautan khusus acara (domain/<slug>) ----------------------
+
+-- Cek tautan sebelum disimpan: { ok, reason: invalid | taken }
+create or replace function slug_available(p_slug text, p_event uuid default null) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select case
+    when not coalesce(valid_slug(lower(trim(p_slug))), false) then '{"ok": false, "reason": "invalid"}'::jsonb
+    when exists (select 1 from events where slug = lower(trim(p_slug))
+                  and id is distinct from p_event) then '{"ok": false, "reason": "taken"}'::jsonb
+    else '{"ok": true}'::jsonb end;
+$$;
+
+-- Tautan khusus -> kode undangan (dipakai sebelum login, seperti link ?kode=)
+create or replace function resolve_slug(p_slug text) returns text
+language sql stable security definer set search_path = public as $$
+  select join_code from events where slug = lower(trim(p_slug));
+$$;
+
 revoke execute on all functions in schema public from public, anon;
 
 -- Pembantu internal: hanya dipanggil dari dalam fungsi lain
@@ -2754,11 +2846,11 @@ grant execute on function
   price_settings(), price_quote_raw(int, int), price_quote(int, int, text, uuid),
   start_order(uuid, int, int, text), order_status(text), event_orders(uuid),
   admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
-  admin_set_pay_status(uuid, text)
+  admin_set_pay_status(uuid, text), valid_slug(text), slug_available(text, uuid), resolve_slug(text)
 to authenticated;
 
 -- Halaman harga publik bisa dibuka tanpa login
-grant execute on function price_settings(), price_quote_raw(int, int) to anon;
+grant execute on function price_settings(), price_quote_raw(int, int), resolve_slug(text) to anon;
 
 -- Fungsi untuk Edge Function notify-album: hanya service_role
 do $$ begin

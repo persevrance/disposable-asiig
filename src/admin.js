@@ -1,16 +1,15 @@
 // Dashboard: #/admin/<tab>. Superadmin melihat semua tab;
 // pembuat acara hanya tab Acara (acaranya sendiri), yang menjadi pusat kerjanya.
-import QRCode from "qrcode";
 import { supabase, rpc, friendly } from "./supabase.js";
 import { themeSwitch, bindThemeSwitch } from "./theme.js";
 import { FILMS, filmName } from "./film.js";
-import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData, resizeImage } from "./owner.js";
-import { uploadCover, coverUrl, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
+import { RESOLUTIONS, deleteEventFiles, duplicateEvent, cardData } from "./owner.js";
+import { coverUrl, removeFiles, removeVoices, r2Health, migrateToR2, setStorageBackend } from "./storage.js";
 import { pingAlbum } from "./realtime.js";
 import { kickNotify, setVapidKey, joinCreationWaitlist } from "./push.js";
-import { downloadQrCard, printQrCard } from "./qrcard.js";
+import { downloadQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
-import { priceSettings, mountPayment, openPayment } from "./payment.js";
+import { openPayment } from "./payment.js";
 import { quote, rp } from "./price.js";
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
@@ -148,7 +147,7 @@ async function deleteEventFully(eventId, coverPath) {
 }
 
 // ---------- Pembuatan acara ditutup (dilihat penyelenggara) ----------
-function creationClosedDialog(gate) {
+export function creationClosedDialog(gate) {
   const reopen = gate.reopen_at ? fmtDate(gate.reopen_at) : "";
   const { box, close } = modal(`
     <div class="dialog creation-closed">
@@ -175,299 +174,6 @@ function creationClosedDialog(gate) {
       toast(pushed ? "Kami kirim notifikasi saat pembuatan acara dibuka lagi." : "Tercatat. Notifikasi belum aktif di perangkat ini, jadi cek lagi nanti.", 5000);
     } catch (e) { toast(friendly(e)); btn.disabled = false; }
   };
-}
-
-// ---------- Buat acara: wizard tiga langkah, diakhiri kartu QR ----------
-// Dipakai juga dari beranda. Langkah: (1) nama & jadwal, (2) jatah & film,
-// (3) sampul, sambutan, cuci film & rencana hapus. Lalu layar selesai dengan QR.
-const REVEAL_CHOICES = [
-  ["", "Saat film tiap tamu habis (bawaan)"],
-  ["end", "Semua foto terbuka saat acara selesai"],
-  ["end+2", "2 jam setelah acara selesai"],
-  ["next9", "Besok pagi pukul 09.00 setelah acara"],
-];
-const PURGE_CHOICES = [["", "Tanpa rencana hapus"], ["30", "30 hari setelah acara"], ["90", "90 hari setelah acara"]];
-
-function revealAt(choice, endsIso) {
-  if (!choice || !endsIso) return null;
-  const end = new Date(endsIso);
-  if (choice === "end") return end.toISOString();
-  if (choice === "end+2") return new Date(end.getTime() + 2 * 3600e3).toISOString();
-  const d = new Date(end); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0);
-  return d.toISOString();
-}
-
-export async function createEventDialog() {
-  // Ukuran yang dipilih di halaman harga (#/harga), dipakai sekali
-  let preset = null;
-  try { preset = JSON.parse(localStorage.getItem("createPreset") || "null"); localStorage.removeItem("createPreset"); } catch { /* abaikan */ }
-  let settings, quota, gate, price;
-  try {
-    [settings, quota, gate, price] = await Promise.all([
-      rpc("get_settings"), rpc("my_event_quota").catch(() => null), rpc("creation_state").catch(() => null),
-      priceSettings(true).catch(() => null),
-    ]);
-  } catch (e) { toast(friendly(e)); return; }
-  // Pembayaran aktif (superadmin selalu gratis): harga tampil langsung di langkah jatah
-  const paid = Boolean(price?.payments_enabled && !gate?.bypass);
-  // Pembuatan acara ditutup superadmin: tampilkan pesan penutupan, bukan wizard
-  if (gate && !gate.bypass && gate.mode === "closed") { creationClosedDialog(gate); return; }
-  // Hanya acara kecil: batas tamu dan roll mengikuti status, bukan batas global
-  const small = Boolean(gate && !gate.bypass && gate.mode === "limited");
-  if (small) {
-    settings.max_members_limit = Math.min(settings.max_members_limit, gate.max_guests);
-    settings.max_shots_limit = Math.min(settings.max_shots_limit, gate.max_shots);
-  }
-  const limited = quota && quota.limit !== null && quota.limit !== undefined;
-  const left = limited ? Math.max(0, quota.limit - quota.used) : null;
-  if (left === 0) {
-    await confirmDialog({
-      title: "Batas acara habis",
-      text: `Anda sudah membuat ${quota.used} dari ${quota.limit} acara. Hubungi superadmin untuk menambahnya.`,
-      ok: "Mengerti", cancel: "Tutup",
-    });
-    return;
-  }
-  const storageFull = quota?.storage_limit_mb && Number(quota.storage_bytes) >= quota.storage_limit_mb * 1048576;
-  if (storageFull) {
-    await confirmDialog({
-      title: "Kuota storage penuh",
-      text: `Acara Anda memakai ${fmtBytes(quota.storage_bytes)} dari ${fmtBytes(quota.storage_limit_mb * 1048576)}. Hapus acara lama atau hubungi superadmin.`,
-      ok: "Mengerti", cancel: "Tutup",
-    });
-    return;
-  }
-
-  const { box, close } = modal(`
-    <form class="dialog wizard" novalidate>
-      <div class="wiz-head">
-        <div class="wiz-top">
-          <button type="button" class="round-btn ghost-round" data-act="cancel" aria-label="Batal">${ICON.close}</button>
-          <span class="wiz-count">Langkah 1 dari 3</span>
-        </div>
-        <div class="wiz-steps" aria-hidden="true"><i class="on"></i><i></i><i></i></div>
-        <h3 class="wiz-title">Nama dan jadwal</h3>
-      </div>
-      ${limited ? `<p class="hint">Sisa batas: <b>${left}</b> dari ${quota.limit} acara.</p>` : ""}
-      ${small ? `<p class="note warn-note">Pembuatan acara sedang dibatasi: maks. <b>${settings.max_members_limit}</b> peserta × <b>${settings.max_shots_limit}</b> jepretan.${gate.message ? ` ${esc(gate.message)}` : ""}</p>` : ""}
-
-      <fieldset class="wiz-step" data-step="1">
-        <label>Nama acara <input name="name" required maxlength="80" autofocus placeholder="Contoh: Pernikahan Rani & Bima" /></label>
-        <div class="date-row">
-          <label>Mulai <input type="datetime-local" name="starts_at" /></label>
-          <label>Selesai <input type="datetime-local" name="ends_at" /></label>
-        </div>
-        <p class="hint">Opsional, tapi disarankan: acara tertutup otomatis saat waktu selesai lewat, dan jadwalnya tampil di kartu QR.</p>
-      </fieldset>
-
-      <fieldset class="wiz-step" data-step="2" hidden>
-        <div class="wiz-field">
-          <label for="wiz-shots" class="wiz-label">Jatah jepretan per tamu</label>
-          <div class="stepper">
-            <button type="button" data-step-by="-1" aria-label="Kurangi">−</button>
-            <input id="wiz-shots" name="max_shots" type="number" inputmode="numeric" min="1" max="${settings.max_shots_limit}" value="${Math.min(preset?.shots || 30, settings.max_shots_limit)}" />
-            <button type="button" data-step-by="1" aria-label="Tambah">+</button>
-          </div>
-          <small class="hint">Batas maksimum mengikuti pengaturan admin (${settings.max_shots_limit}).</small>
-        </div>
-        <label>Maks. peserta <input name="max_members" type="number" min="1" max="${settings.max_members_limit}" value="${Math.min(preset?.guests || 60, settings.max_members_limit)}" /></label>
-        ${paid ? `<div class="wiz-price" aria-live="polite"></div>` : ""}
-        <div class="wiz-field">
-          <span class="wiz-label">Efek film bawaan</span>
-          <input type="hidden" name="film" value="${esc(FILMS[settings.default_film] ? settings.default_film : "asli")}" />
-          <div class="film-grid" role="group" aria-label="Efek film bawaan">
-            ${Object.entries(FILMS).map(([id, fl]) => `
-              <button type="button" class="film-card" data-film="${id}" aria-pressed="${id === (FILMS[settings.default_film] ? settings.default_film : "asli")}" title="${esc(fl.desc)}">
-                <span class="film-swatch fs-${id}"></span><b>${esc(fl.name)}</b>
-              </button>`).join("")}
-          </div>
-        </div>
-        <label class="check"><input type="checkbox" name="allow_film_choice" checked /> Tamu boleh memilih efek film sendiri</label>
-        <label class="check"><input type="checkbox" name="hide_names" /> Sembunyikan nama pengunggah di album</label>
-        <label class="check"><input type="checkbox" name="invite_only" /> Hanya email yang diundang (daftar diisi di Panel)</label>
-      </fieldset>
-
-      <fieldset class="wiz-step" data-step="3" hidden>
-        <div class="wiz-cover">
-          <div class="cover-preview"><span>Belum ada sampul</span></div>
-          <label class="btn small">Pilih sampul<input type="file" accept="image/*" name="cover" hidden /></label>
-        </div>
-        <label>Kalimat sambutan (opsional)
-          <textarea name="welcome_text" rows="2" maxlength="300" placeholder="Contoh: Abadikan momen bahagia kami, ya!"></textarea></label>
-        <label>Kapan foto terbuka untuk semua tamu
-          <select name="reveal">${REVEAL_CHOICES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label>
-        <label>Rencana hapus foto
-          <select name="purge">${PURGE_CHOICES.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select></label>
-        <p class="hint wiz-need-end" hidden>Pilihan berdasarkan waktu selesai butuh jadwal selesai di langkah 1.</p>
-      </fieldset>
-
-      <div class="wiz-actions">
-        <button type="button" class="btn" data-act="back">Batal</button>
-        <button class="btn primary" data-act="next">Lanjut</button>
-      </div>
-    </form>`, { wide: true });
-  const form = box.querySelector("form");
-  const f = form.elements;
-  const backBtn = box.querySelector('[data-act="back"]');
-  const nextBtn = box.querySelector('[data-act="next"]');
-  const TITLES = ["Nama dan jadwal", "Jatah dan efek film", "Sampul dan pembukaan album"];
-  const NEXT = ["Lanjut ke jatah", "Lanjut ke sampul", "Buat acara"];
-  let step = 1, coverFile = null;
-
-  box.querySelector('[data-act="cancel"]').onclick = () => close();
-  // Harga langsung (rumus sama dengan server; nominal pasti dihitung ulang saat bayar)
-  const priceNow = () => (paid ? quote(price, Number(f.max_members.value) || 1, Number(f.max_shots.value) || 1).total : 0);
-  function showPrice() {
-    const box2 = form.querySelector(".wiz-price");
-    if (!box2) return;
-    const g = Number(f.max_members.value) || 1, q = quote(price, g, Number(f.max_shots.value) || 1);
-    box2.innerHTML = q.total
-      ? `<b>${rp(q.total)}</b><span>sekitar ${rp(q.total / g)} per tamu${q.discount_pct ? ` · diskon ${q.discount_pct}%` : ""}. Dibayar setelah acara disimpan.</span>`
-      : `<b>Gratis</b><span>Sampai ${price.free_guests} tamu × ${price.free_shots} jepretan.</span>`;
-    if (step === 3) nextBtn.textContent = q.total ? "Lanjut ke pembayaran" : "Buat acara";
-  }
-  f.max_members.addEventListener("input", showPrice);
-  f.max_shots.addEventListener("input", showPrice);
-  // Stepper jatah jepretan
-  form.querySelectorAll("[data-step-by]").forEach((b) => (b.onclick = () => {
-    const v = Math.min(settings.max_shots_limit, Math.max(1, (Number(f.max_shots.value) || 0) + Number(b.dataset.stepBy)));
-    f.max_shots.value = v;
-    showPrice();
-  }));
-  // Kartu efek film
-  form.querySelector(".film-grid").onclick = (e) => {
-    const c = e.target.closest(".film-card");
-    if (!c) return;
-    f.film.value = c.dataset.film;
-    form.querySelectorAll(".film-card").forEach((x) => x.setAttribute("aria-pressed", String(x === c)));
-  };
-
-  function show() {
-    form.querySelectorAll(".wiz-step").forEach((x) => { x.hidden = Number(x.dataset.step) !== step; });
-    form.querySelectorAll(".wiz-steps i").forEach((d, i) => d.classList.toggle("on", i < step));
-    box.querySelector(".wiz-count").textContent = `Langkah ${step} dari 3`;
-    box.querySelector(".wiz-title").textContent = TITLES[step - 1];
-    backBtn.textContent = step === 1 ? "Batal" : "Kembali";
-    nextBtn.textContent = step === 3 && priceNow() ? "Lanjut ke pembayaran" : NEXT[step - 1];
-    showPrice();
-    const noEnd = !f.ends_at.value;
-    for (const sel of [f.reveal, f.purge]) {
-      [...sel.options].forEach((o) => { o.disabled = noEnd && o.value !== "" && sel === f.reveal; });
-      if (sel === f.reveal && noEnd && sel.value) sel.value = "";
-    }
-    box.querySelector(".wiz-need-end").hidden = !noEnd;
-    form.querySelector(`.wiz-step[data-step="${step}"] input, .wiz-step[data-step="${step}"] select`)?.focus();
-  }
-
-  function valid() {
-    if (step === 1) {
-      if (!f.name.value.trim()) { toast("Isi nama acara."); f.name.focus(); return false; }
-      const a = fromLocalInput(f.starts_at.value), b = fromLocalInput(f.ends_at.value);
-      if (a && b && new Date(b) <= new Date(a)) { toast("Waktu selesai harus setelah waktu mulai."); return false; }
-    }
-    if (step === 2) {
-      const shots = Number(f.max_shots.value), members = Number(f.max_members.value);
-      if (!(shots >= 1 && shots <= settings.max_shots_limit)) { toast(`Jatah foto 1–${settings.max_shots_limit}.`); return false; }
-      if (!(members >= 1 && members <= settings.max_members_limit)) { toast(`Peserta 1–${settings.max_members_limit}.`); return false; }
-    }
-    return true;
-  }
-
-  f.cover.onchange = () => {
-    coverFile = f.cover.files[0] || null;
-    const prev = box.querySelector(".cover-preview");
-    prev.innerHTML = coverFile ? `<img alt="Pratinjau sampul" />` : `<span>Belum ada sampul</span>`;
-    if (coverFile) prev.querySelector("img").src = URL.createObjectURL(coverFile);
-  };
-  backBtn.onclick = () => { if (step === 1) close(); else { step--; show(); } };
-  form.onsubmit = async (e) => {
-    e.preventDefault();
-    if (!valid()) return;
-    if (step < 3) { step++; show(); return; }
-    nextBtn.disabled = true; backBtn.disabled = true;
-    nextBtn.textContent = "Membuat…";
-    try {
-      const id = await rpc("create_event", {
-        p_name: f.name.value.trim(),
-        p_max_shots: Number(f.max_shots.value),
-        p_max_members: Number(f.max_members.value),
-        p_invite_only: f.invite_only.checked,
-        p_film: f.film.value,
-      });
-      const starts = fromLocalInput(f.starts_at.value), ends = fromLocalInput(f.ends_at.value);
-      const purgeDays = Number(f.purge.value);
-      const purgeBase = ends || starts || new Date().toISOString();
-      const patch = {
-        starts_at: starts, ends_at: ends,
-        welcome_text: f.welcome_text.value,
-        allow_film_choice: f.allow_film_choice.checked,
-        hide_names: f.hide_names.checked,
-        reveal_at: revealAt(f.reveal.value, ends),
-        purge_at: purgeDays ? new Date(new Date(purgeBase).getTime() + purgeDays * 86400e3).toISOString() : null,
-      };
-      try { await rpc("set_event", { p_event: id, p_patch: patch }); }
-      catch (err) { toast("Acara dibuat, tetapi sebagian pengaturan gagal disimpan: " + friendly(err), 6000); }
-      let coverPath = null;
-      if (coverFile) {
-        try {
-          const blob = await resizeImage(coverFile, 1600, 0.85);
-          coverPath = `${id}/${crypto.randomUUID()}.jpg`;
-          await uploadCover(coverPath, blob);
-          await rpc("set_cover", { p_event: id, p_path: coverPath });
-        } catch { coverPath = null; toast("Sampul gagal diunggah. Pasang lagi dari Panel.", 5000); }
-      }
-      const st = (await rpc("my_status", { p_event: id }))[0];
-      // Acara berbayar tersimpan sebagai draf: bayar dulu, baru QR
-      if (st?.pay_status === "draft") return payThenDone(st);
-      showDone(st || { event_id: id, name: f.name.value, join_code: "", max_shots: Number(f.max_shots.value), cover_path: coverPath, starts_at: starts, ends_at: ends });
-    } catch (err) {
-      toast(friendly(err));
-      nextBtn.disabled = false; backBtn.disabled = false; nextBtn.textContent = "Buat acara";
-    }
-  };
-
-  function payThenDone(st) {
-    const host = el(`<div class="dialog pay-host"></div>`);
-    form.replaceWith(host);
-    mountPayment(host, st, {
-      onPaid: async () => {
-        const fresh = (await rpc("my_status", { p_event: st.event_id }).catch(() => []))[0] || st;
-        host.replaceWith(form);
-        showDone(fresh);
-      },
-    });
-  }
-
-  // Layar selesai: QR dan kartu siap cetak
-  function showDone(st) {
-    const link = `${location.origin}/?kode=${st.join_code}`;
-    const when = fmtRange(st.starts_at, st.ends_at);
-    form.replaceWith(el(`
-      <div class="dialog wiz-done">
-        <div class="wiz-done-head">${ICON.check}<h3>Acara siap</h3></div>
-        <p><b>${esc(st.name)}</b>${when ? `<br>${esc(when)}` : ""}</p>
-        ${st.needs_review ? `<p class="warn-note">Acara sebesar ini ditinjau superadmin dulu. Tamu sudah bisa bergabung; kamera aktif setelah tinjauan selesai.</p>` : ""}
-        <div class="invite">
-          <canvas class="qr" aria-label="Kode QR undangan"></canvas>
-          <div><p class="code">${esc(st.join_code)}</p><p class="link">${esc(link)}</p></div>
-        </div>
-        <p class="hint">Bagikan link ke tamu, atau cetak kartu QR untuk meja tamu.</p>
-        <div class="row">
-          <button class="btn small primary" data-act="card-dl">Unduh kartu QR</button>
-          <button class="btn small" data-act="card-print">${ICON.printer} Cetak</button>
-          <button class="btn small" data-act="copy">${ICON.link} Salin link</button>
-        </div>
-        <div class="dialog-actions"><a class="btn primary" href="#/e/${st.event_id}/panel" data-act="panel">Buka Panel acara</a></div>
-      </div>`));
-    const done = box.querySelector(".wiz-done");
-    QRCode.toCanvas(done.querySelector(".qr"), link, { width: 160, margin: 1 });
-    done.querySelector('[data-act="card-dl"]').onclick = () => downloadQrCard(cardData(st)).catch((e) => toast(friendly(e)));
-    done.querySelector('[data-act="card-print"]').onclick = () => printQrCard(cardData(st)).catch((e) => toast(friendly(e)));
-    done.querySelector('[data-act="copy"]').onclick = () => copyText(link, { done: "Link undangan disalin." });
-    done.querySelector('[data-act="panel"]').onclick = () => close();
-    done.querySelector('[data-act="card-dl"]').focus();
-  }
-  show();
 }
 
 // ---------- Ringkasan: perlu perhatian, berlangsung, angka ----------
@@ -986,6 +692,7 @@ async function pembuatan(body) {
   showMode();
 
   view.querySelector('[data-act="save-mode"]').onclick = async (e) => {
+    const btn = e.currentTarget;   // e.currentTarget kosong lagi setelah await
     const reopen = st.mode === "closed" ? fromLocalInput(f("reopen_at").value) : null;
     if (st.mode === "closed" && c.mode !== "closed") {
       const yes = await confirmDialog({
@@ -995,7 +702,7 @@ async function pembuatan(body) {
       });
       if (!yes) return;
     }
-    e.currentTarget.disabled = true;
+    btn.disabled = true;
     try {
       await rpc("set_creation_mode", {
         p_mode: st.mode,
@@ -1008,7 +715,7 @@ async function pembuatan(body) {
       if (st.mode === "open" && c.mode !== "open") kickNotify(true);
       toast("Status pembuatan acara disimpan.");
       pembuatan(body);
-    } catch (err) { toast(friendly(err)); e.currentTarget.disabled = false; }
+    } catch (err) { toast(friendly(err)); btn.disabled = false; }
   };
 
   view.querySelector(".cap-settings").onsubmit = async (e) => {
@@ -1070,6 +777,24 @@ async function pembuatan(body) {
 // ---------- Keuangan: pembayaran Midtrans, harga, kode promo, pesanan ----------
 const ORDER_STATUS = { pending: ["Menunggu", "warn"], paid: ["Lunas", "ok"], expired: ["Kedaluwarsa", ""], failed: ["Gagal", "bad"], refunded: ["Dikembalikan", "bad"] };
 const SIM_SIZES = [[5, 24], [20, 12], [37, 30], [50, 24], [100, 36], [250, 27]];
+
+// Aturan yang sama dengan valid_price_steps() di database; pesan untuk superadmin, bukan galat teknis
+function checkPriceRows(tiers, disc) {
+  const whole = (n) => Number.isInteger(n);
+  if (!tiers.length) return "Isi paling sedikit satu tarif roll.";
+  for (const [max, rate] of tiers) {
+    if (!whole(max) || max < 1 || max > 500) return `Batas roll harus bilangan bulat 1–500 (sekarang: ${max || "kosong"}).`;
+    if (!whole(rate) || rate < 0) return `Tarif roll sampai ${max} jepretan harus bilangan bulat Rp0 ke atas.`;
+  }
+  for (const [min, pct] of disc) {
+    if (!whole(min) || min < 1 || min > 5000) return `Jumlah tamu pada diskon harus bilangan bulat 1–5000 (sekarang: ${min || "kosong"}).`;
+    if (!whole(pct) || pct < 0 || pct > 90) return `Diskon untuk ${min}+ tamu harus persen bulat 0–90 (sekarang: ${Number.isNaN(pct) ? "kosong" : pct}).`;
+  }
+  const dup = (a) => a.some((x, i) => a.findIndex((y) => y[0] === x[0]) !== i);
+  if (dup(tiers)) return "Ada dua rentang roll dengan batas yang sama. Hapus salah satunya.";
+  if (dup(disc)) return "Ada dua diskon dengan jumlah tamu yang sama. Hapus salah satunya.";
+  return null;
+}
 
 async function keuangan(body) {
   const [fin, cfg, promos, health] = await Promise.all([
@@ -1200,7 +925,7 @@ async function keuangan(body) {
 
   // ---- Harga: baris tarif dan diskon, simulasi langsung ----
   const priceCfg = () => ({
-    roll_tiers: st.tiers, discounts: st.disc,
+    roll_tiers: st.tiers.filter((r) => r.every(Number.isFinite)), discounts: st.disc.filter((r) => r.every(Number.isFinite)),
     free_guests: Number(fv("price_free_guests").value) || 0, free_shots: Number(fv("price_free_shots").value) || 0,
     min: Number(fv("price_min").value) || 0,
   });
@@ -1233,7 +958,7 @@ async function keuangan(body) {
   const priceCard = view.querySelector(".price-grid");
   priceCard.addEventListener("input", (e) => {
     const t = e.target;
-    if (t.dataset.t) st[t.dataset.t][Number(t.dataset.i)][Number(t.dataset.k)] = Number(t.value) || 0;
+    if (t.dataset.t) st[t.dataset.t][Number(t.dataset.i)][Number(t.dataset.k)] = t.value === "" ? NaN : Number(t.value);
     renderSim();
   });
   priceCard.addEventListener("change", (e) => { if (e.target.dataset.k === "0") renderPriceRows(); });
@@ -1247,14 +972,18 @@ async function keuangan(body) {
     if (del) { st[del.dataset.del].splice(Number(del.dataset.i), 1); renderPriceRows(); }
   });
   view.querySelector('[data-act="save-price"]').onclick = async (e) => {
-    const sorted = (a) => a.every((x, i) => i === 0 || x[0] > a[i - 1][0]);
-    if (!sorted(st.tiers) || !sorted(st.disc)) return toast("Batas roll dan jumlah tamu harus urut naik tanpa angka sama.");
+    const btn = e.currentTarget;   // e.currentTarget kosong lagi setelah await
+    const problem = checkPriceRows(st.tiers, st.disc);
+    if (problem) return toast(problem, 6000);
+    // Urutkan supaya baris yang ditambah di tengah tetap diterima
+    st.tiers.sort((a, b) => a[0] - b[0]); st.disc.sort((a, b) => a[0] - b[0]);
+    renderPriceRows();
     const patch = { price_roll_tiers: st.tiers, price_discounts: st.disc };
     for (const k of ["price_free_guests", "price_free_shots", "price_min", "free_events_per_user", "payment_window_min"]) patch[k] = Number(fv(k).value);
-    e.currentTarget.disabled = true;
+    btn.disabled = true;
     try { await rpc("admin_set_settings", { p_patch: patch }); toast("Harga disimpan."); }
-    catch (err) { toast(friendly(err)); }
-    e.currentTarget.disabled = false;
+    catch (err) { toast(friendly(err), 6000); }
+    btn.disabled = false;
   };
   renderPriceRows();
 
@@ -1372,7 +1101,7 @@ async function acara(body, me, role) {
           <option value="name">Nama (A–Z)</option>
         </select>
         <button class="btn small" data-act="csv">${ICON.download} CSV</button>
-        ${canCreate ? `<button class="btn small primary" data-act="create">${ICON.plus} Buat acara</button>` : ""}
+        ${canCreate ? `<a class="btn small primary" href="#/buat" data-act="create">${ICON.plus} Buat acara</a>` : ""}
       </div>
       <div class="filter-slot"></div>
       <div class="bulk-slot" style="margin-top:.75rem"></div>
@@ -1388,7 +1117,6 @@ async function acara(body, me, role) {
   if (createBtn) {
     createBtn.className = "btn primary";
     body.closest(".admin-shell")?.querySelector(".admin-title-actions")?.append(createBtn);
-    createBtn.addEventListener("click", () => createEventDialog());
   }
   const sub = body.closest(".admin-shell")?.querySelector(".admin-sub");
   // Ekspor semua acara sesuai saringan sekarang (maks. 2.000 baris)
@@ -2131,7 +1859,7 @@ function describe(r) {
     case "ubah_acara": return `mengubah acara “${t}”: ${patch()}`;
     case "blokir_peserta": return `memblokir ${r.user_label || "peserta"} di acara “${t}”`;
     case "pulihkan_peserta": return `memulihkan ${r.user_label || "peserta"} di acara “${t}”`;
-    case "ubah_peran": return d.role ? `menjadikan ${r.target} ${roleName(d.role).toLowerCase()}` : `mencabut peran ${r.target}`;
+    case "ubah_peran": return d.role ? `menjadikan ${r.target} ${roleName(d.role).toLowerCase()}${d.via === "pembayaran" ? ` (otomatis setelah pembayaran ${d.order})` : ""}` : `mencabut peran ${r.target}`;
     case "ubah_batas_acara": return `mengatur batas acara ${r.target}: ${d.limit === null || d.limit === undefined ? "tanpa batas" : `${d.limit} acara`}${d.used !== null && d.used !== undefined ? `, hitungan ${d.used}` : ""}`;
     case "ubah_pengaturan": return `mengubah pengaturan global: ${patch()}`;
     case "blokir_akun": return `memblokir akun ${t}`;
