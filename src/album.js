@@ -9,7 +9,7 @@ import { canInstall, promptInstall } from "./install.js";
 import { onAlbumPing, albumLive, REALTIME_MAX } from "./realtime.js";
 import { pushSupport, enableAlbumNotify, disableAlbumNotify, albumNotifyOn, kickNotify } from "./push.js";
 import { openCollage, COLLAGE_MAX } from "./collage.js";
-import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, copyText, ICON } from "./ui.js";
+import { el, esc, toast, fmtDate, download, safeName, modal, confirmDialog, copyText, ICON, liveCountdown } from "./ui.js";
 import { t } from "./i18n.js";
 
 const PAGE = 60;
@@ -51,6 +51,7 @@ export async function renderAlbum(root, status) {
         </div>
       </div>
       <div class="album-progress" hidden></div>
+      <div class="reveal-slot"></div>
       <div class="keep-slot"></div>
       <div class="notify-slot"></div>
       <p class="dl-quota"></p>
@@ -678,6 +679,13 @@ export async function renderAlbum(root, status) {
     show();
   }
 
+  // Mode cuci film: hitung mundur sampai semua foto terbuka, lalu muat ulang album
+  if (status.reveal_at && new Date(status.reveal_at) > new Date()) {
+    const slot = view.querySelector(".reveal-slot");
+    slot.innerHTML = `<div class="reveal-card">${ICON.clock}<div><span>${t("Semua foto terbuka dalam")}</span><b></b><small>${esc(fmtDate(status.reveal_at))}</small></div></div>`;
+    const b = slot.querySelector("b");
+    liveCountdown(b, status.reveal_at, (x) => (b.textContent = x), () => { slot.innerHTML = ""; toast(t("Album sudah terbuka.")); poll(); });
+  }
   updateQuota();
   loadProgress();
   loadOwners();

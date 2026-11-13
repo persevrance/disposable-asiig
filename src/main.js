@@ -14,7 +14,7 @@ import { openPrivacy } from "./privacy.js";
 import { coverUrl, setStorageBackend } from "./storage.js";
 import { setVapidKey } from "./push.js";
 import { noteEventSize } from "./realtime.js";
-import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial, confirmDialog } from "./ui.js";
+import { el, esc, toast, copyText, ICON, brandLockup, fmtRange, modal, initial, confirmDialog, liveCountdown } from "./ui.js";
 import { landingHtml } from "./landing.js";
 import { renderPricing } from "./pricing-page.js";
 import { renderCreate } from "./create-event.js";
@@ -164,6 +164,8 @@ async function renderJoin(code) {
         </div>
         ${ev?.welcome_text ? `<p class="welcome">${esc(ev.welcome_text)}</p>` : ""}
         ${ev && !ev.is_open ? `<p class="hint">${t("Pemotretan acara ini sudah ditutup, tetapi Anda masih bisa melihat album.")}</p>` : ""}
+        ${ev?.is_open && ev.lock_until_start && ev.starts_at && new Date(ev.starts_at) > new Date()
+          ? `<p class="join-wait">${ICON.clock}<span>${t("Kamera aktif dalam")} <b></b></span></p>` : ""}
         <ul class="join-rules">
           <li><span class="jr-ic coral jr-num">${ev ? ev.max_shots : ICON.film}</span><div><b>${ev ? t("{n} jepretan untukmu", { n: ev.max_shots }) : t("Jepretan terbatas")}</b><span>${t("Nggak bisa dihapus, nggak bisa diulang.")}</span></div></li>
           <li><span class="jr-ic sun">${ICON.clock}</span><div><b>${t("Hasil terlihat setelah film habis")}</b><span>${t("Seperti kamera film, fotonya dicuci dulu.")}</span></div></li>
@@ -178,6 +180,8 @@ async function renderJoin(code) {
       </div>
     </main>`));
   bindLangSwitch(app);
+  const waitB = app.querySelector(".join-wait b");
+  if (waitB) liveCountdown(waitB, ev.starts_at, (x) => (waitB.textContent = x), () => (waitB.closest(".join-wait").textContent = t("Acara sudah mulai. Selamat memotret!")));
   app.querySelector('[data-act="no"]').onclick = () => {
     localStorage.removeItem("pendingCode");
     location.hash = "#/";

@@ -216,6 +216,8 @@ alter table events
   add column if not exists date_stamp boolean not null default true,      -- cap tanggal di foto
   add column if not exists allow_gallery boolean not null default false,  -- unggah dari galeri HP
   add column if not exists allow_front boolean not null default true,     -- kamera depan / selfie
+  -- Kamera baru aktif saat acara mulai (starts_at); sebelumnya tamu melihat hitung mundur
+  add column if not exists lock_until_start boolean not null default false,
   -- Email yang otomatis menjadi pembuat acara (user_roles) begitu pesanan acara ini lunas
   add column if not exists creator_email text
     check (creator_email is null or creator_email ~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$');
@@ -452,10 +454,11 @@ end $$;
 drop function if exists event_preview(text);
 create function event_preview(p_code text)
 returns table (name text, cover_path text, welcome_text text, is_open boolean, max_shots int,
-               starts_at timestamptz, ends_at timestamptz, host_name text, album_private boolean)
+               starts_at timestamptz, ends_at timestamptz, host_name text, album_private boolean,
+               lock_until_start boolean)
 language sql stable security definer set search_path = public as $$
   select e.name, e.cover_path, e.welcome_text, open_now(e), e.max_shots, e.starts_at, e.ends_at,
-         e.host_name, e.album_private
+         e.host_name, e.album_private, e.lock_until_start
     from events e
    where auth.uid() is not null and e.join_code = upper(trim(p_code));
 $$;
@@ -496,6 +499,9 @@ begin
   end if;
   if exists (select 1 from events where id = p_event and needs_review) then
     raise exception 'ACARA_MENUNGGU_TINJAUAN';
+  end if;
+  if exists (select 1 from events where id = p_event and lock_until_start and starts_at > now()) then
+    raise exception 'ACARA_BELUM_MULAI';
   end if;
   if v_used >= v_max then raise exception 'FILM_HABIS'; end if;
 
@@ -639,7 +645,8 @@ returns table (event_id uuid, name text, join_code text, max_shots int, max_memb
                max_shots_limit int, max_members_limit int, allow_film_choice boolean,
                starts_at timestamptz, ends_at timestamptz, collage_theme jsonb, needs_review boolean,
                pay_status text, price_basis int, event_type text, host_name text, slug text,
-               album_private boolean, date_stamp boolean, allow_gallery boolean, allow_front boolean)
+               album_private boolean, date_stamp boolean, allow_gallery boolean, allow_front boolean,
+               lock_until_start boolean)
 language sql stable security definer set search_path = public as $$
   select e.id, e.name,
          case when can_manage(e.id) then e.join_code end,
@@ -658,7 +665,7 @@ language sql stable security definer set search_path = public as $$
          s.max_shots_limit, s.max_members_limit, e.allow_film_choice,
          e.starts_at, e.ends_at, e.collage_theme, e.needs_review,
          e.pay_status, e.price_basis, e.event_type, e.host_name, e.slug,
-         e.album_private, e.date_stamp, e.allow_gallery, e.allow_front
+         e.album_private, e.date_stamp, e.allow_gallery, e.allow_front, e.lock_until_start
     from events e
     cross join app_settings s
     left join event_members m on m.event_id = e.id and m.user_id = auth.uid()
@@ -874,6 +881,7 @@ begin
                     mirror_photo = e.mirror_photo, photo_max_side = e.photo_max_side,
                     event_type = e.event_type, host_name = e.host_name, album_private = e.album_private,
                     date_stamp = e.date_stamp, allow_gallery = e.allow_gallery, allow_front = e.allow_front,
+                    lock_until_start = e.lock_until_start,
                     collage_theme = e.collage_theme - 'logo_optional'
    where id = v_id;
   insert into event_invites (event_id, email)
@@ -985,6 +993,7 @@ begin
   if p_patch ? 'date_stamp' then e.date_stamp := (p_patch->>'date_stamp')::boolean; end if;
   if p_patch ? 'allow_gallery' then e.allow_gallery := (p_patch->>'allow_gallery')::boolean; end if;
   if p_patch ? 'allow_front' then e.allow_front := (p_patch->>'allow_front')::boolean; end if;
+  if p_patch ? 'lock_until_start' then e.lock_until_start := (p_patch->>'lock_until_start')::boolean; end if;
   if p_patch ? 'slug' then
     e.slug := nullif(lower(trim(coalesce(p_patch->>'slug', ''))), '');
     if e.slug is not null and not valid_slug(e.slug) then raise exception 'TAUTAN_TIDAK_VALID'; end if;
@@ -1032,7 +1041,7 @@ begin
                     event_type = e.event_type, host_name = e.host_name, slug = e.slug,
                     album_private = e.album_private, date_stamp = e.date_stamp,
                     allow_gallery = e.allow_gallery, allow_front = e.allow_front,
-                    creator_email = e.creator_email
+                    creator_email = e.creator_email, lock_until_start = e.lock_until_start
    where id = p_event;
   perform log_audit('ubah_acara', p_event::text, p_patch);
 end $$;

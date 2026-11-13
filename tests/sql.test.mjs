@@ -587,6 +587,20 @@ ok((await as("host", `select * from get_album($1)`, [evP])).length === 2, "owner
 await as("host", `select set_event($1, $2)`, [ev, { slug: null }]);
 for (const id of [evB, dupV2, evP]) await as("host", `select delete_event($1)`, [id]);
 
+// ---- Kunci kamera sampai acara mulai ----
+const evL = (await as("host", `select create_event('Nanti', 2, 10) id`))[0].id;
+const codeL = (await db.query(`select join_code from events where id = $1`, [evL])).rows[0].join_code;
+await as("host", `select set_event($1, $2)`, [evL, { starts_at: new Date(Date.now() + 3600e3).toISOString(), lock_until_start: true }]);
+await as("d", `select join_event($1)`, [codeL]);
+ok((await as("d", `select lock_until_start from event_preview($1)`, [codeL]))[0].lock_until_start === true, "event_preview shows camera lock");
+ok((await as("d", `select lock_until_start from my_status($1)`, [evL]))[0].lock_until_start === true, "my_status shows camera lock");
+await expectErr("d", `select * from reserve_shot($1, gen_random_uuid())`, [evL], "ACARA_BELUM_MULAI");
+await as("host", `select set_event($1, $2)`, [evL, { starts_at: new Date(Date.now() - 60e3).toISOString() }]);
+ok((await as("d", `select * from reserve_shot($1, gen_random_uuid())`, [evL])).length === 1, "camera unlocks once event starts");
+await as("host", `select set_event($1, $2)`, [evL, { starts_at: new Date(Date.now() + 3600e3).toISOString(), lock_until_start: false }]);
+ok((await as("d", `select * from reserve_shot($1, gen_random_uuid())`, [evL])).length === 1, "no lock = shooting before start allowed");
+await as("host", `select delete_event($1)`, [evL]);
+
 // ---- Pembayaran: rumus harga (SQL = src/price.js) ----
 const cfg = (await as("host", `select price_settings() p`))[0].p;
 ok(cfg.payments_enabled === false && cfg.min === 25000, "price_settings defaults");
