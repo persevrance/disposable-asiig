@@ -397,7 +397,8 @@ export async function openCollage(ev, photos, { pickMore } = {}) {
   if (!photos.length) { toast(t("Pilih paling sedikit 1 foto untuk kolase.")); return; }
   const cfg = ev.collage_theme || {};
   const allowed = ORNAMENTS.filter((o) => !cfg.allowed?.length || cfg.allowed.includes(o.id) || o.id === cfg.ornament);
-  const logoOptional = cfg.logo_optional === true;     // BR-19: wajib di acara gratis
+  // Logo TitipPotret selalu wajib di kolase (logo_optional lama diabaikan)
+  const logoOptional = false;
   const S = {
     tab: "layout", layout: "auto", size: "feed", bg: "krem", name: true, date: true, stamp: false, logo: true,
     orn: allowed.some((o) => o.id === cfg.ornament) ? cfg.ornament : (allowed[0]?.id || "polos"),
@@ -505,7 +506,7 @@ export async function openCollage(ev, photos, { pickMore } = {}) {
         ["name", t("Nama acara"), t("Di kaki atau kop kolase"), false],
         ["date", t("Tanggal"), t("Tanggal acara, atau hari ini bila belum berjadwal"), false],
         ["stamp", t("Cap tanggal di tiap foto"), t("Gaya kamera sekali pakai"), false],
-        ["logo", t("Logo TitipPotret"), logoOptional ? t("Boleh dimatikan untuk acara ini") : t("Wajib di acara gratis; bisa dimatikan di acara berbayar"), !logoOptional],
+        ["logo", t("Logo TitipPotret"), t("Selalu tampil di kolase"), !logoOptional],
       ];
       pane.innerHTML = `<div class="cl-toggles">${rows.map(([k, name, desc, locked]) => `
         <div class="cl-toggle">

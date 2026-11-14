@@ -193,8 +193,8 @@ export async function renderCreate(setView, { me } = {}) {
     const rev = revealIso(), purge = purgeIso();
     frame("Kapan acaranya?", `
       <div class="date-row">
-        <label>Mulai<input type="datetime-local" name="starts" value="${esc(D.starts)}" /></label>
-        <label>Selesai<input type="datetime-local" name="ends" value="${esc(D.ends)}" /></label>
+        <label>Mulai<input type="datetime-local" name="starts" required aria-required="true" value="${esc(D.starts)}" /></label>
+        <label>Selesai<input type="datetime-local" name="ends" required aria-required="true" value="${esc(D.ends)}" /></label>
       </div>
       <p class="hint cr-tight">Kamera berhenti otomatis saat acara selesai.</p>
       <div class="cr-toggles">${sw("lockStart", "Kamera aktif saat acara dimulai", D.starts ? `Sebelum ${hhmm(fromLocalInput(D.starts))}, tamu yang sudah bergabung melihat hitung mundur` : "Butuh waktu mulai. Sebelum itu tamu melihat hitung mundur")}</div>
@@ -398,7 +398,11 @@ export async function renderCreate(setView, { me } = {}) {
     if (D.step === 1 && paid && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(D.creatorEmail)) { toast("Isi email pembuat acara yang valid."); f().creatorEmail?.focus(); return false; }
     if (D.step === 2) {
       const s = fromLocalInput(D.starts), e = fromLocalInput(D.ends);
-      if (s && e && new Date(e) <= new Date(s)) { toast("Waktu selesai harus setelah waktu mulai."); return false; }
+      // Jadwal wajib: mulai dan selesai (setelah acara aktif, mengubah jadwal selesai berbayar)
+      if (!s) { toast("Isi waktu mulai acara."); f().starts?.focus(); return false; }
+      if (!e) { toast("Isi waktu selesai acara."); f().ends?.focus(); return false; }
+      if (new Date(e) <= new Date(s)) { toast("Waktu selesai harus setelah waktu mulai."); f().ends?.focus(); return false; }
+      if (new Date(e) <= new Date()) { toast("Waktu selesai harus di masa depan."); f().ends?.focus(); return false; }
       if ((D.open === "after" || D.open === "delay") && !e) { toast("Pilihan ini butuh waktu selesai acara."); return false; }
       if (D.lockStart && !s) { toast("Isi waktu mulai supaya kamera bisa aktif otomatis saat acara dimulai."); return false; }
       if (D.open === "time" && !D.openAt) { toast("Pilih waktu album dibuka."); return false; }
@@ -416,6 +420,8 @@ export async function renderCreate(setView, { me } = {}) {
 
   // ---------- buat acara, lalu bayar bila perlu ----------
   async function submit() {
+    // Draf lama (tersimpan sebelum jadwal wajib) bisa belum punya jadwal: kembali ke langkah 2
+    if (!D.starts || !D.ends) { D.step = 2; save(); render(); toast("Isi waktu mulai dan selesai acara."); return; }
     const btn = view.querySelector('[data-act="next"]');
     btn.disabled = true; btn.textContent = "Membuat acara…";
     let id;

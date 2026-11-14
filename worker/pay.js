@@ -11,7 +11,7 @@
 //
 // Rute:
 //   GET  /api/pay/health    status konfigurasi (tanpa membuka rahasia)
-//   POST /api/pay/checkout  { event_id, guests?, shots?, promo?, method?, unlimited?, keep_days? } -> pesanan + token Snap
+//   POST /api/pay/checkout  { event_id, guests?, shots?, promo?, method?, unlimited?, keep_days?, ends_at? } -> pesanan + token Snap
 //                           method: qris | gopay | shopeepay | va (tanpa method: MIDTRANS_ENABLED_PAYMENTS)
 //   POST /api/pay/status    { order_id } -> status pesanan; cek ulang ke Midtrans bila masih tertunda
 //   POST /api/pay/webhook   Payment Notification URL di dasbor Midtrans
@@ -56,6 +56,7 @@ async function checkout(req, env, h, jwt, body) {
     p_method: body.method || null,
     p_unlimited: typeof body.unlimited === "boolean" ? body.unlimited : null,
     p_keep_days: body.keep_days ?? null,
+    p_ends_at: body.ends_at || null,
   });
   if (order.production !== isProd(env)) h.fail(500, "MODE_MIDTRANS_TIDAK_SAMA");
   if (order.status !== "pending" || order.snap_token) return h.json(publicOrder(order));
@@ -67,7 +68,8 @@ async function checkout(req, env, h, jwt, body) {
   const origin = new URL(req.url).origin;
   const size = order.unlimited ? "Unlimited tamu & jepretan" : `${order.guests} tamu x ${order.shots} jepretan`;
   const keep = order.keep_fee ? `, simpan ${order.keep_days} hari` : "";
-  const name = `${order.kind === "new" ? "Acara" : "Upgrade"} ${size}${keep}`.slice(0, 50);
+  const resched = order.reschedule_fee ? ", ubah jadwal" : "";
+  const name = `${order.kind === "new" ? "Acara" : "Upgrade"} ${size}${keep}${resched}`.slice(0, 50);
   const payload = {
     transaction_details: { order_id: order.id, gross_amount: order.amount },
     item_details: [{ id: order.kind, price: order.amount, quantity: 1, name }],
@@ -148,7 +150,7 @@ async function serviceRpc(env, h, fn, args) {
 // Yang dikirim ke browser: tanpa data internal
 function publicOrder(o) {
   const keep = ["id", "event_id", "event_name", "kind", "guests", "shots", "list_price", "credit", "promo_code", "pay_method",
-    "promo_discount", "amount", "status", "unlimited", "keep_days", "keep_fee", "snap_token", "snap_url", "payment_type", "expires_at", "paid_at", "pay_status"];
+    "promo_discount", "amount", "status", "unlimited", "keep_days", "keep_fee", "ends_at", "reschedule_fee", "snap_token", "snap_url", "payment_type", "expires_at", "paid_at", "pay_status"];
   return Object.fromEntries(keep.filter((k) => k in o).map((k) => [k, o[k]]));
 }
 

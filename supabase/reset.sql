@@ -78,6 +78,8 @@ drop function if exists
   price_quote(int, int, text, uuid), apply_order_paid(text, text), start_order(uuid, int, int, text), start_order(uuid, int, int, text, text),
   start_order(uuid, int, int, text, text, boolean, int), shots_cap(), keep_fee(int),
   price_quote_raw(int, int, boolean), price_quote(int, int, text, uuid, boolean, int),
+  price_quote(int, int, text, uuid, boolean, int, timestamptz),
+  start_order(uuid, int, int, text, text, boolean, int, timestamptz), reschedule_fee(timestamptz, timestamptz),
   set_order_snap(text, text, text), midtrans_notify(text, text, text, text, numeric), order_status(text),
   event_orders(uuid), admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text),

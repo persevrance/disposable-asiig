@@ -38,22 +38,19 @@ export async function renderAlbum(root, status) {
           <span class="album-sub">${esc(status.name)}</span>
         </div>
         <div class="album-bar ph-actions">
-          <button class="round-btn" data-act="collage" aria-label="${t("Kolase")}" title="${t("Kolase")}">${ICON.grid}</button>
           <button class="round-btn" data-act="select" aria-label="${t("Pilih untuk unduh")}" title="${t("Pilih untuk unduh")}">${ICON.download}</button>
         </div>
       </div>
       <div class="album-filter" hidden>
         <div class="chips" role="group" aria-label="${t("Saring album")}">
-          <button type="button" class="chip" data-f="all" aria-pressed="true">${t("Semua")}</button>
-          ${status.is_member ? `<button type="button" class="chip" data-f="mine" aria-pressed="false">${t("Foto saya")}</button>` : ""}
-          <button type="button" class="chip" data-f="fav" aria-pressed="false">${t("Favorit")}</button>
-          <select class="chip owner-filter" aria-label="${t("Foto dari tamu")}" hidden></select>
+          <button type="button" class="chip view-pick" aria-haspopup="menu" aria-expanded="false" aria-label="${t("Tampilkan foto")}"></button>
+          <button type="button" class="chip" data-act="collage">${ICON.grid} ${t("Kolase")}</button>
         </div>
+        <div class="view-menu" role="menu" aria-label="${t("Tampilkan foto")}" hidden></div>
       </div>
       <div class="album-progress" hidden></div>
       <div class="reveal-slot"></div>
       <div class="keep-slot"></div>
-      <div class="notify-slot"></div>
       <p class="dl-quota"></p>
       <button class="new-pill" hidden></button>
       <div class="grid"></div>
@@ -77,7 +74,8 @@ export async function renderAlbum(root, status) {
   const progressEl = view.querySelector(".album-progress");
   const pill = view.querySelector(".new-pill");
   const filterBar = view.querySelector(".album-filter");
-  const ownerSel = view.querySelector(".owner-filter");
+  const viewPick = view.querySelector(".view-pick");
+  const viewMenu = view.querySelector(".view-menu");
   let freshCount = 0;
 
   // ---- progres: gulungan sendiri dan tamu yang filmnya sudah habis ----
@@ -97,30 +95,51 @@ export async function renderAlbum(root, status) {
       <span>${mine ? "· " : ""}${t("{a} dari {b} tamu sudah habis filmnya", { a: progress.rolls_done, b: progress.members })}</span>
       ${reveal ? `<small>${esc(t("Semua foto terbuka {d}.", { d: fmtDate(status.reveal_at) }))}</small>` : ""}`;
     renderKeepCard();
-    renderNotify();
   }
 
-  // ---- simpan album: link permanen + pasang di layar utama ----
+  // ---- simpan album: link permanen + pasang di layar utama + kabar saat album terbuka ----
   // Muncul setelah gulungan tamu habis atau acara ditutup, bisa ditutup.
+  // Bagian notifikasi tampil selama acara masih terbuka dan waktu cuci film belum lewat.
   const keepKey = `keepCard:${status.event_id}`;
-  function renderKeepCard() {
+  let notifyOn = null;
+  async function renderKeepCard() {
     const slot = view.querySelector(".keep-slot");
     let dismissed = false;
     try { dismissed = localStorage.getItem(keepKey) === "1"; } catch { /* abaikan */ }
     const rollDone = progress && progress.my_used !== null && progress.my_used >= progress.max_shots;
     if (dismissed || !status.is_member || !(rollDone || !status.is_open)) { slot.replaceChildren(); return; }
-    if (slot.firstChild) return;
+
+    const revealed = status.reveal_at && new Date(status.reveal_at) <= new Date();
+    const sup = pushSupport();
+    const notify = status.is_open && !revealed && sup !== "off" && sup !== "unsupported";
+    if (notify && notifyOn === null) notifyOn = await albumNotifyOn(status.event_id);
+    const install = canInstall();
+    // Progres dimuat ulang berkala: jangan bangun ulang kartu bila isinya tidak berubah
+    const sig = `${notify}|${sup}|${notifyOn}|${install}`;
+    if (slot.firstChild && slot.dataset.sig === sig) return;
+    slot.dataset.sig = sig;
+
+    const text = notify && sup === "ios-install"
+      ? t("Foto terus bertambah sampai acara selesai. Pasang di layar utama agar mudah dibuka lagi dan dikabari saat semua foto terbuka.")
+      : t("Foto terus bertambah sampai acara selesai. Buka lagi lewat link atau dari layar utama HP.");
+    // Notifikasi sebagai baris sakelar (bukan tombol ketiga) supaya tidak bersaing dengan aksi utama
+    const notifyRow = !notify || sup === "ios-install" ? ""
+      : sup === "denied" ? `<p class="keep-note">${ICON.bell}<span>${t("Notifikasi diblokir. Izinkan di pengaturan situs untuk dikabari saat album terbuka.")}</span></p>`
+      : `<div class="keep-notify">${ICON.bell}<span id="kn-${status.event_id}">${t("Kabari saat semua foto terbuka")}</span>
+          <button type="button" class="switch bare" role="switch" data-act="notify" aria-checked="${Boolean(notifyOn)}" aria-labelledby="kn-${status.event_id}"><span class="knob"></span></button></div>`;
+
     const link = `${location.origin}/#/e/${status.event_id}/album`;
     const card = el(`
       <div class="card keep-card">
-        <div>
+        <div class="keep-head">
           <b>${t("Simpan album ini")}</b>
-          <p>${t("Foto tamu lain terus bertambah sampai acara selesai. Buka lagi kapan saja lewat link ini atau dari layar utama HP.")}</p>
+          <button type="button" class="keep-close" data-act="hide" aria-label="${t("Tutup")}">${ICON.close}</button>
         </div>
-        <div class="row tight wrap">
-          <button class="btn small" data-act="link">${ICON.link} ${t("Salin link album")}</button>
-          ${canInstall() ? `<button class="btn small primary" data-act="install">${ICON.phone} ${t("Pasang di layar utama")}</button>` : ""}
-          <button class="btn small ghost" data-act="hide">${t("Tutup")}</button>
+        <p class="keep-text">${text}</p>
+        ${notifyRow}
+        <div class="keep-actions">
+          <button class="btn small" data-act="link">${ICON.link}<span>${t("Salin link")}</span></button>
+          ${install ? `<button class="btn small primary" data-act="install">${ICON.phone}<span>${t("Pasang di HP")}</span></button>` : ""}
         </div>
       </div>`);
     card.querySelector('[data-act="link"]').onclick = () =>
@@ -130,36 +149,22 @@ export async function renderAlbum(root, status) {
     });
     card.querySelector('[data-act="hide"]').onclick = () => {
       try { localStorage.setItem(keepKey, "1"); } catch { /* abaikan */ }
-      card.remove();
+      slot.replaceChildren();
     };
-    slot.replaceChildren(card);
-  }
-
-  // ---- kabari saya saat album terbuka penuh (notifikasi browser) ----
-  // Tampil selama acara masih terbuka dan belum ada waktu cuci film yang lewat.
-  let notifyOn = null;
-  async function renderNotify() {
-    const slot = view.querySelector(".notify-slot");
-    const revealed = status.reveal_at && new Date(status.reveal_at) <= new Date();
-    const sup = pushSupport();
-    if (!status.is_open || revealed || sup === "off" || sup === "unsupported") { slot.replaceChildren(); return; }
-    if (notifyOn === null) notifyOn = await albumNotifyOn(status.event_id);
-    const card = el(`
-      <div class="notify-card">
-        ${ICON.bell}
-        <span>${notifyOn ? t("Anda akan dikabari saat semua foto terbuka.")
-          : sup === "ios-install" ? t("Di iPhone, pasang aplikasi di layar utama dulu untuk menerima kabar saat album terbuka.")
-          : sup === "denied" ? t("Notifikasi diblokir di browser ini. Izinkan di pengaturan situs untuk menerima kabar.")
-          : t("Ingin dikabari saat semua foto terbuka?")}</span>
-        ${sup === "ok" ? `<button class="btn small ${notifyOn ? "ghost" : "primary"}" data-act="notify">${notifyOn ? t("Batalkan") : t("Kabari saya")}</button>` : ""}
-      </div>`);
     card.querySelector('[data-act="notify"]')?.addEventListener("click", async (e) => {
-      e.currentTarget.disabled = true;
+      const sw = e.currentTarget;
+      if (sw.disabled) return;
+      // Sakelar langsung berpindah supaya terasa responsif; dikembalikan bila gagal
+      sw.disabled = true;
+      sw.setAttribute("aria-checked", String(!notifyOn));
       try {
         if (notifyOn) { await disableAlbumNotify(status.event_id); notifyOn = false; toast(t("Kabar album dibatalkan.")); }
         else { await enableAlbumNotify(status.event_id); notifyOn = true; toast(t("Siap. Anda akan dikabari saat album terbuka.")); }
       } catch (err) { toast(err?.message?.length < 120 ? err.message : friendly(err)); }
-      renderNotify();
+      sw.setAttribute("aria-checked", String(Boolean(notifyOn)));
+      sw.disabled = false;
+      slot.dataset.sig = "";      // paksa bangun ulang (mis. izin baru saja ditolak)
+      renderKeepCard();
     });
     slot.replaceChildren(card);
   }
@@ -181,32 +186,64 @@ export async function renderAlbum(root, status) {
     if (filter.owner) a.p_owner = filter.owner;
     return a;
   };
-  filterBar.querySelector(".chips").onclick = (e) => {
-    const b = e.target.closest(".chip");
-    if (!b || (b.dataset.f === filter.kind && !filter.owner)) return;
-    filter.kind = b.dataset.f;
-    filter.owner = null;          // chip apa pun (termasuk Semua) melepas saringan per tamu
-    ownerSel.value = "";
-    syncChips();
-    reload();
-  };
-  ownerSel.onchange = () => {
-    filter.owner = ownerSel.value || null;
-    if (filter.owner) filter.kind = "all";
-    syncChips();
-    reload();
-  };
+  // Menu tampilan (Semua / Foto saya / Favorit): chip pemicu menunjukkan pilihan aktif,
+  // menu melayang bergaya kartu aplikasi. Posisi fixed karena baris chip bisa digulir menyamping.
+  const VIEWS = [
+    ["all", ICON.album, t("Semua")],
+    ...(status.is_member ? [["mine", ICON.camera, t("Foto saya")]] : []),
+    ["fav", ICON.heart, t("Favorit")],
+  ];
   function syncChips() {
-    filterBar.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.f === filter.kind && !filter.owner)));
+    const [, icon, label] = VIEWS.find((v) => v[0] === filter.kind) || VIEWS[0];
+    viewPick.innerHTML = `${icon}<span>${label}</span><i class="vp-caret">${ICON.chevronDown}</i>`;
+    viewMenu.innerHTML = VIEWS.map(([k, ic, lb]) => `
+      <button type="button" role="menuitemradio" data-v="${k}" aria-checked="${k === filter.kind}" tabindex="-1">
+        ${ic}<span>${lb}</span><i class="vm-check">${ICON.check}</i>
+      </button>`).join("");
   }
-  async function loadOwners() {
-    let owners = [];
-    try { owners = await rpc("album_owners", { p_event: status.event_id }); } catch { /* database lama: tanpa saringan tamu */ }
-    ownerSel.hidden = owners.length < 2;
-    if (ownerSel.hidden) return;
-    ownerSel.innerHTML = `<option value="">${t("Per tamu")}</option>` + owners.map((o) =>
-      `<option value="${o.user_id}" ${o.user_id === filter.owner ? "selected" : ""}>${esc(o.name)} (${o.photos})</option>`).join("");
+  const menuItems = () => [...viewMenu.querySelectorAll("[data-v]")];
+  function openMenu() {
+    const r = viewPick.getBoundingClientRect();
+    viewMenu.style.top = `${r.bottom + 8}px`;
+    viewMenu.style.left = `${Math.max(12, Math.min(r.left, window.innerWidth - 232))}px`;
+    viewMenu.hidden = false;
+    viewPick.setAttribute("aria-expanded", "true");
+    (viewMenu.querySelector('[aria-checked="true"]') || menuItems()[0])?.focus();
+    setTimeout(() => document.addEventListener("pointerdown", onOutside, true));
+    document.addEventListener("keydown", onMenuKey);
+    window.addEventListener("scroll", closeMenu, { passive: true, once: true });
+    window.addEventListener("resize", closeMenu, { once: true });
   }
+  function closeMenu(refocus = false) {
+    if (viewMenu.hidden) return;
+    viewMenu.hidden = true;
+    viewPick.setAttribute("aria-expanded", "false");
+    document.removeEventListener("pointerdown", onOutside, true);
+    document.removeEventListener("keydown", onMenuKey);
+    window.removeEventListener("scroll", closeMenu);
+    window.removeEventListener("resize", closeMenu);
+    if (refocus === true) viewPick.focus();
+  }
+  function onOutside(e) { if (!viewMenu.contains(e.target) && !viewPick.contains(e.target)) closeMenu(); }
+  function onMenuKey(e) {
+    const list = menuItems(), i = list.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); closeMenu(true); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); list[(i + 1) % list.length].focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); list[(i - 1 + list.length) % list.length].focus(); }
+    else if (e.key === "Tab") closeMenu();
+  }
+  viewPick.onclick = () => (viewMenu.hidden ? openMenu() : closeMenu());
+  viewMenu.onclick = (e) => {
+    const b = e.target.closest("[data-v]");
+    if (!b) return;
+    closeMenu(true);
+    if (b.dataset.v === filter.kind) return;
+    filter.kind = b.dataset.v;
+    filter.owner = null;
+    syncChips();
+    reload();
+  };
+  syncChips();
   function reload() {
     gen++;
     items.clear();
@@ -427,7 +464,6 @@ export async function renderAlbum(root, status) {
           pill.textContent = t("{n} foto baru", { n: freshCount });
           pill.hidden = false;
         }
-        loadOwners();
       }
       updateEmpty();
       loadProgress();
@@ -691,7 +727,6 @@ export async function renderAlbum(root, status) {
   }
   updateQuota();
   loadProgress();
-  loadOwners();
   const io = new IntersectionObserver((es) => { if (es[0].isIntersecting) loadMore(); }, { rootMargin: "600px" });
   io.observe(view.querySelector(".sentinel"));
   await loadMore();
@@ -713,7 +748,7 @@ export async function renderAlbum(root, status) {
   let jitter = 0;
   if (!live) { const next = () => { jitter = setTimeout(() => { poll(); next(); }, 30000 + Math.random() * 30000); }; next(); }
 
-  return () => { clearInterval(timer); clearInterval(slow); clearTimeout(jitter); clearTimeout(wait); off(); io.disconnect(); window.removeEventListener("scroll", onScroll); };
+  return () => { closeMenu(); clearInterval(timer); clearInterval(slow); clearTimeout(jitter); clearTimeout(wait); off(); io.disconnect(); window.removeEventListener("scroll", onScroll); };
 }
 
 // Toast yang bisa diperbarui; panggil dengan null untuk menutup

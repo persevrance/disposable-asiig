@@ -953,6 +953,12 @@ begin
   if (p_patch->>'is_open')::boolean and not (p_patch ? 'ends_at') and e.ends_at <= now() then
     e.ends_at := null;
   end if;
+  -- Acara aktif saat pembayaran hidup: jadwal selesai hanya bisa diubah lewat Upgrade acara
+  -- (berbayar, start_order + reschedule_fee). Termasuk membuka lagi acara yang selesai karena jadwal.
+  if s.payments_enabled and not v_admin and e.pay_status <> 'draft'
+     and e.ends_at is distinct from (select ends_at from events where id = p_event) then
+    raise exception 'JADWAL_PERLU_PEMBAYARAN';
+  end if;
   if e.starts_at is not null and e.ends_at is not null and e.ends_at <= e.starts_at then
     raise exception 'JADWAL_TIDAK_VALID';
   end if;
@@ -1341,6 +1347,8 @@ begin
     keep_flat_days      = coalesce((p_patch->>'keep_flat_days')::int, keep_flat_days),
     keep_flat           = coalesce((p_patch->>'keep_flat')::int, keep_flat),
     keep_max_days       = coalesce((p_patch->>'keep_max_days')::int, keep_max_days),
+    reschedule_per_day  = coalesce((p_patch->>'reschedule_per_day')::int, reschedule_per_day),
+    reschedule_same_day = coalesce((p_patch->>'reschedule_same_day')::int, reschedule_same_day),
     photo_mb_estimate   = coalesce((p_patch->>'photo_mb_estimate')::numeric, photo_mb_estimate),
     email_enabled       = coalesce((p_patch->>'email_enabled')::boolean, email_enabled),
     email_daily_cap     = coalesce((p_patch->>'email_daily_cap')::int, email_daily_cap),
@@ -2487,6 +2495,11 @@ alter table app_settings
   add column if not exists keep_flat_days int not null default 60 check (keep_flat_days between 1 and 3650),
   add column if not exists keep_flat int not null default 200000 check (keep_flat between 0 and 1000000000),
   add column if not exists keep_max_days int not null default 90 check (keep_max_days between 1 and 3650);
+-- Biaya ubah jadwal selesai acara (acara yang sudah aktif): per hari pergeseran tanggal,
+-- atau biaya tetap bila hanya jamnya yang berubah di hari yang sama
+alter table app_settings
+  add column if not exists reschedule_per_day int not null default 3890 check (reschedule_per_day between 0 and 100000000),
+  add column if not exists reschedule_same_day int not null default 1890 check (reschedule_same_day between 0 and 100000000);
 
 create table if not exists promo_codes (
   code         text primary key check (code ~ '^[A-Z0-9_-]{3,30}$'),
@@ -2535,6 +2548,10 @@ alter table orders
   add column if not exists keep_fee int not null default 0 check (keep_fee >= 0),
   add column if not exists keep_total int not null default 0 check (keep_total >= 0);
 -- Metode yang dipilih di layar Pembayaran; token Snap dibuat khusus untuk metode ini
+-- Jadwal selesai baru yang dibeli lewat pesanan ini (NULL = jadwal tidak diubah)
+alter table orders
+  add column if not exists ends_at timestamptz,
+  add column if not exists reschedule_fee int not null default 0 check (reschedule_fee >= 0);
 alter table orders add column if not exists pay_method text
   check (pay_method is null or pay_method in ('qris', 'gopay', 'shopeepay', 'va'));
 create index if not exists orders_event on orders (event_id, created_at desc);
@@ -2562,6 +2579,20 @@ language sql stable security definer set search_path = public as $$
     from app_settings s;
 $$;
 
+-- Biaya ubah jadwal selesai: tanggal bergeser N hari (zona Asia/Jakarta) = N × reschedule_per_day;
+-- hanya jam yang berubah di hari yang sama = reschedule_same_day. Sebelumnya tanpa jadwal selesai =
+-- dihitung satu hari. Tidak berubah atau pembayaran mati = gratis.
+create or replace function reschedule_fee(p_old timestamptz, p_new timestamptz) returns int
+language sql stable security definer set search_path = public as $$
+  select case when not s.payments_enabled or p_new is null or p_old is not distinct from p_new then 0
+              when p_old is null then s.reschedule_per_day
+              when (p_new at time zone 'Asia/Jakarta')::date = (p_old at time zone 'Asia/Jakarta')::date
+                then s.reschedule_same_day
+              else abs((p_new at time zone 'Asia/Jakarta')::date - (p_old at time zone 'Asia/Jakarta')::date)
+                   * s.reschedule_per_day end
+    from app_settings s;
+$$;
+
 -- Pengaturan harga untuk halaman harga publik, wizard, dan pembayaran (juga tanpa login)
 create or replace function price_settings() returns jsonb
 language sql stable security definer set search_path = public as $$
@@ -2574,6 +2605,7 @@ language sql stable security definer set search_path = public as $$
     'midtrans_client_key', s.midtrans_client_key, 'midtrans_production', s.midtrans_production,
     'price_unlimited', s.price_unlimited, 'keep_free_days', s.keep_free_days, 'keep_per_day', s.keep_per_day,
     'keep_flat_days', s.keep_flat_days, 'keep_flat', s.keep_flat, 'keep_max_days', s.keep_max_days,
+    'reschedule_per_day', s.reschedule_per_day, 'reschedule_same_day', s.reschedule_same_day,
     'shots_cap', shots_cap())
     from app_settings s;
 $$;
@@ -2631,14 +2663,17 @@ end $$;
 -- Kode promo yang tidak berlaku tidak menggagalkan: dikembalikan sebagai promo_error.
 -- Masa simpan: keep_fee = biaya penuh p_keep_days, keep_credit = yang sudah dibayar, keep_due = selisihnya.
 -- Kode promo hanya untuk paket tamu × roll (bukan Unlimited, bukan masa simpan).
+-- Ubah jadwal: p_ends_at = jadwal selesai baru (hanya acara aktif); reschedule_fee ikut ditagih,
+-- tanpa kode promo.
 drop function if exists price_quote(int, int, text, uuid);
+drop function if exists price_quote(int, int, text, uuid, boolean, int);
 create or replace function price_quote(p_guests int, p_shots int, p_promo text default null,
                                        p_event uuid default null, p_unlimited boolean default false,
-                                       p_keep_days int default null)
+                                       p_keep_days int default null, p_ends_at timestamptz default null)
 returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare q jsonb; e events%rowtype; v_credit int := 0; v_sub int; v_disc int := 0; v_err text;
-        v_keep int; v_keep_fee int; v_keep_credit int := 0; v_paid boolean := false;
+        v_keep int; v_keep_fee int; v_keep_credit int := 0; v_paid boolean := false; v_resched int := 0;
 begin
   q := price_quote_raw(p_guests, p_shots, p_unlimited);
   if p_event is not null then
@@ -2647,6 +2682,7 @@ begin
       v_paid := true;
       if e.pay_status = 'paid' then v_credit := e.price_basis; end if;
       v_keep_credit := e.keep_basis;
+      if p_ends_at is not null then v_resched := reschedule_fee(e.ends_at, p_ends_at); end if;
     end if;
   end if;
   v_keep := coalesce(p_keep_days, e.keep_days, 30);
@@ -2666,7 +2702,9 @@ begin
                                  'promo_error', v_err, 'keep_days', v_keep, 'keep_fee', v_keep_fee,
                                  'keep_credit', v_keep_credit,
                                  'keep_due', greatest(0, v_keep_fee - v_keep_credit),
-                                 'amount', v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit));
+                                 'ends_at', case when v_paid then p_ends_at end, 'old_ends_at', e.ends_at,
+                                 'reschedule_fee', v_resched,
+                                 'amount', v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched);
 end $$;
 
 -- Boleh membuat acara: punya peran, atau pembayaran aktif (layanan mandiri). Akun diblokir dan
@@ -2708,7 +2746,8 @@ begin
       unlimited   = unlimited or o.unlimited,
       keep_days   = greatest(keep_days, coalesce(o.keep_days, keep_days)),
       keep_basis  = greatest(keep_basis, o.keep_total),
-      purge_at    = coalesce(ends_at, starts_at, created_at)
+      ends_at     = coalesce(o.ends_at, ends_at),
+      purge_at    = coalesce(o.ends_at, ends_at, starts_at, created_at)
                     + make_interval(days => greatest(keep_days, coalesce(o.keep_days, keep_days))),
       pay_status  = case when o.list_price = 0 and o.keep_total = 0 and pay_status <> 'paid' then 'free' else 'paid' end,
       price_basis = greatest(price_basis, o.list_price),
@@ -2722,18 +2761,22 @@ begin
   values (o.user_id, null, 'bayar_acara', coalesce(o.event_id::text, o.event_name),
           jsonb_build_object('order', o.id, 'amount', o.amount, 'kind', o.kind, 'guests', o.guests,
                              'shots', o.shots, 'name', o.event_name, 'via', coalesce(p_type, o.payment_type),
-                             'unlimited', o.unlimited, 'keep_days', o.keep_days));
+                             'unlimited', o.unlimited, 'keep_days', o.keep_days,
+                             'ends_at', o.ends_at, 'reschedule_fee', o.reschedule_fee));
   return true;
 end $$;
 
 -- Buat pesanan untuk acara: draf (bayar pertama) atau tambah tamu/roll acara yang sudah aktif.
 -- Dipanggil Worker (/api/pay/checkout) dengan sesi pengguna. Pesanan tertunda yang sama (termasuk
 -- metode bayar, paket, dan masa simpan) dipakai ulang; ganti metode = pesanan baru (token Snap terikat).
+-- p_ends_at: jadwal selesai baru (hanya acara aktif), ditagih reschedule_fee dan diterapkan saat lunas.
 drop function if exists start_order(uuid, int, int, text);
 drop function if exists start_order(uuid, int, int, text, text);
+drop function if exists start_order(uuid, int, int, text, text, boolean, int);
 create or replace function start_order(p_event uuid, p_guests int default null, p_shots int default null,
                                        p_promo text default null, p_method text default null,
-                                       p_unlimited boolean default null, p_keep_days int default null)
+                                       p_unlimited boolean default null, p_keep_days int default null,
+                                       p_ends_at timestamptz default null)
 returns jsonb
 language plpgsql security definer set search_path = public as $$
 declare
@@ -2742,6 +2785,7 @@ declare
   v_code text := nullif(upper(trim(coalesce(p_promo, ''))), ''); v_gate jsonb; v_id text;
   v_method text := nullif(lower(trim(coalesce(p_method, ''))), '');
   v_unl boolean; v_keep int; v_keep_total int; v_keep_due int;
+  v_ends timestamptz; v_resched int := 0;
 begin
   perform assert_not_banned();
   select * into s from app_settings;
@@ -2772,16 +2816,28 @@ begin
     if (e.unlimited and not v_unl) or (not v_unl and (v_g < e.max_members or v_r < e.max_shots)) then
       raise exception 'TIDAK_BOLEH_TURUN';
     end if;
-    if v_unl = e.unlimited and v_g = e.max_members and v_r = e.max_shots and v_keep <= e.keep_days then
+    -- Ubah jadwal selesai: harus di masa depan dan setelah waktu mulai
+    if p_ends_at is not null and p_ends_at is distinct from e.ends_at then
+      if p_ends_at <= now() or (e.starts_at is not null and p_ends_at <= e.starts_at) then
+        raise exception 'JADWAL_TIDAK_VALID';
+      end if;
+      v_ends := p_ends_at;
+      v_resched := reschedule_fee(e.ends_at, v_ends);
+    end if;
+    if v_unl = e.unlimited and v_g = e.max_members and v_r = e.max_shots and v_keep <= e.keep_days
+       and v_ends is null then
       raise exception 'TIDAK_ADA_PERUBAHAN';
     end if;
     if v_keep < e.keep_days then v_keep := e.keep_days; v_keep_total := keep_fee(v_keep); end if;
     if e.pay_status = 'paid' then v_credit := e.price_basis; end if;
     v_keep_due := greatest(0, v_keep_total - e.keep_basis);
   end if;
-  -- Status pembuatan acara (Tutup / Hanya acara kecil) juga menahan pembayaran
-  v_gate := can_create_event(v_g, v_r);
-  if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
+  -- Status pembuatan acara (Tutup / Hanya acara kecil) juga menahan pembayaran, tapi hanya bila
+  -- acaranya baru atau membesar; perpanjang masa simpan dan ubah jadwal saja tetap boleh
+  if v_kind = 'new' or v_g > e.max_members or v_r > e.max_shots or (v_unl and not e.unlimited) then
+    v_gate := can_create_event(v_g, v_r);
+    if not (v_gate->>'ok')::boolean then raise exception '%', v_gate->>'code'; end if;
+  end if;
   v_list := (price_quote_raw(v_g, v_r, v_unl)->>'total')::int;
   v_sub := greatest(0, v_list - v_credit);
   -- Kode promo tidak berlaku untuk Unlimited
@@ -2791,8 +2847,9 @@ begin
 
   select * into o from orders
    where event_id = p_event and status = 'pending' and expires_at > now() + interval '1 minute'
-     and guests = v_g and shots = v_r and amount = v_sub - v_disc + v_keep_due
+     and guests = v_g and shots = v_r and amount = v_sub - v_disc + v_keep_due + v_resched
      and unlimited = v_unl and keep_days is not distinct from v_keep
+     and ends_at is not distinct from v_ends
      and coalesce(pay_method, '') = coalesce(v_method, '')
      and coalesce(promo_code, '') = coalesce(v_code, '')
    order by created_at desc limit 1;
@@ -2805,10 +2862,11 @@ begin
     end loop;
     insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, credit,
                         promo_code, promo_discount, amount, expires_at, pay_method,
-                        unlimited, keep_days, keep_fee, keep_total)
+                        unlimited, keep_days, keep_fee, keep_total, ends_at, reschedule_fee)
     values (v_id, p_event, auth.uid(), e.name, v_kind, v_g, v_r, v_list, v_credit,
-            v_code, v_disc, v_sub - v_disc + v_keep_due, now() + make_interval(mins => s.payment_window_min), v_method,
-            v_unl, v_keep, v_keep_due, v_keep_total)
+            v_code, v_disc, v_sub - v_disc + v_keep_due + v_resched,
+            now() + make_interval(mins => s.payment_window_min), v_method,
+            v_unl, v_keep, v_keep_due, v_keep_total, v_ends, v_resched)
     returning * into o;
     if o.amount = 0 then
       perform apply_order_paid(o.id, 'tanpa_biaya');
@@ -3015,9 +3073,9 @@ grant execute on function
   valid_ornament(text), creation_state(), can_create_event(int, int),
   set_creation_mode(text, text, timestamptz, int, int), join_creation_waitlist(boolean),
   admin_capacity(), capacity_tick(), review_event(uuid),
-  price_settings(), price_quote_raw(int, int, boolean), price_quote(int, int, text, uuid, boolean, int),
-  shots_cap(), keep_fee(int),
-  start_order(uuid, int, int, text, text, boolean, int), order_status(text), event_orders(uuid),
+  price_settings(), price_quote_raw(int, int, boolean), price_quote(int, int, text, uuid, boolean, int, timestamptz),
+  shots_cap(), keep_fee(int), reschedule_fee(timestamptz, timestamptz),
+  start_order(uuid, int, int, text, text, boolean, int, timestamptz), order_status(text), event_orders(uuid),
   admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text), valid_slug(text), slug_available(text, uuid), resolve_slug(text)
 to authenticated;

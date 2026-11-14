@@ -263,6 +263,98 @@ Object.assign(ICON, {
   panelTab: svg('<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>', 24),
 });
 
+// Dropdown bergaya aplikasi untuk <select> biasa. <select> asli tetap ada (tersembunyi) sebagai
+// sumber nilai formulir; pilihan memicu "change" di sana, jadi kode formulir tidak berubah.
+// Opsi "Nama — keterangan" ditampilkan dua baris (nama tebal, keterangan kecil).
+export function enhanceSelect(select) {
+  if (select.dataset.enhanced) return;
+  select.dataset.enhanced = "1";
+  select.classList.add("csel-native");
+  select.tabIndex = -1;
+  select.setAttribute("aria-hidden", "true");
+  const id = `csel-${Math.random().toString(36).slice(2, 8)}`;
+  const btn = el(`<button type="button" class="csel-btn" aria-haspopup="listbox" aria-expanded="false" aria-controls="${id}"><span class="csel-val"></span>${ICON.chevronDown}</button>`);
+  const label = select.getAttribute("aria-label") || select.closest("label")?.firstChild?.textContent?.trim() || "";
+  const menu = el(`<div class="csel-menu" role="listbox" id="${id}" hidden></div>`);
+  select.after(btn);
+  document.body.append(menu);
+  const split = (txt) => { const [a, ...b] = txt.split(" — "); return [a, b.join(" — ")]; };
+
+  function sync() {
+    const o = select.selectedOptions[0];
+    const val = o ? split(o.textContent)[0] : "";
+    btn.querySelector(".csel-val").textContent = val;
+    if (label) btn.setAttribute("aria-label", `${label}: ${val}`);
+    btn.disabled = select.disabled;
+  }
+  function build() {
+    menu.innerHTML = [...select.options].map((o, i) => {
+      const [name, desc] = split(o.textContent);
+      return `<button type="button" role="option" data-i="${i}" aria-selected="${o.selected}" tabindex="-1" ${o.disabled ? "disabled" : ""}>
+        <span><b>${esc(name)}</b>${desc ? `<small>${esc(desc)}</small>` : ""}</span><i class="vm-check">${ICON.check}</i></button>`;
+    }).join("");
+  }
+  const items = () => [...menu.querySelectorAll("[role=option]:not([disabled])")];
+  function place() {
+    const r = btn.getBoundingClientRect();
+    menu.style.minWidth = `${r.width}px`;
+    menu.style.left = `${Math.max(12, Math.min(r.left, window.innerWidth - Math.max(r.width, 220) - 12))}px`;
+    const below = window.innerHeight - r.bottom - 16, above = r.top - 16;
+    const up = below < 240 && above > below;
+    menu.style.maxHeight = `${Math.min(360, up ? above : below)}px`;
+    menu.style.top = up ? "" : `${r.bottom + 6}px`;
+    menu.style.bottom = up ? `${window.innerHeight - r.top + 6}px` : "";
+  }
+  function open() {
+    build(); place();
+    menu.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    (menu.querySelector('[aria-selected="true"]') || items()[0])?.focus();
+    menu.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    setTimeout(() => document.addEventListener("pointerdown", outside, true));
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", close);
+  }
+  function close(refocus) {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    btn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("keydown", onKey);
+    window.removeEventListener("scroll", onScroll, true);
+    window.removeEventListener("resize", close);
+    if (refocus === true) btn.focus();
+  }
+  // Gulir di dalam menu boleh; gulir halaman menutup menu
+  const onScroll = (e) => { if (!menu.contains(e.target)) close(); };
+  const outside = (e) => { if (!menu.contains(e.target) && !btn.contains(e.target)) close(); };
+  function onKey(e) {
+    const list = items(), i = list.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); close(true); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); list[Math.min(list.length - 1, i + 1)]?.focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); list[Math.max(0, i - 1)]?.focus(); }
+    else if (e.key === "Home") { e.preventDefault(); list[0]?.focus(); }
+    else if (e.key === "End") { e.preventDefault(); list[list.length - 1]?.focus(); }
+    else if (e.key === "Tab") close();
+  }
+  btn.onclick = () => (menu.hidden ? open() : close());
+  btn.onkeydown = (e) => { if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); open(); } };
+  menu.onclick = (e) => {
+    const b = e.target.closest("[role=option]");
+    if (!b || b.disabled) return;
+    const changed = select.selectedIndex !== Number(b.dataset.i);
+    select.selectedIndex = Number(b.dataset.i);
+    sync(); close(true);
+    if (changed) select.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  select.addEventListener("change", sync);
+  // Menu ditempel di body: buang bila <select>-nya sudah tidak ada di halaman
+  const obs = new MutationObserver(() => { if (!select.isConnected) { close(); menu.remove(); obs.disconnect(); } });
+  obs.observe(document.body, { childList: true, subtree: true });
+  sync();
+}
+
 // Lingkaran inisial nama (avatar sederhana tanpa foto)
 export const initial = (name) => esc(((name || "?").trim()[0] || "?").toUpperCase());
 

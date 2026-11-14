@@ -325,7 +325,6 @@ a.lp-link[aria-current="page"] { color: var(--primary-text); }
 .album-filter { padding: 0 .5rem .75rem; }
 .album-filter .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; gap: .5rem; }
 .album-filter .chip { flex: none; min-height: 40px; padding: .55rem 1rem; font-size: .875rem; white-space: nowrap; }
-select.chip.owner-filter { width: auto; appearance: none; -webkit-appearance: none; padding-right: 1rem; }
 .album-progress {
   display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .5rem; margin: 0 .5rem .75rem; padding: .65rem .875rem;
   background: var(--mint-soft); color: var(--mint-text); border: 0; border-radius: 14px; font-size: .8rem;
@@ -429,7 +428,10 @@ html.dark .tile img { background: #1a2233; }
 .status-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
 .btn.sc-light { background: #fff7ec; color: #1f2a44; border-color: #fff7ec; font-weight: 800; }
 .btn.sc-outline { background: transparent; color: #f3eee6; border: 2px solid #5b6475; font-weight: 800; }
-.status-more { display: flex; flex-wrap: wrap; gap: .25rem 1.25rem; }
+/* Satu baris; bila layar terlalu sempit, digulir menyamping (bukan turun baris) */
+.status-more { display: flex; flex-wrap: nowrap; gap: 1.1rem; overflow-x: auto; scrollbar-width: none; }
+.status-more::-webkit-scrollbar { display: none; }
+.status-more .linklike { flex: none; white-space: nowrap; }
 .status-more .linklike { color: #f3eee6; text-decoration-color: #ff9a78; display: inline-flex; align-items: center; gap: .35rem; font-size: .85rem; min-height: 44px; }
 .subtabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); background: var(--bg-2); padding: 4px; }
 .subtabs button { padding: .6rem .25rem; font-size: .8rem; }
@@ -939,6 +941,9 @@ html.dark .tile img { background: #1a2233; }
 .cr-stepper button:disabled { opacity: .4; cursor: not-allowed; }
 .cr-stepper input { width: 5.5ch; text-align: center; border: 0; background: transparent; font-family: "Plus Jakarta Sans", system-ui, sans-serif; font-size: 1.7rem; font-weight: 600; padding: 0; min-height: 44px; }
 .cr-stepper.small input { font-size: 1.35rem; }
+/* Tanpa panah naik-turun bawaan browser di tengah stepper (sudah ada tombol − dan +) */
+.cr-stepper input { -moz-appearance: textfield; appearance: textfield; }
+.cr-stepper input::-webkit-inner-spin-button, .cr-stepper input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 .cr-toggles { background: var(--card); border: 1.5px solid var(--line); border-radius: 16px; display: grid; }
 .cr-toggle { display: flex; align-items: center; gap: .75rem; padding: .55rem .85rem; }
 .cr-toggle + .cr-toggle { border-top: 1px solid var(--line); }
@@ -1086,6 +1091,10 @@ html.dark .tile img { background: #1a2233; }
 .cr-sum-total b { font-family: "Plus Jakarta Sans", system-ui, sans-serif; font-size: 1.25rem; font-weight: 600; }
 .up-section { display: grid; gap: .45rem; }
 .up-section select { width: 100%; }
+.up-ends { display: flex; gap: .5rem; align-items: center; }
+.up-ends input { flex: 1; min-width: 0; }
+.up-ends .btn { flex: none; }
+.up-section .pay-err { margin: 0; }
 .up-tiers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .up-tier { font: inherit; color: var(--text); text-align: left; display: grid; gap: 2px; padding: .6rem .7rem; min-height: 52px; border-radius: 14px; cursor: pointer; background: var(--card); border: 1.5px solid var(--line); }
 .up-tier b { font-size: .88rem; }

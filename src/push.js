@@ -26,7 +26,16 @@ function keyBytes(b64) {
 async function subscribePush() {
   const perm = await Notification.requestPermission();
   if (perm !== "granted") throw new Error(t("Izin notifikasi tidak diberikan."));
-  const reg = await navigator.serviceWorker.ready;
+  // serviceWorker.ready tidak pernah selesai bila belum ada service worker terdaftar
+  // (mode dev, atau pendaftaran gagal): daftarkan sendiri dan beri batas waktu
+  // (di mode dev tidak didaftarkan: cache-nya akan mengganggu hot reload)
+  if (import.meta.env.PROD && !(await navigator.serviceWorker.getRegistration())) {
+    await navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
+  const reg = await Promise.race([
+    navigator.serviceWorker.ready,
+    new Promise((_, no) => setTimeout(() => no(new Error(t("Notifikasi belum bisa diaktifkan. Muat ulang halaman lalu coba lagi."))), 10000)),
+  ]);
   let sub = await reg.pushManager.getSubscription();
   if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(vapidKey) });
   const j = sub.toJSON();

@@ -20,7 +20,7 @@ Ketiganya boleh dibiarkan selamanya.
 - [x] Zona aktif di Cloudflare.
 - [x] Worker `disposable-asiig` → **Domains** → Add Domain → `titippotret.my.id`.
       SSL valid, `/api/r2/health` siap.
-- [ ] IDCloudHost → Keamanan → **kunci transfer** domain; nyalakan perpanjangan otomatis.
+- [x] IDCloudHost → Keamanan → **kunci transfer** domain; nyalakan perpanjangan otomatis.
 
 ## 2. Kode ✅ (tinggal commit + push)
 
@@ -46,7 +46,7 @@ Ketiganya boleh dibiarkan selamanya.
 - [x] Settings → Payment → **Payment Notification URL** → `https://titippotret.my.id/api/pay/webhook`.
 - [x] Settings → Snap Preferences → redirect URL Finish/Unfinish/Error: kosongkan atau ganti ke domain baru.
 - [x] Snap Preferences → nama tampilan "Jepretin" → **TitipPotret**.
-- [ ] Profil merchant → URL website → `https://titippotret.my.id`. Bila sedang/akan mengajukan
+- [x] Profil merchant → URL website → `https://titippotret.my.id`. Bila sedang/akan mengajukan
       aktivasi produksi, ajukan dengan domain baru.
 
 ### Google Cloud Console → OAuth consent screen (Branding)
@@ -62,7 +62,8 @@ Ketiganya boleh dibiarkan selamanya.
 - [x] Login Google → kembali ke domain baru.
 - [x] Layar Google menampilkan "TitipPotret" (setelah Branding diganti).
 - [ ] Buat acara → Panel → salin link undangan → berawalan `https://titippotret.my.id`.
-- [ ] Buka link `?kode=` dan link slug di HP lain → masuk acara.
+- [x] Buka link slug (`/wisuda-2026`) di HP lain → masuk acara.
+- [ ] Buka link `?kode=` di HP lain → masuk acara.
 - [ ] Potret → foto terkirim; mode pesawat → potret → online → terkirim sendiri.
 - [ ] Album, thumbnail, dan unduh berfungsi.
 - [x] Pembayaran sandbox → simulator → kembali ke Panel → acara aktif; Midtrans →

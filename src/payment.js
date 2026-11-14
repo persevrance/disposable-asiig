@@ -2,8 +2,11 @@
 // pembayaran", "Tambah tamu"). Harga dihitung ulang server (price_quote / start_order);
 // token Snap dibuat Worker (/api/pay/checkout). Server Key tidak pernah sampai ke browser.
 import { supabase, rpc, friendly } from "./supabase.js";
-import { quote, rp, keepFee, shotsCap, tiers } from "./price.js";
-import { el, esc, toast, modal, fmtRange, ICON } from "./ui.js";
+import { quote, rp, keepFee, shotsCap, rescheduleFee } from "./price.js";
+
+// Pilihan cepat jatah potretan, sama dengan wizard buat acara
+const R_PRESETS = [12, 24, 27, 36, 50];
+import { el, esc, toast, modal, fmtRange, fmtDate, toLocalInput, fromLocalInput, ICON } from "./ui.js";
 
 let cfgCache = null;
 export async function priceSettings(force = false) {
@@ -73,7 +76,7 @@ export function mountPayment(host, ev, opts = {}) {
   const guests = opts.guests ?? ev.max_members, shots = opts.shots ?? ev.max_shots;
   const unlimited = opts.unlimited ?? Boolean(ev.unlimited);
   const keepDays = opts.keepDays ?? ev.keep_days ?? 30;
-  const upgrade = ev.pay_status !== "draft";
+  const endsAt = opts.endsAt || null;      // jadwal selesai baru (Upgrade acara), ditagih biaya ubah jadwal  const upgrade = ev.pay_status !== "draft";
   let promo = "", order = null, timer = 0, poll = 0, stopped = false, method = loadMethod();
   const stop = () => { stopped = true; clearInterval(timer); clearInterval(poll); };
 
@@ -81,14 +84,14 @@ export function mountPayment(host, ev, opts = {}) {
     stop(); stopped = false;
     host.innerHTML = `<p class="hint">Menghitung harga…</p>`;
     let q;
-    try { q = await rpc("price_quote", { p_guests: guests, p_shots: shots, p_promo: promo || null, p_event: ev.event_id, p_unlimited: unlimited, p_keep_days: keepDays }); }
+    try { q = await rpc("price_quote", { p_guests: guests, p_shots: shots, p_promo: promo || null, p_event: ev.event_id, p_unlimited: unlimited, p_keep_days: keepDays, p_ends_at: endsAt }); }
     catch (e) { host.innerHTML = `<p class="hint">${esc(friendly(e))}</p>`; return; }
     const cfg = await priceSettings();
     host.innerHTML = `
       <div class="pay">
         <div class="pay-head">
           ${opts.onBack ? `<button type="button" class="round-btn ghost-round" data-act="back" aria-label="Kembali">${ICON.back}</button>` : ""}
-          <h3>${upgrade ? "Tambah tamu atau potretan" : "Pembayaran"}</h3>
+          <h3>${upgrade ? "Upgrade acara" : "Pembayaran"}</h3>
         </div>
         <div class="pay-card pay-event">
           <span class="pay-thumb" aria-hidden="true">${ICON.camera}</span>
@@ -104,6 +107,7 @@ export function mountPayment(host, ev, opts = {}) {
           ${q.promo_discount ? `<div class="minus"><span>Kode promo ${esc(promo.toUpperCase())}</span><span>−${rp(q.promo_discount)}</span></div>` : ""}
           ${q.keep_fee ? `<div><span>Simpan foto ${q.keep_days} hari <small>(${q.keep_days >= cfg.keep_flat_days ? "paket" : `${q.keep_days - cfg.keep_free_days} hari × ${rp(cfg.keep_per_day)}`})</small></span><span>${rp(q.keep_fee)}</span></div>` : `<div><span>Simpan foto ${q.keep_days} hari</span><span>Gratis</span></div>`}
           ${q.keep_credit ? `<div class="minus"><span>Masa simpan sudah dibayar</span><span>−${rp(Math.min(q.keep_credit, q.keep_fee))}</span></div>` : ""}
+          ${q.reschedule_fee ? `<div><span>Ubah jadwal selesai <small>(ke ${esc(fmtDate(q.ends_at))})</small></span><span>${rp(q.reschedule_fee)}</span></div>` : ""}
           <div class="pay-total"><span>Total</span><b>${rp(q.amount)}</b></div>
           <form class="pay-promo" novalidate>
             <label class="sr-only" for="pay-promo">Kode promo</label>
@@ -121,7 +125,7 @@ export function mountPayment(host, ev, opts = {}) {
           <small class="hint">Jendela Midtrans langsung membuka metode ini.</small>
         </div>` : ""}
         <p class="pay-note">${ICON.shield}<span>${upgrade
-          ? "Tamu dan potretan bertambah begitu pembayaran terkonfirmasi. Tamu yang sudah masuk tidak terganggu."
+          ? "Perubahan berlaku begitu pembayaran terkonfirmasi. Tamu yang sudah masuk tidak terganggu."
           : "Acara tersimpan sebagai draf. Begitu pembayaran terkonfirmasi, acara langsung aktif dan QR siap dibagikan."}</span></p>
         <div class="pay-actions">
           <button type="button" class="btn primary" data-act="pay">${q.amount ? `Bayar ${rp(q.amount)} dengan ${methodName(method)}` : "Aktifkan tanpa biaya"}</button>
@@ -157,7 +161,7 @@ export function mountPayment(host, ev, opts = {}) {
   async function pay(btn, cfg, amount) {
     btn.disabled = true; btn.textContent = "Menyiapkan pembayaran…";
     try {
-      order = await payFetch("checkout", { event_id: ev.event_id, guests, shots, promo: promo || null, method: amount ? method : null, unlimited, keep_days: keepDays });
+      order = await payFetch("checkout", { event_id: ev.event_id, guests, shots, promo: promo || null, method: amount ? method : null, unlimited, keep_days: keepDays, ends_at: endsAt });
       if (order.status === "paid") return done();
       await openSnap(cfg);
       waiting();
@@ -262,25 +266,32 @@ export function openPayment(ev, opts = {}) {
 export async function openUpgrade(ev, { members = null, onPaid } = {}) {
   const cfg = await priceSettings();
   const cap = shotsCap(cfg);
-  const T = tiers(cfg);
-  const curTier = T.findIndex((t) => ev.max_shots <= t.to);
   const keepOpts = [...new Set([ev.keep_days, cfg.keep_free_days, Math.min(45, cfg.keep_max_days), cfg.keep_flat_days, cfg.keep_max_days])]
     .filter((d) => d >= ev.keep_days && d <= cfg.keep_max_days).sort((a, b) => a - b);
-  const st = { g: ev.max_members, r: ev.max_shots, unl: Boolean(ev.unlimited), keep: ev.keep_days || cfg.keep_free_days };
+  // ends: jadwal selesai baru (ISO) atau null = tidak diubah
+  // ends: jadwal selesai baru (ISO) atau null = tidak diubah
+  const st = { g: ev.max_members, r: ev.max_shots, unl: Boolean(ev.unlimited), keep: ev.keep_days || cfg.keep_free_days, ends: null };
   const { box, close } = modal(`<div class="dialog pay-host"></div>`);
   const host = box.querySelector(".pay-host");
+  const endsErr = () => {
+    if (!st.ends) return "";
+    if (new Date(st.ends) <= new Date()) return "Jadwal selesai harus di masa depan.";
+    if (ev.starts_at && new Date(st.ends) <= new Date(ev.starts_at)) return "Jadwal selesai harus setelah waktu mulai.";
+    return "";
+  };
   function render() {
     const q = quote(cfg, st.g, st.r, st.unl);
     const credit = ev.pay_status === "paid" ? ev.price_basis : 0;
     const keepDue = Math.max(0, keepFee(cfg, st.keep) - (ev.keep_basis || 0));
-    const diff = Math.max(0, q.total - credit) + keepDue;
-    const same = st.unl === Boolean(ev.unlimited) && st.g === ev.max_members && st.r === ev.max_shots && st.keep === ev.keep_days;
-    const tierBtn = (t, i) => {
-      const now = i === curTier, below = i < curTier;
-      const target = Math.max(t.to, ev.max_shots);
-      return `<button type="button" class="up-tier" role="radio" data-tier="${target}" aria-checked="${!st.unl && st.r === target}" ${below || st.unl ? "disabled" : ""}>
-        <b>${t.from}–${t.to} potretan</b><small>${rp(t.rate)}/tamu${now ? " · sekarang" : ""}</small></button>`;
-    };
+    const resched = rescheduleFee(cfg, ev.ends_at, st.ends);
+    const bad = endsErr();
+    const diff = Math.max(0, q.total - credit) + keepDue + resched;
+    const same = st.unl === Boolean(ev.unlimited) && st.g === ev.max_members && st.r === ev.max_shots && st.keep === ev.keep_days && !st.ends;
+    // Potretan seperti saat pendaftaran: stepper − / angka / + dan pilihan cepat,
+    // tidak boleh di bawah jatah yang aktif sekarang
+    const minR = ev.max_shots;
+    const presets = [...new Set([minR, ...R_PRESETS.filter((v) => v > minR && v <= cap)])];
+    const rate = st.unl ? 0 : quote(cfg, 1, st.r).rate;
     host.innerHTML = `
       <div class="pay upgrade">
         ${!ev.unlimited && members !== null && members >= ev.max_members ? `<p class="pay-warn" role="status">${ICON.bell}<span><b>Peserta sudah penuh (${members}/${ev.max_members}).</b> Tamu baru tertahan di layar gabung.</span></p>` : ""}
@@ -295,9 +306,14 @@ export async function openUpgrade(ev, { members = null, onPaid } = {}) {
           </div>
         </div>
         <div class="up-section">
-          <b id="up-tier-l">Potretan per tamu</b>
-          <div class="up-tiers" role="radiogroup" aria-labelledby="up-tier-l">${T.map(tierBtn).join("")}</div>
-          <small class="hint">Naik ke rentang berikutnya; berlaku juga untuk tamu lama. Maksimal ${cap} potretan.</small>
+          <b id="up-shots-l">Potretan per tamu</b>
+          <div class="cr-stepper">
+            <button type="button" data-shots-by="-1" aria-label="Kurangi potretan" ${st.unl || st.r <= minR ? "disabled" : ""}>−</button>
+            <input type="number" data-act="shots" inputmode="numeric" min="${minR}" max="${cap}" value="${st.r}" aria-labelledby="up-shots-l" ${st.unl ? "disabled" : ""} />
+            <button type="button" data-shots-by="1" aria-label="Tambah potretan" ${st.unl || st.r >= cap ? "disabled" : ""}>+</button>
+          </div>
+          <div class="chips">${presets.map((v) => `<button type="button" class="chip" data-shots="${v}" aria-pressed="${!st.unl && st.r === v}" ${st.unl ? "disabled" : ""}>${v}${v === minR ? " · sekarang" : ""}</button>`).join("")}</div>
+          <small class="hint">Minimal ${minR} (jatah sekarang), maksimal ${cap}. Berlaku juga untuk tamu lama.${st.unl ? "" : ` Tarif per tamu untuk isi ini: <b>${rp(rate)}</b>`}</small>
         </div>
         <button type="button" class="up-unl" role="switch" data-act="unl" aria-checked="${st.unl}">
           <span><b>Unlimited tamu & potretan</b><small>${rp(cfg.price_unlimited)} · tanpa diskon & promo · album dibuka setelah acara selesai</small></span>
@@ -307,14 +323,24 @@ export async function openUpgrade(ev, { members = null, onPaid } = {}) {
           <label for="up-keep"><b>Simpan foto</b></label>
           <select id="up-keep" data-act="keep">${keepOpts.map((d) => `<option value="${d}" ${d === st.keep ? "selected" : ""}>${d} hari${d === ev.keep_days ? " (sekarang)" : ` · ${keepFee(cfg, d) ? rp(keepFee(cfg, d)) : "gratis"}`}</option>`).join("")}</select>
         </div>` : ""}
+        <div class="up-section">
+          <label for="up-ends"><b>Jadwal selesai</b></label>
+          <div class="up-ends">
+            <input type="datetime-local" id="up-ends" data-act="ends" value="${toLocalInput(st.ends || ev.ends_at)}" min="${toLocalInput(new Date().toISOString())}" />
+            ${st.ends ? `<button type="button" class="btn small ghost" data-act="ends-reset">Batal ubah</button>` : ""}
+          </div>
+          ${bad ? `<p class="pay-err" role="alert">${bad}</p>` : ""}
+          <small class="hint">Sekarang: ${ev.ends_at ? esc(fmtDate(ev.ends_at)) : "tanpa jadwal selesai"}. Geser tanggal ${rp(cfg.reschedule_per_day ?? 3890)} per hari; ganti jam di hari yang sama ${rp(cfg.reschedule_same_day ?? 1890)}.</small>
+        </div>
         <div class="pay-card pay-lines soft">
-          <div><span>${st.unl ? "Unlimited" : `Paket baru (${st.g} × ${st.r})`}</span><span>${q.total ? rp(q.total) : "Gratis"}</span></div>
+          <div><span>${st.unl ? "Unlimited" : `Paket (${st.g} × ${st.r})`}</span><span>${q.total ? rp(q.total) : "Gratis"}</span></div>
           ${credit ? `<div><span>Sudah dibayar (sebelum promo)</span><span>−${rp(credit)}</span></div>` : ""}
           ${keepDue ? `<div><span>Perpanjang simpan ke ${st.keep} hari</span><span>${rp(keepDue)}</span></div>` : ""}
+          ${resched ? `<div><span>Ubah jadwal selesai</span><span>${rp(resched)}</span></div>` : ""}
           <div class="pay-total"><span>Bayar selisih</span><b>${rp(diff)}</b></div>
         </div>
         <div class="pay-actions">
-          <button type="button" class="btn primary" data-act="next" ${same ? "disabled" : ""}>${same ? "Pilih upgrade" : diff ? `Lanjut bayar ${rp(diff)}` : "Simpan tanpa biaya"}</button>
+          <button type="button" class="btn primary" data-act="next" ${same || bad ? "disabled" : ""}>${same ? "Pilih upgrade" : diff ? `Lanjut bayar ${rp(diff)}` : "Simpan tanpa biaya"}</button>
           <button type="button" class="btn ghost" data-act="close">Nanti saja</button>
         </div>
       </div>`;
@@ -322,12 +348,22 @@ export async function openUpgrade(ev, { members = null, onPaid } = {}) {
       st.g = Math.min(cfg.max_members_limit, Math.max(ev.max_members, st.g + Number(b.dataset.by)));
       render();
     }));
-    host.querySelectorAll("[data-tier]").forEach((b) => (b.onclick = () => { st.r = Number(b.dataset.tier); render(); }));
+    const setShots = (v) => { st.r = Math.min(cap, Math.max(minR, Math.round(Number(v) || minR))); render(); };
+    host.querySelectorAll("[data-shots-by]").forEach((b) => (b.onclick = () => setShots(st.r + Number(b.dataset.shotsBy))));
+    host.querySelectorAll("[data-shots]").forEach((b) => (b.onclick = () => setShots(b.dataset.shots)));
+    host.querySelector('[data-act="shots"]')?.addEventListener("change", (e) => setShots(e.target.value));
     host.querySelector('[data-act="unl"]')?.addEventListener("click", () => { st.unl = !st.unl; render(); });
     host.querySelector('[data-act="keep"]')?.addEventListener("change", (e) => { st.keep = Number(e.target.value); render(); });
+    host.querySelector('[data-act="ends"]').addEventListener("change", (e) => {
+      const v = fromLocalInput(e.target.value);
+      // Sama dengan jadwal sekarang (atau dikosongkan) = tidak diubah
+      st.ends = v && !(ev.ends_at && new Date(v).getTime() === new Date(ev.ends_at).getTime()) ? v : null;
+      render();
+    });
+    host.querySelector('[data-act="ends-reset"]')?.addEventListener("click", () => { st.ends = null; render(); });
     host.querySelector('[data-act="close"]').onclick = close;
     host.querySelector('[data-act="next"]').onclick = () => {
-      mountPayment(host, ev, { guests: st.g, shots: st.r, unlimited: st.unl, keepDays: st.keep, onBack: render, onPaid: (o) => { close(); onPaid?.(o); } });
+      mountPayment(host, ev, { guests: st.g, shots: st.r, unlimited: st.unl, keepDays: st.keep, endsAt: st.ends, onBack: render, onPaid: (o) => { close(); onPaid?.(o); } });
     };
   }
   render();

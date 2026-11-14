@@ -23,6 +23,18 @@ export function keepFee(cfg, days) {
   return (days - cfg.keep_free_days) * cfg.keep_per_day;
 }
 
+// Biaya ubah jadwal selesai, sama dengan reschedule_fee() di database: tanggal (zona Asia/Jakarta)
+// bergeser N hari = N × per hari; hanya jam di hari yang sama = biaya tetap; sebelumnya tanpa jadwal = 1 hari.
+const jktDay = (d) => Math.floor((new Date(d).getTime() + 7 * 3600e3) / 86400e3);
+export function rescheduleFee(cfg, oldEnd, newEnd) {
+  if (!cfg.payments_enabled || !newEnd) return 0;
+  if (oldEnd && new Date(oldEnd).getTime() === new Date(newEnd).getTime()) return 0;
+  const perDay = cfg.reschedule_per_day ?? 3890, sameDay = cfg.reschedule_same_day ?? 1890;
+  if (!oldEnd) return perDay;
+  const days = Math.abs(jktDay(newEnd) - jktDay(oldEnd));
+  return days ? days * perDay : sameDay;
+}
+
 // Batas potretan per tamu (rentang harga tertinggi saat pembayaran aktif)
 export const shotsCap = (cfg) => cfg.shots_cap || cfg.max_shots_limit || 100;
 

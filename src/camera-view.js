@@ -511,11 +511,10 @@ export async function renderCamera(root, status, go) {
     if (luma >= 0 && luma < 3) darkSince ||= Date.now(); else darkSince = 0;
     const dark = darkSince && Date.now() - darkSince > 3000;
     if (dark && !reportedDark) { reportedDark = true; report("DARK_FRAMES", `luma=${luma} ${diag()}`); }
-    diagBox.hidden = !(dark || debug);
-    if (!diagBox.hidden) {
-      diagBox.textContent = (dark ? t("Gambar dari kamera hitam. Tutup lensa? Coba balik kamera.") + " " : "") +
-        `frames=${frames} luma=${luma} ` + diag();
-    }
+    // Masalah tetap dilaporkan ke server, tapi tidak ditampilkan di atas jendela bidik
+    // (hanya muncul dalam mode debug)
+    diagBox.hidden = !debug;
+    if (debug) diagBox.textContent = `frames=${frames} luma=${luma} ` + diag();
   }
 
   function startPreview() {
@@ -536,7 +535,7 @@ export async function renderCamera(root, status, go) {
       placeholder.hidden = true;
     } else {
       report("BLACK_VIEWFINDER", diag());
-      msg.textContent = t("Jendela bidik tetap hitam. Matikan Mode Daya Rendah (Pengaturan -> Baterai) lalu coba lagi, atau gunakan tombol aplikasi kamera di bawah.") + " " + diag();
+      msg.textContent = t("Jendela bidik tetap hitam. Matikan Mode Daya Rendah (Pengaturan -> Baterai) lalu coba lagi, atau gunakan tombol aplikasi kamera di bawah.");
       fileLabel.hidden = false;
     }
     refresh();
@@ -568,7 +567,7 @@ export async function renderCamera(root, status, go) {
     } catch (e) {
       const help = t(CAMERA_HELP[e.code] || CAMERA_HELP.OTHER);
       report(e.code || "OTHER", `${e.detail || e.message || ""} ${diag()}`);
-      msg.textContent = help + (e.detail ? ` (${e.detail})` : "") + " " + t("Sementara itu, foto bisa diambil dengan tombol di bawah.");
+      msg.textContent = help + " " + t("Sementara itu, foto bisa diambil dengan tombol di bawah.");
       openBtn.textContent = t("Coba lagi");
       openBtn.disabled = false;
       fileLabel.hidden = false;
