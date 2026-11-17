@@ -76,17 +76,21 @@ export function mountPayment(host, ev, opts = {}) {
   const guests = opts.guests ?? ev.max_members, shots = opts.shots ?? ev.max_shots;
   const unlimited = opts.unlimited ?? Boolean(ev.unlimited);
   const keepDays = opts.keepDays ?? ev.keep_days ?? 30;
-  const endsAt = opts.endsAt || null;      // jadwal selesai baru (Upgrade acara), ditagih biaya ubah jadwal  const upgrade = ev.pay_status !== "draft";
+  const endsAt = opts.endsAt || null;      // jadwal selesai baru (Upgrade acara), ditagih biaya ubah jadwal
+  const upgrade = ev.pay_status !== "draft";
   let promo = "", order = null, timer = 0, poll = 0, stopped = false, method = loadMethod();
   const stop = () => { stopped = true; clearInterval(timer); clearInterval(poll); };
 
   async function summary() {
     stop(); stopped = false;
     host.innerHTML = `<p class="hint">Menghitung harga…</p>`;
-    let q;
-    try { q = await rpc("price_quote", { p_guests: guests, p_shots: shots, p_promo: promo || null, p_event: ev.event_id, p_unlimited: unlimited, p_keep_days: keepDays, p_ends_at: endsAt }); }
-    catch (e) { host.innerHTML = `<p class="hint">${esc(friendly(e))}</p>`; return; }
-    const cfg = await priceSettings();
+    let q, cfg;
+    try {
+      [q, cfg] = await Promise.all([
+        rpc("price_quote", { p_guests: guests, p_shots: shots, p_promo: promo || null, p_event: ev.event_id, p_unlimited: unlimited, p_keep_days: keepDays, p_ends_at: endsAt }),
+        priceSettings(),
+      ]);
+    } catch (e) { host.innerHTML = `<p class="hint">${esc(friendly(e))}</p>`; return; }
     host.innerHTML = `
       <div class="pay">
         <div class="pay-head">
