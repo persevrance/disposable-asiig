@@ -386,24 +386,55 @@ export function fmtRange(start, end) {
 export const badge = (name, tone = "coral", size = "") =>
   `<span class="icon-badge ${tone} ${size}" aria-hidden="true">${ICON[name]}</span>`;
 
-// Logo aplikasi (sama dengan public/icon.svg, tanpa latar)
-// Logo TitipPotret: label titipan yang juga kamera (lubang tali, lampu kilat, lensa).
-// dark = versi untuk latar gelap (badan krem, detail biru tinta).
+// Logo TitipPotret, sama dengan paket logo resmi (public/logo.svg): label titipan yang juga
+// kamera (lubang tali, lampu kilat, lensa). dark = versi untuk latar gelap (badan krem, detail biru tinta).
+// Tema gelap aplikasi menukar warna lewat CSS (brand.css), kecuali yang diberi kelas on-dark.
 export const BRAND_TAG_PATH = "M34 12 H82 Q90 12 90 20 V80 Q90 88 82 88 H34 L10 50 Z";
-export function brandMark(size = 42, { dark = false, label = "" } = {}) {
+const markShapes = (dark) => {
   const body = dark ? "#FFF7EC" : "#1F2A44";
   const cut = dark ? "#1F2A44" : "#FFF7EC";
-  const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
-  return `<svg class="brand-mark${dark ? " on-dark" : ""}" width="${size}" height="${size}" viewBox="0 0 100 100" ${a11y}>
-  <path d="${BRAND_TAG_PATH}" fill="${body}"/>
+  return `<path d="${BRAND_TAG_PATH}" fill="${body}"/>
   <circle cx="24" cy="50" r="4.5" fill="${cut}"/>
   <rect x="72" y="19" width="10" height="6" rx="2" fill="#E8603C"/>
   <circle cx="60" cy="50" r="18" fill="${cut}"/>
   <circle cx="60" cy="50" r="10" fill="#E8603C"/>
-  <circle cx="56.5" cy="46.5" r="3" fill="${cut}"/>
+  <circle class="hl" cx="56.5" cy="46.5" r="3" fill="#FFF7EC"/>`;
+};
+export function brandMark(size = 42, { dark = false, label = "" } = {}) {
+  const a11y = label ? `role="img" aria-label="${label}"` : 'aria-hidden="true"';
+  return `<svg class="brand-mark${dark ? " on-dark" : ""}" width="${size}" height="${size}" viewBox="0 0 100 100" ${a11y}>
+  ${markShapes(dark)}
 </svg>`;
 }
-// Wordmark: "Titip" Medium + "Potret" ExtraBold
-export const WORDMARK = '<span class="wordmark"><span class="wm-a">Titip</span><span class="wm-b">Potret</span></span>';
-export const brandLockup = (size = 40, opts) =>
-  `<span class="brand-lockup">${brandMark(size, opts)}${WORDMARK}</span>`;
+
+// Wordmark resmi "Titip" Medium + "Potret" ExtraBold sebagai kurva (dari paket logo), jadi
+// bentuknya sama di semua perangkat tanpa bergantung font. Koordinat: huruf x 18.34–488.48,
+// puncak kapital y 16, garis dasar 88.75, ekor "p" sampai 109.16.
+export const WORDMARK_PATH = "M18.34 25.52H41.54V88.75H52.43V25.52H75.52V16H18.34Z M81.68 88.75H91.98V37.19H81.68ZM86.8 28.3C90.46 28.3 93.35 25.52 93.35 22.01C93.35 18.44 90.46 15.66 86.8 15.66C83.14 15.66 80.31 18.44 80.31 22.01C80.31 25.52 83.14 28.3 86.8 28.3Z M126.45 37.19H116V23.13H105.65V37.19H96.57V45.69H105.65V76.45C105.65 84.75 110.29 88.75 119.96 88.75H126.45V80.26H121.42C117.32 80.26 116 78.94 116 75.13V45.69H126.45Z M132.61 88.75H142.91V37.19H132.61ZM137.73 28.3C141.4 28.3 144.28 25.52 144.28 22.01C144.28 18.44 141.4 15.66 137.73 15.66C134.07 15.66 131.24 18.44 131.24 22.01C131.24 25.52 134.07 28.3 137.73 28.3Z M152.53 109.16H162.83V80.99H162.98C166.45 86.9 171.96 89.78 178.7 89.78C192.13 89.78 201.07 78.94 201.07 62.97C201.07 47.05 192.08 36.17 178.75 36.17C172.06 36.17 166.06 38.95 162.79 44.61H162.64V37.19H152.53ZM176.6 80.89C167.81 80.89 162.15 73.81 162.15 62.97C162.15 52.13 167.81 45 176.6 45C184.9 45 190.62 51.3 190.62 62.97C190.62 74.59 184.9 80.89 176.6 80.89Z M207.03 88.75H224.6V65.22H236.71C253.56 65.22 264.2 55.7 264.2 40.61C264.2 25.52 253.66 16 236.81 16H207.03ZM224.6 50.62V30.55H235.59C242.62 30.55 247.06 34.41 247.06 40.61C247.06 46.76 242.62 50.62 235.59 50.62Z M293.94 89.93C310.1 89.93 321.04 79.33 321.04 62.97C321.04 46.71 310.1 36.02 293.94 36.02C277.78 36.02 266.79 46.71 266.79 62.97C266.79 79.33 277.78 89.93 293.94 89.93ZM293.94 76.55C288.03 76.55 283.83 71.71 283.83 62.97C283.83 54.28 288.08 49.4 293.94 49.4C299.8 49.4 304.05 54.28 304.05 62.97C304.05 71.71 299.8 76.55 293.94 76.55Z M358.74 37.19H348.14V23.13H331.3V37.19H322.51V50.18H331.3V74.25C331.3 84.26 336.86 88.75 349.22 88.75H358.74V75.77H352.93C349.17 75.77 348.14 74.74 348.14 71.42V50.18H358.74Z M363.48 88.75H380.27V62.34C380.27 55.01 384.42 50.81 390.43 50.81C392.87 50.81 395.85 50.91 397.07 50.96V37.09C395.7 37.04 394.29 37 392.48 37C385.6 37 381.74 39.73 379.88 46.27H379.74V37.19H363.48Z M425.25 89.93C438.28 89.93 448.68 82.65 450.59 72.25H435.5C434.28 75.67 430.76 77.82 425.83 77.82C419.19 77.82 415.29 73.67 415.09 67.12H450.98V62.58C450.98 46.96 440.29 36.02 424.81 36.02C409.52 36.02 398.68 47.25 398.68 62.97C398.68 78.7 409.43 89.93 425.25 89.93ZM415.19 57.06C415.92 51.64 419.58 48.42 425.25 48.42C430.86 48.42 434.57 51.64 435.3 57.06Z M488.48 37.19H477.88V23.13H461.04V37.19H452.25V50.18H461.04V74.25C461.04 84.26 466.61 88.75 478.96 88.75H488.48V75.77H482.67C478.91 75.77 477.88 74.74 477.88 71.42V50.18H488.48Z";
+const WM = { x: 18.34, w: 470.14, cap: 16, base: 88.75 };
+// Wordmark saja (mis. kaki halaman): tinggi mengikuti font-size, warna mengikuti color
+export const WORDMARK = `<svg class="wordmark" viewBox="16 13 475 99" role="img" aria-label="TitipPotret"><path d="${WORDMARK_PATH}" fill="currentColor"/></svg>`;
+// Lockup horizontal resmi (public/logo.svg) dalam satuan simbol 100×100: wordmark
+// diskalakan 0,625 dan digeser (101.25, 17.26), sehingga huruf kapital tepat di tengah simbol.
+// size = tinggi simbol dalam px.
+export const brandLockup = (size = 40, { dark = false } = {}) =>
+  `<span class="brand-lockup"><svg class="brand-mark${dark ? " on-dark" : ""}" width="${Math.round(size * 4.14)}" height="${size}" viewBox="0 0 414 100" aria-hidden="true">
+  ${markShapes(dark)}
+  <path transform="translate(101.25 17.26) scale(.625)" d="${WORDMARK_PATH}" fill="${dark ? "#FFF7EC" : "#1F2A44"}"/>
+</svg></span>`;
+
+// Wordmark di canvas (kolase, kartu QR). capPx = tinggi huruf kapital. Lockup resmi: capPx = 0,455 ×
+// ukuran simbol, wordmark mulai 1,127 × ukuran simbol dari tepi kiri kotak simbol, tengah kapital = tengah simbol.
+export const LOCKUP = { cap: 0.455, gap: 1.127 };
+export const wordmarkWidth = (capPx) => (WM.w * capPx) / (WM.base - WM.cap);
+let wmPath2d = null;
+// Rata kiri di x, tengah huruf kapital di y; warna dari ctx.fillStyle
+export function drawWordmark(ctx, x, y, capPx) {
+  const k = capPx / (WM.base - WM.cap);
+  wmPath2d ||= new Path2D(WORDMARK_PATH);
+  ctx.save();
+  ctx.translate(x - WM.x * k, y - ((WM.cap + WM.base) / 2) * k);
+  ctx.scale(k, k);
+  ctx.fill(wmPath2d);
+  ctx.restore();
+}

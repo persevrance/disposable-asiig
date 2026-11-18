@@ -3,7 +3,7 @@
 // Dibuat di HP (canvas), tidak diunggah, tidak memakai kuota unduhan (BR-09).
 // photos: [{ id, url, thumb, owner_name }] — url ukuran sedang (1080 px), thumb 400 px.
 // Pratinjau editor memakai thumbnail; foto sedang baru dimuat saat Selesai.
-import { el, esc, toast, modal, download, safeName, fmtRange, ICON } from "./ui.js";
+import { el, esc, toast, modal, download, safeName, fmtRange, ICON, drawWordmark, wordmarkWidth, LOCKUP } from "./ui.js";
 import { t, locale } from "./i18n.js";
 import {
   LAYOUTS, ORNAMENTS, SIZES, BACKGROUNDS, ORN_BACKGROUNDS, WASHI, CONFETTI, STAMP, TAPE, CARD, layoutCells,
@@ -46,17 +46,6 @@ function drawMark(ctx, x, y, size, body, cut, accent = FLASH) {
   dot(60, 50, 10, accent);
   dot(56.5, 46.5, 3, cut);
   ctx.restore();
-}
-
-// Wordmark "Titip" Medium + "Potret" ExtraBold, rata kiri di (x, y); mengembalikan lebarnya
-function wordmarkWidth(ctx, px) {
-  ctx.font = `500 ${px}px ${DISPLAY}`; const a = ctx.measureText("Titip").width;
-  ctx.font = `800 ${px}px ${DISPLAY}`; return a + ctx.measureText("Potret").width;
-}
-function drawWordmark(ctx, x, y, px) {
-  ctx.font = `500 ${px}px ${DISPLAY}`; ctx.fillText("Titip", x, y);
-  const a = ctx.measureText("Titip").width;
-  ctx.font = `800 ${px}px ${DISPLAY}`; ctx.fillText("Potret", x + a, y);
 }
 
 // Potong teks dengan "…" bila melebihi lebar
@@ -363,12 +352,12 @@ async function draw(o, imgs, ev, { scale = 1, preview = false } = {}) {
   const cy = g.story ? fy + (g.showText ? 120 : 100) : fy + fh / 2;
   let textRight = F.w - m;
   if (o.logo) {
-    const markSize = 48;
-    const wmW = wordmarkWidth(ctx, 34);
-    const lx = F.w - m - (markSize + 12 + wmW);
-    drawMark(ctx, lx, cy - markSize / 2 - 2, markSize, card ? CARD.ink : th.body, card ? CARD.bg : th.cut);
-    ctx.fillStyle = ink; ctx.textBaseline = "middle"; ctx.textAlign = "left";
-    drawWordmark(ctx, lx + markSize + 12, cy, 34);
+    // Lockup resmi: simbol + wordmark kurva dengan proporsi paket logo
+    const markSize = 52, cap = markSize * LOCKUP.cap, gap = markSize * LOCKUP.gap;
+    const lx = F.w - m - (gap + wordmarkWidth(cap));
+    drawMark(ctx, lx, cy - markSize / 2, markSize, card ? CARD.ink : th.body, card ? CARD.bg : th.cut);
+    ctx.fillStyle = ink;
+    drawWordmark(ctx, lx + gap, cy, cap);
     textRight = lx - 40;
   }
   if (g.showText) {

@@ -131,7 +131,7 @@ export function landingHtml({ code, shareLink }) {
       <footer class="lp-foot">
         <div class="lp-inner">
           ${WORDMARK}
-          <div><a href="#/harga">${t("Harga")}</a><a href="/syarat.html">${t("Syarat layanan")}</a><a href="/pengembalian-dana.html">${t("Kebijakan pengembalian dana")}</a><a href="/privacy.html">${t("Kebijakan privasi")}</a><span>© ${new Date().getFullYear()} TitipPotret</span></div>
+          <div><a href="#/harga">${t("Harga")}</a><a href="/syarat.html">${t("Syarat layanan")}</a><a href="/pengembalian-dana.html">${t("Kebijakan pengembalian dana")}</a><a href="/privacy.html">${t("Kebijakan privasi")}</a><a href="mailto:halo@titippotret.my.id">halo@titippotret.my.id</a><span>© ${new Date().getFullYear()} TitipPotret</span></div>
         </div>
       </footer>
     </div>`;

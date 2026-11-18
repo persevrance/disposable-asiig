@@ -102,6 +102,17 @@ Setelah langkah 4 lolos:
 - [x] Ganti alamat Gmail di `public/syarat.html`, `public/privacy.html`,
       `public/pengembalian-dana.html` → `halo@titippotret.my.id`.
 
+### Logo di email
+- Email notifikasi (`notifikasi@`) memuat logo dari `https://titippotret.my.id/email-logo.png`
+  (`public/email-logo.png`); deploy situs dulu, lalu deploy ulang `send-email`. Balasan ke email
+  notifikasi diarahkan ke `halo@` (`reply_to`, bisa diganti lewat secret `EMAIL_REPLY_TO`).
+- [ ] Membalas dari `halo@` di Gmail: Setelan → Akun → **Kirim email sebagai** → tambah
+      `TitipPotret <halo@titippotret.my.id>`, SMTP `smtp.resend.com`, port 465 (SSL), username `resend`,
+      password = API key Resend (Sending access). Gmail mengirim kode verifikasi ke `halo@` (masuk lewat
+      Email Routing).
+- [ ] Tanda tangan berlogo: buka `docs/email-signature.html` di browser, salin isinya, tempel di
+      Gmail → Setelan → Umum → Tanda tangan, lalu pilih tanda tangan itu untuk alamat `halo@`.
+
 ### Supabase
 - [x] Deploy `send-email` (`npx supabase functions deploy send-email --no-verify-jwt`), Verify JWT mati.
 - [x] Secrets:

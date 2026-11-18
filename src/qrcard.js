@@ -1,7 +1,7 @@
 // Kartu QR siap cetak untuk meja tamu: sampul, nama acara, jadwal, QR, kode, dan
 // tiga langkah singkat. Ukuran A6 tegak pada 300 dpi (1240 × 1748 px).
 import QRCode from "qrcode";
-import { download, safeName, fmtRange, toast } from "./ui.js";
+import { download, safeName, fmtRange, toast, drawWordmark, wordmarkWidth } from "./ui.js";
 
 const W = 1240, H = 1748;
 const C = {
@@ -62,6 +62,7 @@ function drawMark(ctx, x, y, size) {
   ctx.fillStyle = C.flash; roundRect(ctx, 72, 19, 10, 6, 2); ctx.fill();
   dot(60, 50, 18, C.bg);
   dot(60, 50, 10, C.flash);
+  dot(56.5, 46.5, 3, C.bg);
   ctx.restore();
 }
 
@@ -161,16 +162,10 @@ async function draw(ev, withCover) {
   // Kaki: garis putus-putus + wordmark
   ctx.strokeStyle = C.line; ctx.lineWidth = 1.5 * s; ctx.setLineDash([6 * s, 5 * s]);
   ctx.beginPath(); ctx.moveTo(0, foot); ctx.lineTo(W, foot); ctx.stroke(); ctx.setLineDash([]);
-  // Wordmark "Titip" Medium + "Potret" ExtraBold, di tengah
+  // Wordmark resmi (kurva dari paket logo), di tengah; garis dasar di foot + 26
   ctx.fillStyle = C.ink;
-  const wmPx = 15 * s, wmAlign = ctx.textAlign;
-  ctx.font = `500 ${wmPx}px ${DISPLAY}`; const wa = ctx.measureText("Titip").width;
-  ctx.font = `800 ${wmPx}px ${DISPLAY}`; const wb = ctx.measureText("Potret").width;
-  const wx = W / 2 - (wa + wb) / 2;
-  ctx.textAlign = "left";
-  ctx.font = `500 ${wmPx}px ${DISPLAY}`; ctx.fillText("Titip", wx, foot + 26 * s);
-  ctx.font = `800 ${wmPx}px ${DISPLAY}`; ctx.fillText("Potret", wx + wa, foot + 26 * s);
-  ctx.textAlign = wmAlign;
+  const cap = 11 * s;
+  drawWordmark(ctx, W / 2 - wordmarkWidth(cap) / 2, foot + 26 * s - cap / 2, cap);
   return c;
 }
 

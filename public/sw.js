@@ -9,7 +9,7 @@
 //   file lain di situs   cache, diperbarui di belakang layar
 //   Google Fonts         cache dulu
 
-const SHELL = "titippotret-shell-v2"; // v2: buang foto /api/r2/o yang dulu ikut tersimpan
+const SHELL = "titippotret-shell-v3"; // v2: buang foto /api/r2/o yang dulu ikut tersimpan; v3: ikon logo baru
 const ASSETS = "titippotret-assets-v1";
 const FONTS = "titippotret-fonts-v1";
 const THUMBS = "titippotret-thumbs-v1"; // diisi aplikasi (src/storage.js), jangan dihapus di sini
@@ -18,7 +18,7 @@ const KEEP = [SHELL, ASSETS, FONTS, THUMBS];
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(SHELL);
-    await cache.addAll(["/", "/manifest.webmanifest", "/icon.svg", "/privacy.html"]);
+    await cache.addAll(["/", "/manifest.webmanifest", "/favicon.svg", "/icon-192.png", "/badge.png", "/privacy.html"]);
     await cacheAssetsOf(await cache.match("/"));
     await self.skipWaiting();
   })());
@@ -57,7 +57,7 @@ self.addEventListener("push", (event) => {
   let d = {};
   try { d = event.data?.json() || {}; } catch { d = { title: "TitipPotret", body: event.data?.text() }; }
   event.waitUntil(self.registration.showNotification(d.title || "TitipPotret", {
-    body: d.body || "", icon: "/icon.svg", badge: "/icon.svg", tag: d.tag, data: { url: d.url || "/" },
+    body: d.body || "", icon: "/icon-192.png", badge: "/badge.png", tag: d.tag, data: { url: d.url || "/" },
   }));
 });
 

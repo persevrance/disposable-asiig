@@ -1,14 +1,15 @@
 /* ===================== TitipPotret: logo, halaman depan, kamera =====================
    Dimuat setelah style.css. Warna memakai token dari style.css supaya tema gelap ikut. */
-.brand-lockup { display: inline-flex; align-items: center; gap: .6rem; color: var(--text); }
-.brand-mark { flex: none; display: block; }
-.wordmark { font-family: "Plus Jakarta Sans", system-ui, sans-serif; font-weight: 500; font-size: 1.75rem; letter-spacing: -.03em; line-height: 1; color: var(--text); white-space: nowrap; }
-.wordmark .wm-b { font-weight: 800; }
+/* Logo dari paket logo resmi TitipPotret; simbol & lockup digambar di ui.js. Jangan diregangkan
+   atau diberi bayangan. */
+.brand-lockup { display: inline-flex; align-items: center; color: var(--text); }
+.brand-mark { flex: none; display: block; max-width: 100%; height: auto; }
+/* Wordmark saja: tinggi = font-size, warna = color */
+.wordmark { display: block; height: 1em; width: auto; aspect-ratio: 475 / 99; font-size: 1.75rem; color: var(--text); }
 .home-brand { display: flex; }
-.home-brand .wordmark { font-size: 1.5rem; }
-/* Tema gelap: logo versi gelap (badan krem, detail biru tinta) */
+/* Tema gelap: logo versi gelap (badan krem, detail biru tinta; kilau lensa tetap krem) */
 html.dark .brand-mark:not(.on-dark) [fill="#1F2A44"] { fill: #FFF7EC; }
-html.dark .brand-mark:not(.on-dark) [fill="#FFF7EC"] { fill: #1F2A44; }
+html.dark .brand-mark:not(.on-dark) [fill="#FFF7EC"]:not(.hl) { fill: #1F2A44; }
 
 
 .landing { --lp-max: 1160px; --how-bg: #1f2a44; --how-card: #2a3550; --how-text: #f3eee6; --how-muted: #c9cfdb; }
@@ -160,7 +161,6 @@ a.lp-link[aria-current="page"] { color: var(--primary-text); }
   padding: max(1.25rem, env(safe-area-inset-top)) max(1.5rem, env(safe-area-inset-right)) max(2rem, env(safe-area-inset-bottom)) max(1.5rem, env(safe-area-inset-left));
 }
 .home-top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.home-brand .wordmark { font-size: 1.375rem; }
 .avatar-btn {
   width: 44px; height: 44px; border-radius: 50%; border: 0; flex: none; display: grid; place-items: center;
   background: var(--grape-soft); color: var(--grape-text); font: inherit; font-weight: 800; font-size: 1rem; cursor: pointer;
@@ -488,8 +488,6 @@ html.dark .tile img { background: #1a2233; }
   display: flex; flex-wrap: wrap; align-items: center; gap: .75rem 1rem;
 }
 .admin-logo { text-decoration: none; }
-.admin-head .wordmark { font-size: 1.375rem; }
-.admin-head.dark .wordmark { color: #f3eee6; }
 .admin-badge { font-size: .75rem; font-weight: 800; background: #33285a; color: #c0a8ff; padding: .25rem .65rem; border-radius: 999px; }
 .admin-nav { display: flex; flex-wrap: wrap; gap: .25rem; margin-left: auto; font-size: .9rem; font-weight: 700; }
 .admin-nav a { text-decoration: none; color: var(--text); padding: .6rem 1rem; border-radius: 999px; min-height: 44px; box-sizing: border-box; display: inline-flex; align-items: center; }

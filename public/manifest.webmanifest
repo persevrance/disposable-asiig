@@ -1,13 +1,16 @@
 {
   "name": "TitipPotret",
   "short_name": "TitipPotret",
-  "description": "Kamera sekali pakai untuk acara bersama",
+  "description": "Potretin momennya, jadiin ceritanya.",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#FFF7EC",
   "theme_color": "#FFF7EC",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
   ]
 }

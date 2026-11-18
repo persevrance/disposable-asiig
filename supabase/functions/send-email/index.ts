@@ -8,6 +8,7 @@
 // Variabel lingkungan (Edge Functions -> Secrets):
 //   RESEND_API_KEY   dari resend.com (domain pengirim harus sudah diverifikasi)
 //   EMAIL_FROM       mis. "TitipPotret <notifikasi@domain-anda.id>"
+//   EMAIL_REPLY_TO   opsional, alamat balasan; bawaan halo@titippotret.my.id (layanan pelanggan)
 //   APP_URL          mis. https://domain-anda.id (tanpa garis miring di akhir)
 //   CRON_SECRET      sama dengan yang dipakai purge-events dan disimpan di Vault
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  tersedia otomatis
@@ -24,6 +25,8 @@ type Row = {
 type Mail = { subject: string; html: string; text: string };
 
 const BRAND = "TitipPotret";
+// Balasan ke email notifikasi masuk ke layanan pelanggan, bukan ke alamat pengirim
+const SUPPORT = Deno.env.get("EMAIL_REPLY_TO") || "halo@titippotret.my.id";
 const APP = (Deno.env.get("APP_URL") || "").replace(/\/+$/, "");
 
 Deno.serve(async (req) => {
@@ -71,7 +74,7 @@ async function send(key: string, from: string, to: string, m: Mail): Promise<str
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ from, to: [to], subject: m.subject, html: m.html, text: m.text }),
+      body: JSON.stringify({ from, to: [to], reply_to: SUPPORT, subject: m.subject, html: m.html, text: m.text }),
     });
     if (res.ok) return null;
     return `${res.status} ${(await res.text()).slice(0, 300)}`;
@@ -246,13 +249,19 @@ function digest(rows: Row[], priority: string): Mail {
   };
 }
 
+// Logo dari paket resmi (public/email-logo.png, logo horizontal terang 1000×248).
+// Klien email tidak mendukung SVG, jadi pakai PNG dari situs; tanpa APP_URL kembali ke teks.
+const LOGO = APP
+  ? `<a href="${APP}" style="text-decoration:none"><img src="${APP}/email-logo.png" width="177" height="44" alt="${BRAND}" style="display:block;border:0;outline:none;width:177px;height:44px"></a>`
+  : `<span style="font-weight:700;font-size:18px">${BRAND}</span>`;
+
 function layout(title: string, inner: string) {
   return `<!doctype html><html><body style="margin:0;background:#f6f1ea;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#2b2420">
 <div style="max-width:560px;margin:0 auto;padding:24px 16px">
-<div style="font-weight:700;font-size:18px;margin-bottom:16px">${BRAND}</div>
+<div style="margin-bottom:16px">${LOGO}</div>
 <div style="background:#fff;border-radius:12px;padding:24px;line-height:1.55;font-size:15px">
 <h2 style="margin:0 0 12px;font-size:18px">${esc(title)}</h2>${inner}</div>
-<p style="font-size:12px;color:#7a6e66;margin-top:16px">Email otomatis dari ${BRAND}. Jangan balas email ini.</p>
+<p style="font-size:12px;color:#7a6e66;margin-top:16px">Email otomatis dari ${BRAND}. Ada pertanyaan? Balas email ini atau tulis ke <a href="mailto:${SUPPORT}" style="color:#7a6e66">${SUPPORT}</a>.</p>
 </div></body></html>`;
 }
 const button = (url: string, label: string) =>
