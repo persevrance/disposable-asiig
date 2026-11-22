@@ -62,7 +62,7 @@ const MESSAGES = {
   TIDAK_BOLEH_TURUN: "Jumlah tamu dan potretan tidak bisa dikurangi setelah dibayar.",
   TIDAK_ADA_PERUBAHAN: "Pilih jumlah tamu atau potretan yang lebih besar.",
   PESANAN_TIDAK_ADA: "Pesanan tidak ditemukan.",
-  METODE_TIDAK_DIKENAL: "Metode pembayaran tidak dikenal. Pilih QRIS, GoPay, ShopeePay, atau Virtual account.",
+  METODE_TIDAK_DIKENAL: "Metode pembayaran tidak dikenal. Pilih QRIS, GoPay, atau Virtual account.",
   app_settings_price_discounts_check: "Diskon jumlah tamu tidak valid: jumlah tamu bulat mulai 1, persen bulat 0–90, dan tiap baris urut naik.",
   app_settings_price_roll_tiers_check: "Tarif roll tidak valid: batas roll bulat 1–500, tarif bulat Rp0 ke atas, dan tiap baris urut naik.",
   TAUTAN_DIPAKAI: "Tautan khusus itu sudah dipakai acara lain. Coba variasi lain.",

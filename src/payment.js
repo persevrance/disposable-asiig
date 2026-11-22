@@ -57,12 +57,14 @@ const PAY_LABEL = {
   qris: "QRIS", other_qris: "QRIS", gopay: "GoPay", shopeepay: "ShopeePay", bank_transfer: "Virtual account",
   echannel: "Mandiri Bill", credit_card: "Kartu kredit", cstore: "Gerai retail", akulaku: "Akulaku", tanpa_biaya: "Tanpa biaya",
 };
-// Metode yang bisa dipilih di layar Pembayaran (dipetakan ke enabled_payments di worker/pay.js)
+// Metode yang bisa dipilih di layar Pembayaran (dipetakan ke enabled_payments di worker/pay.js).
+// ShopeePay disembunyikan: belum diajukan di Midtrans produksi. Worker dan database masih
+// menerimanya, jadi untuk membukanya lagi cukup kembalikan baris ini:
+//   { id: "shopeepay", name: "ShopeePay", desc: "Buka aplikasi ShopeePay" },
 const METHODS = [
   { id: "qris", name: "QRIS", desc: "Scan dari semua e-wallet & m-banking" },
   { id: "gopay", name: "GoPay", desc: "Buka aplikasi GoPay" },
-  { id: "shopeepay", name: "ShopeePay", desc: "Buka aplikasi ShopeePay" },
-  { id: "va", name: "Virtual account", desc: "BCA, BNI, BRI, Permata, Mandiri" },
+  { id: "va", name: "Virtual account", desc: "BNI, BRI, Permata, CIMB, Mandiri" },
 ];
 const METHOD_KEY = "payMethod";
 const loadMethod = () => { try { const v = localStorage.getItem(METHOD_KEY); return METHODS.some((m) => m.id === v) ? v : "qris"; } catch { return "qris"; } };
