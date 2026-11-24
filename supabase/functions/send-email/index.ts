@@ -9,7 +9,8 @@
 //   RESEND_API_KEY   dari resend.com (domain pengirim harus sudah diverifikasi)
 //   EMAIL_FROM       mis. "TitipPotret <notifikasi@domain-anda.id>"
 //   EMAIL_REPLY_TO   opsional, alamat balasan; bawaan halo@titippotret.my.id (layanan pelanggan)
-//   APP_URL          mis. https://domain-anda.id (tanpa garis miring di akhir)
+//   APP_URL          opsional, bawaan https://titippotret.my.id (tanpa garis miring di akhir);
+//                    dipakai untuk logo (APP_URL/email-logo.png) dan tombol di email
 //   CRON_SECRET      sama dengan yang dipakai purge-events dan disimpan di Vault
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  tersedia otomatis
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
@@ -27,7 +28,8 @@ type Mail = { subject: string; html: string; text: string };
 const BRAND = "TitipPotret";
 // Balasan ke email notifikasi masuk ke layanan pelanggan, bukan ke alamat pengirim
 const SUPPORT = Deno.env.get("EMAIL_REPLY_TO") || "halo@titippotret.my.id";
-const APP = (Deno.env.get("APP_URL") || "").replace(/\/+$/, "");
+// Tanpa APP_URL email kehilangan logo dan tombolnya jadi tautan relatif, jadi pakai domain resmi
+const APP = (Deno.env.get("APP_URL") || "https://titippotret.my.id").replace(/\/+$/, "");
 
 Deno.serve(async (req) => {
   const secret = Deno.env.get("CRON_SECRET");
@@ -250,10 +252,9 @@ function digest(rows: Row[], priority: string): Mail {
 }
 
 // Logo dari paket resmi (public/email-logo.png, logo horizontal terang 1000×248).
-// Klien email tidak mendukung SVG, jadi pakai PNG dari situs; tanpa APP_URL kembali ke teks.
-const LOGO = APP
-  ? `<a href="${APP}" style="text-decoration:none"><img src="${APP}/email-logo.png" width="177" height="44" alt="${BRAND}" style="display:block;border:0;outline:none;width:177px;height:44px"></a>`
-  : `<span style="font-weight:700;font-size:18px">${BRAND}</span>`;
+// Klien email tidak mendukung SVG, jadi pakai PNG dari situs. Teks alt bergaya tampil bila
+// klien memblokir gambar dari luar (mis. Outlook, atau Gmail untuk pengirim baru).
+const LOGO = `<a href="${APP}" style="text-decoration:none;color:#2b2420"><img src="${APP}/email-logo.png" width="177" height="44" alt="${BRAND}" style="display:block;border:0;outline:none;width:177px;height:44px;font-weight:700;font-size:20px;color:#2b2420"></a>`;
 
 function layout(title: string, inner: string) {
   return `<!doctype html><html><body style="margin:0;background:#f6f1ea;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#2b2420">
