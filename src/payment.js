@@ -15,17 +15,27 @@ export async function priceSettings(force = false) {
 }
 export const paymentsOn = async () => Boolean((await priceSettings().catch(() => null))?.payments_enabled);
 
-// Muat snap.js sekali (sandbox atau produksi sesuai Pengaturan harga)
-let snapLoading = null;
-function loadSnap(cfg) {
-  if (window.snap) return Promise.resolve(window.snap);
+// Muat snap.js (sandbox atau produksi). Token Snap hanya dikenali oleh snap.js dari mode yang
+// membuatnya, jadi mode mengikuti pesanan; bila berbeda dengan snap.js yang sudah dimuat
+// (mode Midtrans diganti saat halaman terbuka), snap.js dimuat ulang.
+let snapLoading = null, snapMode = null;
+function loadSnap(cfg, production = cfg.midtrans_production) {
+  production = Boolean(production);
+  if (snapMode !== null && snapMode !== production) {
+    document.querySelectorAll("script[data-snap]").forEach((s) => s.remove());
+    try { delete window.snap; } catch { window.snap = undefined; }
+    snapLoading = null;
+  }
+  if (window.snap && snapMode === production) return Promise.resolve(window.snap);
   if (!cfg.midtrans_client_key) return Promise.reject(new Error("PEMBAYARAN_BELUM_SIAP"));
+  snapMode = production;
   snapLoading ||= new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = cfg.midtrans_production ? "https://app.midtrans.com/snap/snap.js" : "https://app.sandbox.midtrans.com/snap/snap.js";
+    s.src = production ? "https://app.midtrans.com/snap/snap.js" : "https://app.sandbox.midtrans.com/snap/snap.js";
     s.dataset.clientKey = cfg.midtrans_client_key;
+    s.dataset.snap = production ? "production" : "sandbox";
     s.onload = () => (window.snap ? resolve(window.snap) : reject(new Error("MIDTRANS_GAGAL")));
-    s.onerror = () => { snapLoading = null; reject(new Error("MIDTRANS_GAGAL: snap.js tidak termuat")); };
+    s.onerror = () => { snapLoading = null; snapMode = null; reject(new Error("MIDTRANS_GAGAL: snap.js tidak termuat")); };
     document.head.append(s);
   });
   return snapLoading;
@@ -215,7 +225,11 @@ export function mountPayment(host, ev, opts = {}) {
   }
 
   async function openSnap(cfg) {
-    const snap = await loadSnap(cfg || (await priceSettings()));
+    cfg ||= await priceSettings();
+    // Mode pesanan menentukan snap.js; pengaturan yang di-cache bisa sudah usang (Client Key ikut mode)
+    const production = typeof order.production === "boolean" ? order.production : cfg.midtrans_production;
+    if (production !== Boolean(cfg.midtrans_production)) cfg = await priceSettings(true);
+    const snap = await loadSnap(cfg, production);
     snap.pay(order.snap_token, {
       onSuccess: () => check(true), onPending: () => check(false), onError: () => toast("Pembayaran gagal. Coba lagi atau pilih metode lain."),
       onClose: () => check(false),

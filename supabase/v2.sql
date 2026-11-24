@@ -2626,6 +2626,9 @@ alter table app_settings
       "shopeepay": {"pct": 2, "flat": 0, "incl": true}, "va": {"pct": 0, "flat": 4000, "incl": false}}'
     check (valid_pay_fees(pay_fees));
 alter table orders add column if not exists pay_fee int not null default 0 check (pay_fee >= 0);
+-- Mode Midtrans saat pesanan dibuat. Token Snap hanya berlaku di mode yang membuatnya, jadi pesanan
+-- tertunda dari mode lain (mode diganti di Keuangan) tidak dipakai ulang.
+alter table orders add column if not exists production boolean;
 -- Hari tambahan: extra_days = total hari tambahan acara setelah pesanan ini lunas,
 -- extra_day_fee = yang ditagih di pesanan ini (selisih dari events.extra_days_paid)
 alter table orders
@@ -2994,6 +2997,7 @@ begin
      and guests = v_g and shots = v_r and amount = v_base + v_fee and pay_fee = v_fee
      and unlimited = v_unl and keep_days is not distinct from v_keep
      and ends_at is not distinct from v_ends and extra_days = v_extra
+     and production = s.midtrans_production
      and coalesce(pay_method, '') = coalesce(v_method, '')
      and coalesce(promo_code, '') = coalesce(v_code, '')
    order by created_at desc limit 1;
@@ -3007,11 +3011,12 @@ begin
     insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, credit,
                         promo_code, promo_discount, amount, expires_at, pay_method,
                         unlimited, keep_days, keep_fee, keep_total, ends_at, reschedule_fee, pay_fee,
-                        extra_days, extra_day_fee)
+                        extra_days, extra_day_fee, production)
     values (v_id, p_event, auth.uid(), e.name, v_kind, v_g, v_r, v_list, v_credit,
             v_code, v_disc, v_base + v_fee,
             now() + make_interval(mins => s.payment_window_min), v_method,
-            v_unl, v_keep, v_keep_due, v_keep_total, v_ends, v_resched, v_fee, v_extra, v_extra_due)
+            v_unl, v_keep, v_keep_due, v_keep_total, v_ends, v_resched, v_fee, v_extra, v_extra_due,
+            s.midtrans_production)
     returning * into o;
     if o.amount = 0 then
       perform apply_order_paid(o.id, 'tanpa_biaya');

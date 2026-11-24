@@ -156,7 +156,7 @@ async function serviceRpc(env, h, fn, args) {
 // Yang dikirim ke browser: tanpa data internal
 function publicOrder(o) {
   const keep = ["id", "event_id", "event_name", "kind", "guests", "shots", "list_price", "credit", "promo_code", "pay_method",
-    "promo_discount", "amount", "status", "unlimited", "keep_days", "keep_fee", "ends_at", "reschedule_fee", "extra_days", "extra_day_fee", "pay_fee", "snap_token", "snap_url", "payment_type", "expires_at", "paid_at", "pay_status"];
+    "promo_discount", "amount", "status", "unlimited", "keep_days", "keep_fee", "ends_at", "reschedule_fee", "extra_days", "extra_day_fee", "pay_fee", "production", "snap_token", "snap_url", "payment_type", "expires_at", "paid_at", "pay_status"];
   return Object.fromEntries(keep.filter((k) => k in o).map((k) => [k, o[k]]));
 }
 

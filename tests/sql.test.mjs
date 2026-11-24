@@ -734,6 +734,14 @@ const mv = (await as("host", `select start_order($1, null, null, null, 'va') o`,
 ok(mv.id !== mq.id && mv.pay_method === "va", "other method creates new order");
 ok((await db.query(`select status from orders where id = $1`, [mq.id])).rows[0].status === "expired", "previous method order expired");
 await expectErr("host", `select start_order($1, null, null, null, 'bitcoin')`, [dm], "METODE_TIDAK_DIKENAL");
+// Mode Midtrans diganti: pesanan tertunda (token Snap mode lama) tidak dipakai ulang
+const mvSame = (await as("host", `select start_order($1, null, null, null, 'va') o`, [dm]))[0].o;
+ok(mvSame.id === mv.id && mvSame.production === false, "pesanan tertunda dipakai ulang di mode yang sama");
+await as("admin", `select admin_set_settings($1)`, [{ midtrans_production: true }]);
+const mvProd = (await as("host", `select start_order($1, null, null, null, 'va') o`, [dm]))[0].o;
+ok(mvProd.id !== mv.id && mvProd.production === true, "ganti mode Midtrans = pesanan baru");
+await as("admin", `select admin_set_settings($1)`, [{ midtrans_production: false }]);
+ok((await as("host", `select start_order($1, null, null, null, 'va') o`, [dm]))[0].o.id !== mvProd.id, "kembali ke sandbox = pesanan baru lagi");
 // Toggle metode pembayaran (Keuangan): default tanpa ShopeePay dan BCA; yang mati ditolak
 ok(JSON.stringify((await as("host", `select price_settings() p`))[0].p.pay_channels) === '["qris","gopay","bni_va","bri_va","permata_va","cimb_va","echannel"]', "pay_channels default");
 await expectErr("host", `select start_order($1, null, null, null, 'shopeepay')`, [dm], "METODE_NONAKTIF");

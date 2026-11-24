@@ -52,7 +52,7 @@ calls = [];
 const so = calls.find((c) => c.url.endsWith("/rpc/start_order"));
 const snap = calls.find((c) => c.url.includes("/snap/v1/transactions"));
 const saved = calls.find((c) => c.url.endsWith("/rpc/set_order_snap"));
-ok(s === 200 && b.snap_token === "snap-tok" && !("user_id" in b), "checkout returns snap token, no internal fields");
+ok(s === 200 && b.snap_token === "snap-tok" && !("user_id" in b) && b.production === false, "checkout returns snap token + mode, no internal fields");
 ok(so.init.headers.Authorization === "Bearer user-jwt" && so.body.p_promo === "PERDANA", "start_order called as user");
 ok(snap.init.headers.Authorization === "Basic " + btoa("Mid-server-API:"), "snap uses server key");
 ok(snap.body.transaction_details.gross_amount === 89100 && snap.body.item_details[0].price === 89100 && snap.body.expiry.duration === 15, "snap payload amount and expiry");
