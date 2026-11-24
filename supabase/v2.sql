@@ -1365,6 +1365,7 @@ begin
     keep_flat_days      = coalesce((p_patch->>'keep_flat_days')::int, keep_flat_days),
     keep_flat           = coalesce((p_patch->>'keep_flat')::int, keep_flat),
     keep_max_days       = coalesce((p_patch->>'keep_max_days')::int, keep_max_days),
+    keep_max_price      = coalesce((p_patch->>'keep_max_price')::int, keep_max_price),
     reschedule_per_day  = coalesce((p_patch->>'reschedule_per_day')::int, reschedule_per_day),
     reschedule_same_day = coalesce((p_patch->>'reschedule_same_day')::int, reschedule_same_day),
     event_base_hours    = coalesce((p_patch->>'event_base_hours')::int, event_base_hours),
@@ -2522,6 +2523,15 @@ alter table app_settings
   add column if not exists keep_flat_days int not null default 60 check (keep_flat_days between 1 and 3650),
   add column if not exists keep_flat int not null default 200000 check (keep_flat between 0 and 1000000000),
   add column if not exists keep_max_days int not null default 90 check (keep_max_days between 1 and 3650);
+-- Harga masa simpan maksimal (keep_max_days). Di antara hari paket dan hari maksimal: harga paket
+-- + per hari, dibatasi harga maksimal. Nilai awal = harga paket (tarif lama tidak berubah).
+alter table app_settings add column if not exists keep_max_price int;
+update app_settings set keep_max_price = keep_flat where keep_max_price is null;
+alter table app_settings alter column keep_max_price set default 200000;
+alter table app_settings alter column keep_max_price set not null;
+alter table app_settings drop constraint if exists app_settings_keep_max_price_check;
+alter table app_settings add constraint app_settings_keep_max_price_check
+  check (keep_max_price between 0 and 1000000000);
 -- Biaya ubah jadwal selesai acara (acara yang sudah aktif): per hari pergeseran tanggal,
 -- atau biaya tetap bila hanya jamnya yang berubah di hari yang sama
 alter table app_settings
@@ -2670,12 +2680,15 @@ language sql stable security definer set search_path = public as $$
     from app_settings s;
 $$;
 
--- Biaya masa simpan foto: <= hari gratis = 0; sampai hari flat = per hari di atas gratis; >= hari flat = flat.
--- Pembayaran mati = gratis.
+-- Biaya masa simpan foto: <= hari gratis = 0; sampai hari paket = per hari di atas gratis;
+-- mulai hari paket = harga paket + per hari, dibatasi harga maksimal; >= hari maksimal = harga
+-- maksimal. Pembayaran mati = gratis. Samakan dengan keepFee() di src/price.js.
 create or replace function keep_fee(p_days int) returns int
 language sql stable security definer set search_path = public as $$
   select case when not s.payments_enabled or p_days <= s.keep_free_days then 0
-              when p_days >= s.keep_flat_days then s.keep_flat
+              when p_days >= s.keep_max_days then s.keep_max_price
+              when p_days >= s.keep_flat_days
+                then least(s.keep_max_price, s.keep_flat + (p_days - s.keep_flat_days) * s.keep_per_day)
               else (p_days - s.keep_free_days) * s.keep_per_day end
     from app_settings s;
 $$;
@@ -2721,6 +2734,7 @@ language sql stable security definer set search_path = public as $$
     'midtrans_client_key', s.midtrans_client_key, 'midtrans_production', s.midtrans_production,
     'price_unlimited', s.price_unlimited, 'keep_free_days', s.keep_free_days, 'keep_per_day', s.keep_per_day,
     'keep_flat_days', s.keep_flat_days, 'keep_flat', s.keep_flat, 'keep_max_days', s.keep_max_days,
+    'keep_max_price', s.keep_max_price,
     'reschedule_per_day', s.reschedule_per_day, 'reschedule_same_day', s.reschedule_same_day,
     'event_base_hours', s.event_base_hours, 'extra_day_price', s.extra_day_price,
     'pay_channels', s.pay_channels, 'pay_fee_to_buyer', s.pay_fee_to_buyer,

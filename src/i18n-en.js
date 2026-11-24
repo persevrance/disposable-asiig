@@ -532,6 +532,7 @@ export default {
   "Masa simpan foto": "Photo storage",
   "Sampai {d} hari": "Up to {d} days",
   "{a}–{b} hari": "{a}–{b} days",
+  "{d} hari": "{d} days",
   "{x}/hari": "{x}/day",
   "Setelah masa simpan, foto dihapus otomatis.": "Photos are deleted automatically when storage ends.",
 

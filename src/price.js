@@ -19,7 +19,9 @@ export function quote(cfg, guests, shots, unlimited = false) {
 // Biaya masa simpan foto, sama dengan keep_fee() di database
 export function keepFee(cfg, days) {
   if (!cfg.payments_enabled || days <= cfg.keep_free_days) return 0;
-  if (days >= cfg.keep_flat_days) return cfg.keep_flat;
+  const maxPrice = cfg.keep_max_price ?? cfg.keep_flat;
+  if (days >= cfg.keep_max_days) return maxPrice;
+  if (days >= cfg.keep_flat_days) return Math.min(maxPrice, cfg.keep_flat + (days - cfg.keep_flat_days) * cfg.keep_per_day);
   return (days - cfg.keep_free_days) * cfg.keep_per_day;
 }
 

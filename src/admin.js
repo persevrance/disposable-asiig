@@ -907,8 +907,11 @@ async function keuangan(body) {
               <label>Paket mulai (hari)<input type="number" name="keep_flat_days" min="1" max="3650" value="${cfg.keep_flat_days}" /></label>
               <label>Harga paket (Rp)<input type="number" name="keep_flat" min="0" step="1000" value="${cfg.keep_flat}" /></label>
             </div>
-            <label>Masa simpan maksimal (hari)<input type="number" name="keep_max_days" min="1" max="3650" value="${cfg.keep_max_days}" /></label>
-            <p class="hint">Foto dihapus otomatis setelah masa simpan. Di antara hari gratis dan hari paket dihitung per hari; mulai hari paket memakai harga paket.</p>
+            <div class="date-row">
+              <label>Masa simpan maksimal (hari)<input type="number" name="keep_max_days" min="1" max="3650" value="${cfg.keep_max_days}" /></label>
+              <label>Harga masa simpan maksimal (Rp)<input type="number" name="keep_max_price" min="0" step="1000" value="${cfg.keep_max_price ?? cfg.keep_flat}" /></label>
+            </div>
+            <p class="hint">Foto dihapus otomatis setelah masa simpan. Di antara hari gratis dan hari paket dihitung per hari. Mulai hari paket: harga paket ditambah biaya per hari, paling mahal harga maksimal. Di hari maksimal memakai harga maksimal.</p>
           </fieldset>
           <fieldset><legend>Ubah jadwal selesai acara</legend>
             <div class="date-row">
@@ -1093,9 +1096,10 @@ async function keuangan(body) {
     renderPriceRows();
     const patch = { price_roll_tiers: st.tiers, price_discounts: st.disc };
     for (const k of ["price_free_guests", "price_free_shots", "price_min", "free_events_per_user", "payment_window_min",
-      "price_unlimited", "unlimited_est_photos", "keep_free_days", "keep_per_day", "keep_flat_days", "keep_flat", "keep_max_days",
+      "price_unlimited", "unlimited_est_photos", "keep_free_days", "keep_per_day", "keep_flat_days", "keep_flat", "keep_max_days", "keep_max_price",
       "reschedule_per_day", "reschedule_same_day", "event_base_hours", "extra_day_price"]) patch[k] = Number(fv(k).value);
     if (patch.keep_flat_days <= patch.keep_free_days || patch.keep_max_days < patch.keep_free_days) return toast("Atur masa simpan: hari paket harus lebih dari hari gratis, dan maksimal tidak kurang dari hari gratis.", 6000);
+    if (patch.keep_max_price < patch.keep_flat) return toast("Harga masa simpan maksimal tidak boleh lebih murah dari harga paket.", 6000);
     btn.disabled = true;
     try { await rpc("admin_set_settings", { p_patch: patch }); toast("Harga disimpan."); }
     catch (err) { toast(friendly(err), 6000); }

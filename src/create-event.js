@@ -67,7 +67,7 @@ export async function renderCreate(setView, { me } = {}) {
   const maxShots = small ? Math.min(capShots, gate.max_shots) : capShots;
   const maxGuests = small ? Math.min(settings.max_members_limit, gate.max_guests) : settings.max_members_limit;
   // Masa simpan foto: gratis sampai keep_free_days, lalu per hari / paket (keepFee); maks. keep_max_days
-  const pc = Object.assign({ keep_free_days: 30, keep_per_day: 3000, keep_flat_days: 60, keep_flat: 200000, keep_max_days: 90, price_unlimited: 999000 }, price || {});
+  const pc = Object.assign({ keep_free_days: 30, keep_per_day: 3000, keep_flat_days: 60, keep_flat: 200000, keep_max_days: 90, keep_max_price: 200000, price_unlimited: 999000 }, price || {});
   const feeOf = (d) => (paid ? keepFee(pc, d) : 0);
   // Durasi acara: gratis sampai event_base_hours dari mulai, lebih dari itu biaya per hari tambahan
   const baseHours = pc.event_base_hours ?? 24;
@@ -222,7 +222,7 @@ export async function renderCreate(setView, { me } = {}) {
             <i aria-hidden="true"></i><span><b>${k.label} <em>${k.fee ? `+${rp(k.fee)}` : "Gratis"}</em></b><small>${k.desc}</small></span></button>`).join("")}
         ${D.keepMode === "custom" ? `<label class="cr-keep-custom">Jumlah hari (${pc.keep_free_days + 1}–${pc.keep_max_days})
           <input type="number" name="keepCustom" inputmode="numeric" min="${pc.keep_free_days + 1}" max="${pc.keep_max_days}" value="${D.keepDays}" />
-          <small class="hint">${feeOf(D.keepDays) ? `+${rp(feeOf(D.keepDays))}` : "Gratis"} · ${D.keepDays >= pc.keep_flat_days ? `${pc.keep_flat_days} hari ke atas memakai paket ${rp(pc.keep_flat)}` : `${rp(pc.keep_per_day)} per hari di atas ${pc.keep_free_days} hari`}</small></label>` : ""}
+          <small class="hint">${feeOf(D.keepDays) ? `+${rp(feeOf(D.keepDays))}` : "Gratis"} · ${D.keepDays >= pc.keep_max_days ? `${pc.keep_max_days} hari: harga maksimal ${rp(pc.keep_max_price ?? pc.keep_flat)}` : D.keepDays >= pc.keep_flat_days ? `paket ${pc.keep_flat_days} hari ${rp(pc.keep_flat)} + ${rp(pc.keep_per_day)} per hari, paling mahal ${rp(pc.keep_max_price ?? pc.keep_flat)}` : `${rp(pc.keep_per_day)} per hari di atas ${pc.keep_free_days} hari`}</small></label>` : ""}
       </fieldset>
       <p class="hint cr-tight">Foto dihapus otomatis setelah masa simpan berakhir. Unduh album sebelum itu.</p>`);
     bindPicks((k) => { readStep(); render(); });

@@ -82,7 +82,10 @@ export async function renderPricing(setView, { loggedIn }) {
         <div class="card"><b>${t("Masa simpan foto")}</b>
           <div class="pr-line"><span>${t("Sampai {d} hari", { d: cfg.keep_free_days })}</span><b>${t("Gratis")}</b></div>
           <div class="pr-line"><span>${t("{a}–{b} hari", { a: cfg.keep_free_days + 1, b: cfg.keep_flat_days - 1 })}</span><b>${t("{x}/hari", { x: rp(cfg.keep_per_day) })}</b></div>
-          <div class="pr-line"><span>${t("{a}–{b} hari", { a: cfg.keep_flat_days, b: cfg.keep_max_days })}</span><b>${rp(cfg.keep_flat)}</b></div>
+          ${(cfg.keep_max_price ?? cfg.keep_flat) > cfg.keep_flat && cfg.keep_max_days > cfg.keep_flat_days
+            ? `<div class="pr-line"><span>${t("{d} hari", { d: cfg.keep_flat_days })}</span><b>${rp(cfg.keep_flat)}</b></div>
+          <div class="pr-line"><span>${t("{d} hari", { d: cfg.keep_max_days })}</span><b>${rp(cfg.keep_max_price)}</b></div>`
+            : `<div class="pr-line"><span>${t("{a}–{b} hari", { a: cfg.keep_flat_days, b: cfg.keep_max_days })}</span><b>${rp(cfg.keep_flat)}</b></div>`}
           <p>${t("Setelah masa simpan, foto dihapus otomatis.")}</p></div>
       </div>
     </section>

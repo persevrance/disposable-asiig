@@ -838,6 +838,13 @@ await as("admin", `select delete_event($1)`, [dm]);
 const kf = async (d) => (await db.query(`select keep_fee($1) f`, [d])).rows[0].f;
 const cfgV3 = (await as("host", `select price_settings() p`))[0].p;
 for (const [d, want] of [[30, 0], [31, 3000], [45, 45000], [59, 87000], [60, 200000], [90, 200000]]) ok(await kf(d) === want && keepFee(cfgV3, d) === want, `keep_fee ${d} hari = ${want} (sql = js)`);
+// Harga masa simpan maksimal: paket + per hari sampai batas, hari maksimal = harga maksimal
+ok(cfgV3.keep_max_price === 200000, "keep_max_price awal = harga paket");
+await as("admin", `select admin_set_settings($1)`, [{ keep_max_price: 250000 }]);
+const cfgMax = (await as("host", `select price_settings() p`))[0].p;
+for (const [d, want] of [[59, 87000], [60, 200000], [61, 203000], [75, 245000], [80, 250000], [89, 250000], [90, 250000]])
+  ok(await kf(d) === want && keepFee(cfgMax, d) === want, `keep_fee ${d} hari = ${want} dengan harga maksimal 250.000 (sql = js)`);
+await as("admin", `select admin_set_settings($1)`, [{ keep_max_price: 200000 }]);
 ok(quote(cfgV3, 1, 1, true).total === 999000 && shotsCap(cfgV3) === (await db.query(`select shots_cap() c`)).rows[0].c, "JS: Unlimited dan batas jepretan sama dengan SQL");
 await as("admin", `select admin_set_settings($1)`, [{ max_shots_limit: 20 }]);
 ok((await db.query(`select shots_cap() c`)).rows[0].c === 100, "batas jepretan = rentang harga tertinggi saat pembayaran aktif");

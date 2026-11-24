@@ -150,7 +150,7 @@ export function mountPayment(host, ev, opts = {}) {
           ${!q.free && q.total > q.subtotal - q.volume_discount ? `<div><span>Pembayaran minimum</span><span>${rp(q.total)}</span></div>` : ""}
           ${q.credit ? `<div class="minus"><span>Sudah dibayar (sebelum promo)</span><span>−${rp(q.credit)}</span></div>` : ""}
           ${q.promo_discount ? `<div class="minus"><span>Kode promo ${esc(promo.toUpperCase())}</span><span>−${rp(q.promo_discount)}</span></div>` : ""}
-          ${q.keep_fee ? `<div><span>Simpan foto ${q.keep_days} hari <small>(${q.keep_days >= cfg.keep_flat_days ? "paket" : `${q.keep_days - cfg.keep_free_days} hari × ${rp(cfg.keep_per_day)}`})</small></span><span>${rp(q.keep_fee)}</span></div>` : `<div><span>Simpan foto ${q.keep_days} hari</span><span>Gratis</span></div>`}
+          ${q.keep_fee ? `<div><span>Simpan foto ${q.keep_days} hari <small>(${q.keep_days >= cfg.keep_max_days ? "maksimal" : q.keep_days >= cfg.keep_flat_days ? "paket" : `${q.keep_days - cfg.keep_free_days} hari × ${rp(cfg.keep_per_day)}`})</small></span><span>${rp(q.keep_fee)}</span></div>` : `<div><span>Simpan foto ${q.keep_days} hari</span><span>Gratis</span></div>`}
           ${q.keep_credit ? `<div class="minus"><span>Masa simpan sudah dibayar</span><span>−${rp(Math.min(q.keep_credit, q.keep_fee))}</span></div>` : ""}
           ${q.extra_day_fee ? `<div><span>Hari tambahan <small>(${q.extra_days - (q.extra_days_paid || 0)} hari, acara lebih dari ${cfg.event_base_hours ?? 24} jam)</small></span><span>${rp(q.extra_day_fee)}</span></div>` : ""}
           ${q.reschedule_fee ? `<div><span>Ubah jadwal selesai <small>(ke ${esc(fmtDate(q.ends_at))})</small></span><span>${rp(q.reschedule_fee)}</span></div>` : ""}
