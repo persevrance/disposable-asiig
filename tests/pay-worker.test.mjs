@@ -79,6 +79,13 @@ calls = [];
 await call("/api/pay/checkout", { event_id: "e1", method: "gopay" }, { Authorization: "Bearer user-jwt" });
 ok(JSON.stringify(calls.find((c) => c.url.includes("/snap/v1/transactions")).body.enabled_payments) === '["gopay"]', "non-va unaffected by pay_channels");
 delete order.pay_channels;
+// Biaya layanan pembayaran: baris item sendiri, jumlah item = gross_amount
+order = { ...order, snap_token: null, pay_method: "va", amount: 93700, pay_fee: 4600 };
+calls = [];
+[s, b] = await call("/api/pay/checkout", { event_id: "e1", method: "va" }, { Authorization: "Bearer user-jwt" });
+const items = calls.find((c) => c.url.includes("/snap/v1/transactions")).body.item_details;
+ok(items.length === 2 && items[0].price === 89100 && items[1].price === 4600 && items.reduce((a, i) => a + i.price, 0) === 93700 && b.pay_fee === 4600, "pay_fee as separate Snap item");
+order = { ...order, snap_token: null, amount: 89100, pay_fee: 0 };
 // Tanpa metode: memakai rahasia MIDTRANS_ENABLED_PAYMENTS
 order = { ...order, snap_token: null, pay_method: null };
 calls = [];

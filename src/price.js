@@ -35,6 +35,17 @@ export function rescheduleFee(cfg, oldEnd, newEnd) {
   return days ? days * perDay : sameDay;
 }
 
+// Biaya layanan pembayaran (biaya Midtrans + PPN) yang dibebankan ke pembeli, sama dengan pay_fee()
+// di database: total T supaya T − biaya Midtrans(T) ≥ base, dibulatkan ke atas per Rp100.
+// Hanya untuk simulasi di panel Keuangan; nominal sungguhan dihitung server (price_quote / start_order).
+export function payFee(cfg, base, method) {
+  const f = cfg.pay_fees?.[method];
+  if (!(base > 0) || cfg.pay_fee_to_buyer === false || !f) return 0;
+  const k = f.incl ? 1 : 1 + Number(cfg.pay_fee_tax_pct ?? 11) / 100;
+  const total = (base + f.flat * k) / (1 - (f.pct / 100) * k);
+  return Math.ceil(Math.round(total * 1e6) / 1e8) * 100 - base;   // pembulatan dulu: hindari sisa float
+}
+
 // Batas potretan per tamu (rentang harga tertinggi saat pembayaran aktif)
 export const shotsCap = (cfg) => cfg.shots_cap || cfg.max_shots_limit || 100;
 

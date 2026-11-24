@@ -117,6 +117,11 @@ export function mountPayment(host, ev, opts = {}) {
     const methods = activeMethods(cfg);
     if (!methods.some((m) => m.id === method)) method = methods[0]?.id || null;
     const noMethod = Boolean(q.amount) && !methods.length;
+    // Biaya layanan pembayaran (biaya Midtrans + PPN) tergantung metode; dihitung server di price_quote
+    const feeOf = (id) => (q.amount ? Number(q.pay_fees?.[id]) || 0 : 0);
+    const totalOf = (id) => q.amount + feeOf(id);
+    const payLabel = (id) => `Bayar ${rp(totalOf(id))} dengan ${methodName(id)}`;
+    const feeLine = (id) => (feeOf(id) ? `<span>Biaya layanan pembayaran <small>(${esc(methodName(id))})</small></span><span>${rp(feeOf(id))}</span>` : "");
     host.innerHTML = `
       <div class="pay">
         <div class="pay-head">
@@ -138,7 +143,8 @@ export function mountPayment(host, ev, opts = {}) {
           ${q.keep_fee ? `<div><span>Simpan foto ${q.keep_days} hari <small>(${q.keep_days >= cfg.keep_flat_days ? "paket" : `${q.keep_days - cfg.keep_free_days} hari × ${rp(cfg.keep_per_day)}`})</small></span><span>${rp(q.keep_fee)}</span></div>` : `<div><span>Simpan foto ${q.keep_days} hari</span><span>Gratis</span></div>`}
           ${q.keep_credit ? `<div class="minus"><span>Masa simpan sudah dibayar</span><span>−${rp(Math.min(q.keep_credit, q.keep_fee))}</span></div>` : ""}
           ${q.reschedule_fee ? `<div><span>Ubah jadwal selesai <small>(ke ${esc(fmtDate(q.ends_at))})</small></span><span>${rp(q.reschedule_fee)}</span></div>` : ""}
-          <div class="pay-total"><span>Total</span><b>${rp(q.amount)}</b></div>
+          <div class="pay-fee-line"${feeOf(method) ? "" : " hidden"}>${feeLine(method)}</div>
+          <div class="pay-total"><span>Total</span><b class="pay-total-num">${rp(totalOf(method))}</b></div>
           <form class="pay-promo" novalidate>
             <label class="sr-only" for="pay-promo">Kode promo</label>
             <input id="pay-promo" name="promo" placeholder="Kode promo" maxlength="30" autocomplete="off" value="${esc(promo)}" />
@@ -153,13 +159,13 @@ export function mountPayment(host, ev, opts = {}) {
             <button type="button" class="pay-method-opt" role="radio" data-method="${m.id}" aria-checked="${m.id === method}" tabindex="${m.id === method ? 0 : -1}">
               <i aria-hidden="true"></i><span><b>${m.name}</b><small>${m.desc}</small></span></button>`).join("")}
           </div>
-          <small class="hint">Jendela Midtrans langsung membuka metode ini.</small>
+          <small class="hint">Jendela Midtrans langsung membuka metode ini.${Object.values(q.pay_fees || {}).some(Number) ? " Biaya layanan pembayaran berbeda per metode, sesuai tarif Midtrans dan PPN." : ""}</small>
         </div>` : ""}
         <p class="pay-note">${ICON.shield}<span>${upgrade
           ? "Perubahan berlaku begitu pembayaran terkonfirmasi. Tamu yang sudah masuk tidak terganggu."
           : "Acara tersimpan sebagai draf. Begitu pembayaran terkonfirmasi, acara langsung aktif dan QR siap dibagikan."}</span></p>
         <div class="pay-actions">
-          <button type="button" class="btn primary" data-act="pay"${noMethod ? " disabled" : ""}>${q.amount ? `Bayar ${rp(q.amount)} dengan ${methodName(method)}` : "Aktifkan tanpa biaya"}</button>
+          <button type="button" class="btn primary" data-act="pay"${noMethod ? " disabled" : ""}>${q.amount ? payLabel(method) : "Aktifkan tanpa biaya"}</button>
           <p class="hint">Dengan membayar, kamu menyetujui <a href="/syarat.html" target="_blank" rel="noopener">Syarat layanan</a> dan <a href="/pengembalian-dana.html" target="_blank" rel="noopener">Kebijakan pengembalian dana</a>.</p>
         </div>
       </div>`;
@@ -176,7 +182,10 @@ export function mountPayment(host, ev, opts = {}) {
           b.setAttribute("aria-checked", String(on)); b.tabIndex = on ? 0 : -1;
           if (on && focus) b.focus();
         });
-        host.querySelector('[data-act="pay"]').textContent = `Bayar ${rp(q.amount)} dengan ${methodName(id)}`;
+        host.querySelector('[data-act="pay"]').textContent = payLabel(id);
+        const fl = host.querySelector(".pay-fee-line");
+        fl.innerHTML = feeLine(id); fl.hidden = !feeOf(id);
+        host.querySelector(".pay-total-num").textContent = rp(totalOf(id));
       };
       group.onclick = (e) => { const b = e.target.closest("[data-method]"); if (b) pick(b.dataset.method); };
       group.onkeydown = (e) => {
@@ -233,7 +242,7 @@ export function mountPayment(host, ev, opts = {}) {
         <h3>${dead ? (order.status === "failed" ? "Pembayaran gagal" : "Waktu pembayaran habis") : "Menunggu pembayaran"}</h3>
         <p>${dead ? "Buat pembayaran baru; acaramu tetap tersimpan." : "Selesaikan pembayaran di jendela Midtrans. Halaman ini otomatis berganti begitu pembayaran diterima."}</p>
         <div class="pay-card pay-lines">
-          <div><span>Total</span><b>${rp(order.amount)}</b></div>
+          <div><span>Total${order.pay_fee ? ` <small>(termasuk biaya layanan ${rp(order.pay_fee)})</small>` : ""}</span><b>${rp(order.amount)}</b></div>
           <div><span>Metode</span><b class="pay-method">${esc(PAY_LABEL[order.payment_type] || methodName(order.pay_method) || order.payment_type || "Belum dipilih")}</b></div>
           <div><span>Bayar sebelum</span><b class="pay-deadline"></b></div>
           <div><span>No. pesanan</span><code>${esc(order.id)}</code></div>

@@ -1353,6 +1353,9 @@ begin
                                then array(select x from jsonb_array_elements_text(p_patch->'pay_channels') with ordinality t(x, i)
                                           group by x order by min(i))
                                else pay_channels end,
+    pay_fee_to_buyer    = coalesce((p_patch->>'pay_fee_to_buyer')::boolean, pay_fee_to_buyer),
+    pay_fee_tax_pct     = coalesce((p_patch->>'pay_fee_tax_pct')::numeric, pay_fee_tax_pct),
+    pay_fees            = coalesce(p_patch->'pay_fees', pay_fees),
     photo_mb_estimate   = coalesce((p_patch->>'photo_mb_estimate')::numeric, photo_mb_estimate),
     email_enabled       = coalesce((p_patch->>'email_enabled')::boolean, email_enabled),
     email_daily_cap     = coalesce((p_patch->>'email_daily_cap')::int, email_daily_cap),
@@ -2571,6 +2574,53 @@ language sql immutable as $$
               then p_channels && array['bca_va', 'bni_va', 'bri_va', 'permata_va', 'cimb_va', 'echannel']
               else p_method = any(p_channels) end;
 $$;
+
+-- Biaya Midtrans dibebankan ke pembeli, supaya yang diterima TitipPotret utuh.
+-- pay_fees: per metode { pct: persen dari nominal transaksi, flat: rupiah per transaksi,
+-- incl: true bila tarif Midtrans sudah termasuk PPN }. Tarif yang belum termasuk PPN ditambah
+-- pay_fee_tax_pct (PPN atas biaya layanan Midtrans). Default dari dasbor Midtrans:
+-- QRIS 0,7% + PPN, GoPay 2% (termasuk PPN), ShopeePay 2% (termasuk PPN), VA Rp4.000 + PPN.
+create or replace function valid_pay_fees(p jsonb) returns boolean
+language sql immutable as $$
+  select jsonb_typeof(p) = 'object'
+     and not exists (select 1 from jsonb_each(p) x(k, v)
+       where k not in ('qris', 'gopay', 'shopeepay', 'va') or jsonb_typeof(v) <> 'object'
+          or jsonb_typeof(v->'pct') <> 'number' or jsonb_typeof(v->'flat') <> 'number'
+          or jsonb_typeof(v->'incl') <> 'boolean'
+          or (v->>'pct')::numeric < 0 or (v->>'pct')::numeric > 20
+          or (v->>'flat')::numeric < 0 or (v->>'flat')::numeric > 100000
+          or (v->>'flat')::numeric <> floor((v->>'flat')::numeric));
+$$;
+alter table app_settings
+  add column if not exists pay_fee_to_buyer boolean not null default true,
+  add column if not exists pay_fee_tax_pct numeric(5, 2) not null default 11
+    check (pay_fee_tax_pct between 0 and 30),
+  add column if not exists pay_fees jsonb not null default
+    '{"qris": {"pct": 0.7, "flat": 0, "incl": false}, "gopay": {"pct": 2, "flat": 0, "incl": true},
+      "shopeepay": {"pct": 2, "flat": 0, "incl": true}, "va": {"pct": 0, "flat": 4000, "incl": false}}'
+    check (valid_pay_fees(pay_fees));
+alter table orders add column if not exists pay_fee int not null default 0 check (pay_fee >= 0);
+
+-- Biaya layanan pembayaran untuk nominal p_base dengan metode p_method. Nominal ditagih T supaya
+-- T − biaya Midtrans(T) ≥ p_base: T = (p_base + flat×k) / (1 − pct×k), k = 1 + PPN bila tarif
+-- belum termasuk PPN; dibulatkan ke atas per Rp100. Tanpa metode (Snap menampilkan semua) =
+-- biaya tertinggi di antara metode yang hidup. 0 bila nominal 0 atau fitur dimatikan.
+create or replace function pay_fee(p_base int, p_method text) returns int
+language plpgsql stable security definer set search_path = public as $$
+declare s app_settings%rowtype; f jsonb; k numeric; v_total numeric;
+begin
+  select * into s from app_settings;
+  if coalesce(p_base, 0) <= 0 or not s.pay_fee_to_buyer then return 0; end if;
+  if p_method is null then
+    return coalesce((select max(pay_fee(p_base, m)) from unnest(array['qris', 'gopay', 'shopeepay', 'va']) m
+                      where pay_method_enabled(s.pay_channels, m)), 0);
+  end if;
+  f := s.pay_fees->p_method;
+  if f is null then return 0; end if;
+  k := case when (f->>'incl')::boolean then 1 else 1 + s.pay_fee_tax_pct / 100 end;
+  v_total := (p_base + (f->>'flat')::numeric * k) / (1 - (f->>'pct')::numeric / 100 * k);
+  return (ceil(v_total / 100) * 100)::int - p_base;
+end $$;
 create index if not exists orders_event on orders (event_id, created_at desc);
 create index if not exists orders_status on orders (status, created_at desc);
 alter table promo_codes enable row level security;
@@ -2623,7 +2673,8 @@ language sql stable security definer set search_path = public as $$
     'price_unlimited', s.price_unlimited, 'keep_free_days', s.keep_free_days, 'keep_per_day', s.keep_per_day,
     'keep_flat_days', s.keep_flat_days, 'keep_flat', s.keep_flat, 'keep_max_days', s.keep_max_days,
     'reschedule_per_day', s.reschedule_per_day, 'reschedule_same_day', s.reschedule_same_day,
-    'pay_channels', s.pay_channels, 'shots_cap', shots_cap())
+    'pay_channels', s.pay_channels, 'pay_fee_to_buyer', s.pay_fee_to_buyer,
+    'pay_fee_tax_pct', s.pay_fee_tax_pct, 'pay_fees', s.pay_fees, 'shots_cap', shots_cap())
     from app_settings s;
 $$;
 
@@ -2721,7 +2772,12 @@ begin
                                  'keep_due', greatest(0, v_keep_fee - v_keep_credit),
                                  'ends_at', case when v_paid then p_ends_at end, 'old_ends_at', e.ends_at,
                                  'reschedule_fee', v_resched,
-                                 'amount', v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched);
+                                 'amount', v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched,
+                                 -- Biaya layanan pembayaran per metode yang hidup (ditambahkan ke amount)
+                                 'pay_fees', (select coalesce(jsonb_object_agg(m, pay_fee(
+                                     v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched, m)), '{}')
+                                   from unnest(array['qris', 'gopay', 'shopeepay', 'va']) m
+                                  where pay_method_enabled((select pay_channels from app_settings), m)));
 end $$;
 
 -- Boleh membuat acara: punya peran, atau pembayaran aktif (layanan mandiri). Akun diblokir dan
@@ -2802,7 +2858,7 @@ declare
   v_code text := nullif(upper(trim(coalesce(p_promo, ''))), ''); v_gate jsonb; v_id text;
   v_method text := nullif(lower(trim(coalesce(p_method, ''))), '');
   v_unl boolean; v_keep int; v_keep_total int; v_keep_due int;
-  v_ends timestamptz; v_resched int := 0;
+  v_ends timestamptz; v_resched int := 0; v_base int; v_fee int;
 begin
   perform assert_not_banned();
   select * into s from app_settings;
@@ -2864,10 +2920,12 @@ begin
   if v_code is not null and v_unl then raise exception 'PROMO_TIDAK_BERLAKU'; end if;
   if v_code is not null and v_sub > 0 then v_disc := promo_discount(v_code, v_sub); end if;
   if v_disc = 0 then v_code := null; end if;
+  v_base := v_sub - v_disc + v_keep_due + v_resched;
+  v_fee := pay_fee(v_base, v_method);
 
   select * into o from orders
    where event_id = p_event and status = 'pending' and expires_at > now() + interval '1 minute'
-     and guests = v_g and shots = v_r and amount = v_sub - v_disc + v_keep_due + v_resched
+     and guests = v_g and shots = v_r and amount = v_base + v_fee and pay_fee = v_fee
      and unlimited = v_unl and keep_days is not distinct from v_keep
      and ends_at is not distinct from v_ends
      and coalesce(pay_method, '') = coalesce(v_method, '')
@@ -2882,11 +2940,11 @@ begin
     end loop;
     insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, credit,
                         promo_code, promo_discount, amount, expires_at, pay_method,
-                        unlimited, keep_days, keep_fee, keep_total, ends_at, reschedule_fee)
+                        unlimited, keep_days, keep_fee, keep_total, ends_at, reschedule_fee, pay_fee)
     values (v_id, p_event, auth.uid(), e.name, v_kind, v_g, v_r, v_list, v_credit,
-            v_code, v_disc, v_sub - v_disc + v_keep_due + v_resched,
+            v_code, v_disc, v_base + v_fee,
             now() + make_interval(mins => s.payment_window_min), v_method,
-            v_unl, v_keep, v_keep_due, v_keep_total, v_ends, v_resched)
+            v_unl, v_keep, v_keep_due, v_keep_total, v_ends, v_resched, v_fee)
     returning * into o;
     if o.amount = 0 then
       perform apply_order_paid(o.id, 'tanpa_biaya');
@@ -2968,13 +3026,14 @@ begin
   perform assert_superadmin();
   return jsonb_build_object(
     'summary', (select jsonb_build_object(
-        'revenue_30d', coalesce(sum(amount) filter (where status = 'paid' and paid_at > now() - interval '30 days'), 0),
-        'revenue_today', coalesce(sum(amount) filter (where status = 'paid'
+        'revenue_30d', coalesce(sum(amount - pay_fee) filter (where status = 'paid' and paid_at > now() - interval '30 days'), 0),
+        'revenue_today', coalesce(sum(amount - pay_fee) filter (where status = 'paid'
                            and paid_at >= date_trunc('day', now() at time zone 'Asia/Jakarta') at time zone 'Asia/Jakarta'), 0),
-        'revenue_total', coalesce(sum(amount) filter (where status = 'paid'), 0),
+        'revenue_total', coalesce(sum(amount - pay_fee) filter (where status = 'paid'), 0),
         'paid_30d', count(*) filter (where status = 'paid' and paid_at > now() - interval '30 days'),
         'pending', count(*) filter (where status = 'pending' and expires_at > now()),
         'refunded', coalesce(sum(amount) filter (where status = 'refunded'), 0),
+        'fees_30d', coalesce(sum(pay_fee) filter (where status = 'paid' and paid_at > now() - interval '30 days'), 0),
         'drafts', (select count(*) from events where pay_status = 'draft'))
       from orders),
     'total', (select count(*) from orders o
@@ -2984,7 +3043,7 @@ begin
     'rows', coalesce((select jsonb_agg(r) from (
         select o.id, o.event_id, o.event_name, o.kind, o.guests, o.shots, o.list_price, o.credit,
                o.unlimited, o.keep_days, o.keep_fee,
-               o.promo_code, o.promo_discount, o.amount, o.status, o.payment_type, o.midtrans_status,
+               o.promo_code, o.promo_discount, o.amount, o.pay_fee, o.pay_method, o.status, o.payment_type, o.midtrans_status,
                o.created_at, o.paid_at, o.expires_at, pr.name as user_name, u.email::text as user_email
           from orders o
           left join profiles pr on pr.id = o.user_id

@@ -4,7 +4,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { quote, keepFee, shotsCap } from "../src/price.js";
+import { quote, keepFee, shotsCap, payFee } from "../src/price.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (f) => readFileSync(`${root}/supabase/${f}`, "utf8");
@@ -637,7 +637,8 @@ await expectErr("host", `select start_order($1)`, [freeEv], "PEMBAYARAN_NONAKTIF
 await as("host", `select delete_event($1)`, [freeEv]);
 
 // ---- Pembayaran aktif: draf, pesanan, webhook ----
-await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: true, free_events_per_user: 2 }]);
+// Tes harga di bawah memakai nominal tanpa biaya layanan; biaya Midtrans dites terpisah
+await as("admin", `select admin_set_settings($1)`, [{ payments_enabled: true, free_events_per_user: 2, pay_fee_to_buyer: false }]);
 const draft = (await as("host", `select create_event('Wisuda Lunas', 24, 50) id`))[0].id;
 let dr = (await db.query(`select pay_status, join_code from events where id = $1`, [draft])).rows[0];
 ok(dr.pay_status === "draft", "paid-size event starts as draft");
@@ -746,6 +747,34 @@ await expectErr("admin", `select admin_set_settings($1)`, [{ pay_channels: [] }]
 await expectErr("admin", `select admin_set_settings($1)`, [{ pay_channels: ["bitcoin"] }], "pay_channels_check");
 await expectErr("host", `select admin_set_settings($1)`, [{ pay_channels: ["qris"] }], "");
 await as("admin", `select admin_set_settings($1)`, [{ pay_channels: ["qris", "gopay", "bni_va", "bri_va", "permata_va", "cimb_va", "echannel"] }]);
+// Biaya Midtrans ditanggung pembeli: tagihan − biaya Midtrans(tagihan) ≥ harga, sama dengan payFee() di JS
+await as("admin", `select admin_set_settings($1)`, [{ pay_fee_to_buyer: true }]);
+const feeCfg = (await as("host", `select price_settings() p`))[0].p;
+ok(feeCfg.pay_fee_to_buyer === true && Number(feeCfg.pay_fee_tax_pct) === 11 && feeCfg.pay_fees.va.flat === 4000 && feeCfg.pay_fees.gopay.incl === true, "pay_fees default");
+const midtransCut = (f, total) => (f.pct / 100 * total + f.flat) * (f.incl ? 1 : 1.11);
+for (const base of [1000, 25000, 89100, 99000, 187000, 999000, 1234567]) {
+  for (const m of ["qris", "gopay", "shopeepay", "va"]) {
+    const fee = (await db.query(`select pay_fee($1, $2) f`, [base, m])).rows[0].f;
+    const total = base + fee;
+    ok(total % 100 === 0 && total - midtransCut(feeCfg.pay_fees[m], total) >= base && total - 100 - midtransCut(feeCfg.pay_fees[m], total - 100) < base
+       && fee === payFee(feeCfg, base, m), `pay_fee ${m} ${base} -> +${fee}`);
+  }
+}
+ok((await db.query(`select pay_fee(0, 'va') f`)).rows[0].f === 0, "no fee on zero amount");
+ok((await db.query(`select pay_fee(100000, null) f`)).rows[0].f === (await db.query(`select pay_fee(100000, 'va') f`)).rows[0].f, "no method = highest enabled fee (VA)");
+const dmEv = (await db.query(`select max_members, max_shots from events where id = $1`, [dm])).rows[0];
+const fq = (await as("host", `select price_quote($1, $2, null, $3) q`, [dmEv.max_members, dmEv.max_shots, dm]))[0].q;
+ok(fq.pay_fees.qris === payFee(feeCfg, fq.amount, "qris") && fq.pay_fees.va === payFee(feeCfg, fq.amount, "va") && !("shopeepay" in fq.pay_fees), "price_quote pay_fees for enabled methods");
+const fo2 = (await as("host", `select start_order($1, null, null, null, 'va') o`, [dm]))[0].o;
+ok(fo2.pay_fee === fq.pay_fees.va && fo2.amount === fq.amount + fq.pay_fees.va, `order adds pay_fee ${fo2.pay_fee}`);
+const fo3 = (await as("host", `select start_order($1, null, null, null, 'gopay') o`, [dm]))[0].o;
+ok(fo3.id !== fo2.id && fo3.pay_fee === fq.pay_fees.gopay, "other method = other fee, new order");
+await db.query(`select midtrans_notify($1, 'settlement', null, 'gopay', $2)`, [fo3.id, fo3.amount]);
+const finF = (await as("admin", `select admin_orders('paid', $1) r`, [fo3.id]))[0].r;
+ok(finF.rows[0].pay_fee === fo3.pay_fee && finF.summary.fees_30d >= fo3.pay_fee, "admin_orders shows pay_fee");
+await expectErr("admin", `select admin_set_settings($1)`, [{ pay_fees: { qris: { pct: 50, flat: 0, incl: false } } }], "pay_fees_check");
+await as("admin", `select admin_set_settings($1)`, [{ pay_fee_to_buyer: false }]);
+ok((await db.query(`select pay_fee(100000, 'va') f`)).rows[0].f === 0, "fee off = 0");
 await as("admin", `select delete_event($1)`, [dm]);
 
 // ---- Harga v3: masa simpan foto, batas jepretan per rentang harga, Unlimited ----

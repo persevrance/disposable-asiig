@@ -72,7 +72,9 @@ async function checkout(req, env, h, jwt, body) {
   const name = `${order.kind === "new" ? "Acara" : "Upgrade"} ${size}${keep}${resched}`.slice(0, 50);
   const payload = {
     transaction_details: { order_id: order.id, gross_amount: order.amount },
-    item_details: [{ id: order.kind, price: order.amount, quantity: 1, name }],
+    // Biaya layanan pembayaran (biaya Midtrans + PPN yang dibebankan ke pembeli) sebagai baris sendiri
+    item_details: [{ id: order.kind, price: order.amount - (order.pay_fee || 0), quantity: 1, name },
+      ...(order.pay_fee > 0 ? [{ id: "biaya_layanan", price: order.pay_fee, quantity: 1, name: "Biaya layanan pembayaran" }] : [])],
     customer_details: { first_name: String(meta.full_name || meta.name || "Penyelenggara").slice(0, 50), email: user.email || undefined },
     expiry: { unit: "minute", duration: order.window_min || 15 },
     callbacks: { finish: `${origin}/#/e/${order.event_id}/panel` },
@@ -153,7 +155,7 @@ async function serviceRpc(env, h, fn, args) {
 // Yang dikirim ke browser: tanpa data internal
 function publicOrder(o) {
   const keep = ["id", "event_id", "event_name", "kind", "guests", "shots", "list_price", "credit", "promo_code", "pay_method",
-    "promo_discount", "amount", "status", "unlimited", "keep_days", "keep_fee", "ends_at", "reschedule_fee", "snap_token", "snap_url", "payment_type", "expires_at", "paid_at", "pay_status"];
+    "promo_discount", "amount", "status", "unlimited", "keep_days", "keep_fee", "ends_at", "reschedule_fee", "pay_fee", "snap_token", "snap_url", "payment_type", "expires_at", "paid_at", "pay_status"];
   return Object.fromEntries(keep.filter((k) => k in o).map((k) => [k, o[k]]));
 }
 

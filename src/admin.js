@@ -10,7 +10,10 @@ import { kickNotify, setVapidKey, joinCreationWaitlist } from "./push.js";
 import { downloadQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
 import { openPayment, PAY_CHANNELS, DEFAULT_PAY_CHANNELS } from "./payment.js";
-import { quote, rp } from "./price.js";
+import { quote, rp, payFee } from "./price.js";
+
+// Metode yang punya tarif Midtrans sendiri (app_settings.pay_fees)
+const FEE_METHODS = [["qris", "QRIS"], ["gopay", "GoPay"], ["shopeepay", "ShopeePay"], ["va", "Virtual account"]];
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
   fmtRange, fromLocalInput, toLocalInput, downloadCsv, brandLockup, initial,
@@ -846,6 +849,27 @@ async function keuangan(body) {
               <div class="auto-rule"><span><b>${esc(c.name)}</b></span>
                 <button type="button" class="switch bare" role="switch" data-chan="${c.id}" aria-checked="${chans.has(c.id)}" aria-label="${esc(c.name)}"><span class="knob"></span></button></div>`).join("")}
           </div></fieldset>`).join("")}</div>
+        <fieldset class="fee-set"><legend>Biaya Midtrans ditanggung pembeli</legend>
+          <div class="auto-rules">
+            <div class="auto-rule"><span><b>Tambahkan biaya layanan pembayaran</b><small>Hidup = biaya Midtrans dan PPN-nya ditambahkan ke tagihan sebagai "Biaya layanan pembayaran", sehingga yang masuk ke TitipPotret utuh sesuai harga. Mati = biaya dipotong dari pendapatan.</small></span>
+              <button type="button" class="switch bare" role="switch" data-fee-flag aria-checked="${cfg.pay_fee_to_buyer !== false}" aria-label="Tambahkan biaya layanan pembayaran"><span class="knob"></span></button></div>
+          </div>
+          <p class="hint">Samakan dengan tarif di dasbor Midtrans (Payment Methods). Centang "termasuk PPN" bila Midtrans menyebut tarifnya sudah termasuk pajak (GoPay dan ShopeePay); yang lain ditambah PPN di bawah.</p>
+          <div class="table-scroll"><table class="fee-table">
+            <thead><tr><th>Metode</th><th class="num">Persen (%)</th><th class="num">Tetap (Rp)</th><th>Termasuk PPN</th><th class="num">Harga Rp100.000 →</th></tr></thead>
+            <tbody>${FEE_METHODS.map(([id, name]) => { const f = cfg.pay_fees?.[id] || { pct: 0, flat: 0, incl: false }; return `
+              <tr data-fee="${id}"><td>${esc(name)}</td>
+                <td class="num"><input type="number" name="fee_pct_${id}" min="0" max="20" step="0.01" value="${f.pct}" aria-label="Persen biaya ${esc(name)}" /></td>
+                <td class="num"><input type="number" name="fee_flat_${id}" min="0" max="100000" step="1" value="${f.flat}" aria-label="Biaya tetap ${esc(name)}" /></td>
+                <td><input type="checkbox" name="fee_incl_${id}" ${f.incl ? "checked" : ""} aria-label="Tarif ${esc(name)} sudah termasuk PPN" /></td>
+                <td class="num fee-sim"></td></tr>`; }).join("")}</tbody>
+          </table></div>
+          <div class="date-row">
+            <label>PPN atas biaya Midtrans (%)<input type="number" name="pay_fee_tax_pct" min="0" max="30" step="0.01" value="${cfg.pay_fee_tax_pct ?? 11}" /></label>
+          </div>
+          <p class="hint">Tagihan dihitung supaya <i>tagihan − biaya Midtrans − PPN</i> tidak kurang dari harga, lalu dibulatkan ke atas per Rp100. Berlaku untuk pesanan baru.</p>
+          <button type="button" class="btn small primary" data-act="save-fees">Simpan biaya</button>
+        </fieldset>
       </section>
 
       <div class="price-grid">
@@ -967,6 +991,38 @@ async function keuangan(body) {
       toast(`${PAY_CHANNELS.find((c) => c.id === id).name} ${on ? "diaktifkan" : "dinonaktifkan"}.`);
     } catch (err) { flip(!on); toast(friendly(err)); }
   }));
+  // ---- Biaya Midtrans ditanggung pembeli ----
+  const feeCfg = () => ({
+    pay_fee_to_buyer: view.querySelector("[data-fee-flag]").getAttribute("aria-checked") === "true",
+    pay_fee_tax_pct: Number(fv("pay_fee_tax_pct").value) || 0,
+    pay_fees: Object.fromEntries(FEE_METHODS.map(([id]) => [id, {
+      pct: Number(fv(`fee_pct_${id}`).value) || 0, flat: Math.round(Number(fv(`fee_flat_${id}`).value) || 0),
+      incl: fv(`fee_incl_${id}`).checked }])),
+  });
+  const renderFeeSim = () => {
+    const c = { ...feeCfg(), pay_fee_to_buyer: true };
+    view.querySelectorAll("[data-fee]").forEach((tr) => {
+      const fee = payFee(c, 100000, tr.dataset.fee);
+      tr.querySelector(".fee-sim").textContent = `${rp(100000 + fee)} (+${rp(fee)})`;
+    });
+  };
+  const feeSet = view.querySelector(".fee-set");
+  feeSet.addEventListener("input", renderFeeSim);
+  feeSet.querySelector("[data-fee-flag]").onclick = async (e) => {
+    const b = e.currentTarget, on = b.getAttribute("aria-checked") !== "true";
+    b.setAttribute("aria-checked", String(on));
+    try { await rpc("admin_set_settings", { p_patch: { pay_fee_to_buyer: on } }); toast(on ? "Biaya layanan ditambahkan ke tagihan." : "Biaya Midtrans dipotong dari pendapatan."); }
+    catch (err) { b.setAttribute("aria-checked", String(!on)); toast(friendly(err)); }
+  };
+  feeSet.querySelector('[data-act="save-fees"]').onclick = async (e) => {
+    const btn = e.currentTarget, c = feeCfg();
+    if (Object.values(c.pay_fees).some((f) => f.pct < 0 || f.pct > 20 || f.flat < 0 || f.flat > 100000)) return toast("Persen 0–20 dan biaya tetap Rp0–Rp100.000.", 6000);
+    btn.disabled = true;
+    try { await rpc("admin_set_settings", { p_patch: { pay_fee_tax_pct: c.pay_fee_tax_pct, pay_fees: c.pay_fees } }); toast("Biaya disimpan."); }
+    catch (err) { toast(friendly(err), 6000); }
+    btn.disabled = false;
+  };
+  renderFeeSim();
   view.querySelector(".mid-form").onsubmit = async (e) => {
     e.preventDefault();
     try { await rpc("admin_set_settings", { p_patch: { midtrans_client_key: fv("midtrans_client_key").value } }); toast("Client Key disimpan."); }
@@ -1108,7 +1164,7 @@ async function keuangan(body) {
         <td><code>${esc(o.id)}</code><br><small class="hint">${esc(fmtDate(o.paid_at || o.created_at))}</small></td>
         <td>${o.event_id ? `<a href="#/e/${o.event_id}/panel">${esc(o.event_name)}</a>` : esc(o.event_name)}<br><small class="hint">${esc(o.user_name || "")} ${esc(o.user_email || "")}</small></td>
         <td class="num">${o.kind === "upgrade" ? "+ " : ""}${o.unlimited ? "Unlimited" : `${o.guests} × ${o.shots}`}${o.keep_fee ? `<br><small class="hint">simpan ${o.keep_days} hari +${rp(o.keep_fee)}</small>` : ""}</td>
-        <td class="num"><b>${rp(o.amount)}</b>${o.promo_code ? `<br><small class="hint">${esc(o.promo_code)} −${rp(o.promo_discount)}</small>` : ""}${o.credit ? `<br><small class="hint">selisih dari ${rp(o.list_price)}</small>` : ""}</td>
+        <td class="num"><b>${rp(o.amount)}</b>${o.pay_fee ? `<br><small class="hint">biaya layanan ${rp(o.pay_fee)}</small>` : ""}${o.promo_code ? `<br><small class="hint">${esc(o.promo_code)} −${rp(o.promo_discount)}</small>` : ""}${o.credit ? `<br><small class="hint">selisih dari ${rp(o.list_price)}</small>` : ""}</td>
         <td>${esc(o.payment_type || "–")}</td>
         <td><span class="tag ${tone}">${label}</span></td>
       </tr>`;
@@ -1126,8 +1182,8 @@ async function keuangan(body) {
     try {
       const r = await rpc("admin_orders", { p_status: st.status, p_search: st.q || null, p_limit: 200, p_offset: 0 });
       downloadCsv(`pesanan-${new Date().toISOString().slice(0, 10)}.csv`,
-        ["No. pesanan", "Acara", "Email", "Jenis", "Tamu", "Roll", "Harga daftar", "Kredit", "Promo", "Potongan", "Nominal", "Status", "Metode", "Dibuat", "Lunas"],
-        r.rows.map((o) => [o.id, o.event_name, o.user_email || "", o.kind, o.guests, o.shots, o.list_price, o.credit, o.promo_code || "", o.promo_discount, o.amount, o.status, o.payment_type || "", o.created_at, o.paid_at || ""]));
+        ["No. pesanan", "Acara", "Email", "Jenis", "Tamu", "Roll", "Harga daftar", "Kredit", "Promo", "Potongan", "Nominal", "Biaya layanan", "Status", "Metode", "Dibuat", "Lunas"],
+        r.rows.map((o) => [o.id, o.event_name, o.user_email || "", o.kind, o.guests, o.shots, o.list_price, o.credit, o.promo_code || "", o.promo_discount, o.amount, o.pay_fee || 0, o.status, o.payment_type || "", o.created_at, o.paid_at || ""]));
     } catch (err) { toast(friendly(err)); }
   };
   renderOrders(fin);

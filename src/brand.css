@@ -744,6 +744,12 @@ html.dark .tile img { background: #1a2233; }
 .auto-rule small { color: var(--muted); font-size: .82rem; }
 .chan-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 1rem; }
 .chan-groups .auto-rule { padding: .35rem 0; }
+.fee-set { margin-top: .5rem; }
+.fee-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.fee-table th, .fee-table td { padding: .35rem .4rem; text-align: left; white-space: nowrap; }
+.fee-table .num { text-align: right; }
+.fee-table input[type="number"] { width: 6.5rem; text-align: right; }
+.fee-table .fee-sim { color: var(--muted); font-variant-numeric: tabular-nums; }
 .queue-table td.row { flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 720px) {
   .mode-radios { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -794,6 +800,7 @@ html.dark .tile img { background: #1a2233; }
 .pay-thumb { width: 56px; height: 56px; border-radius: 14px; background: var(--bg-2); display: grid; place-items: center; color: var(--muted); }
 .pay-thumb svg { width: 26px; height: 26px; }
 .pay-lines > div { display: flex; justify-content: space-between; gap: .75rem; font-size: .95rem; }
+.pay-lines > div[hidden] { display: none; }
 .pay-lines small { color: var(--muted); }
 .pay-lines .minus { color: var(--mint-text); }
 .pay-lines code { font-size: .85rem; }
