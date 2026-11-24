@@ -801,6 +801,8 @@ html.dark .tile img { background: #1a2233; }
 .pay-thumb svg { width: 26px; height: 26px; }
 .pay-lines > div { display: flex; justify-content: space-between; gap: .75rem; font-size: .95rem; }
 .pay-lines > div[hidden] { display: none; }
+.cr-extra { display: grid; gap: 2px; margin: 0 0 .75rem; padding: .6rem .75rem; border-radius: 12px; background: var(--primary-soft); color: var(--text); }
+.cr-extra small { color: var(--muted); }
 .pay-lines small { color: var(--muted); }
 .pay-lines .minus { color: var(--mint-text); }
 .pay-lines code { font-size: .85rem; }

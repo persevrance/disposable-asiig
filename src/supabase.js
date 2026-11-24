@@ -63,6 +63,7 @@ const MESSAGES = {
   TIDAK_ADA_PERUBAHAN: "Pilih jumlah tamu atau potretan yang lebih besar.",
   PESANAN_TIDAK_ADA: "Pesanan tidak ditemukan.",
   METODE_TIDAK_DIKENAL: "Metode pembayaran tidak dikenal. Pilih salah satu metode yang tersedia.",
+  DURASI_PERLU_PEMBAYARAN: "Acara lebih dari 24 jam dari waktu mulai dikenai biaya hari tambahan. Perpanjang jadwal lewat Upgrade acara.",
   METODE_NONAKTIF: "Metode pembayaran itu sedang tidak tersedia. Pilih metode lain.",
   app_settings_pay_channels_check: "Minimal satu metode pembayaran harus aktif.",
   app_settings_price_discounts_check: "Diskon jumlah tamu tidak valid: jumlah tamu bulat mulai 1, persen bulat 0–90, dan tiap baris urut naik.",

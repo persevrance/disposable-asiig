@@ -917,6 +917,13 @@ async function keuangan(body) {
             </div>
             <p class="hint">Berlaku untuk acara yang sudah aktif, lewat Upgrade acara. Tanggal mundur atau maju 2 hari = 2 × biaya per hari. Draf bebas diubah tanpa biaya.</p>
           </fieldset>
+          <fieldset><legend>Durasi acara</legend>
+            <div class="date-row">
+              <label>Termasuk dalam harga (jam dari mulai)<input type="number" name="event_base_hours" min="1" max="720" value="${cfg.event_base_hours ?? 24}" /></label>
+              <label>Biaya per hari tambahan (Rp)<input type="number" name="extra_day_price" min="0" step="500" value="${cfg.extra_day_price ?? 25000}" /></label>
+            </div>
+            <p class="hint">Acara lebih lama dari batas ini dikenai biaya per 24 jam tambahan (dibulatkan ke atas): 30 jam = 1 hari tambahan, 50 jam = 2 hari. Hari yang sudah dibayar tidak ditagih lagi.</p>
+          </fieldset>
           <button type="button" class="btn primary" data-act="save-price">Simpan harga</button>
         </section>
         <aside class="card sim-card" aria-labelledby="h-sim">
@@ -1087,7 +1094,7 @@ async function keuangan(body) {
     const patch = { price_roll_tiers: st.tiers, price_discounts: st.disc };
     for (const k of ["price_free_guests", "price_free_shots", "price_min", "free_events_per_user", "payment_window_min",
       "price_unlimited", "unlimited_est_photos", "keep_free_days", "keep_per_day", "keep_flat_days", "keep_flat", "keep_max_days",
-      "reschedule_per_day", "reschedule_same_day"]) patch[k] = Number(fv(k).value);
+      "reschedule_per_day", "reschedule_same_day", "event_base_hours", "extra_day_price"]) patch[k] = Number(fv(k).value);
     if (patch.keep_flat_days <= patch.keep_free_days || patch.keep_max_days < patch.keep_free_days) return toast("Atur masa simpan: hari paket harus lebih dari hari gratis, dan maksimal tidak kurang dari hari gratis.", 6000);
     btn.disabled = true;
     try { await rpc("admin_set_settings", { p_patch: patch }); toast("Harga disimpan."); }
@@ -1163,7 +1170,7 @@ async function keuangan(body) {
       return `<tr>
         <td><code>${esc(o.id)}</code><br><small class="hint">${esc(fmtDate(o.paid_at || o.created_at))}</small></td>
         <td>${o.event_id ? `<a href="#/e/${o.event_id}/panel">${esc(o.event_name)}</a>` : esc(o.event_name)}<br><small class="hint">${esc(o.user_name || "")} ${esc(o.user_email || "")}</small></td>
-        <td class="num">${o.kind === "upgrade" ? "+ " : ""}${o.unlimited ? "Unlimited" : `${o.guests} × ${o.shots}`}${o.keep_fee ? `<br><small class="hint">simpan ${o.keep_days} hari +${rp(o.keep_fee)}</small>` : ""}</td>
+        <td class="num">${o.kind === "upgrade" ? "+ " : ""}${o.unlimited ? "Unlimited" : `${o.guests} × ${o.shots}`}${o.keep_fee ? `<br><small class="hint">simpan ${o.keep_days} hari +${rp(o.keep_fee)}</small>` : ""}${o.extra_day_fee ? `<br><small class="hint">hari tambahan +${rp(o.extra_day_fee)}</small>` : ""}</td>
         <td class="num"><b>${rp(o.amount)}</b>${o.pay_fee ? `<br><small class="hint">biaya layanan ${rp(o.pay_fee)}</small>` : ""}${o.promo_code ? `<br><small class="hint">${esc(o.promo_code)} −${rp(o.promo_discount)}</small>` : ""}${o.credit ? `<br><small class="hint">selisih dari ${rp(o.list_price)}</small>` : ""}</td>
         <td>${esc(o.payment_type || "–")}</td>
         <td><span class="tag ${tone}">${label}</span></td>

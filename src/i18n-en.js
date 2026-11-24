@@ -244,6 +244,7 @@ export default {
 
   // Pesan error server
   "Silakan login dulu.": "Please sign in first.",
+  "Harga untuk acara sampai {h} jam dari waktu mulai. Lebih dari itu {x} per hari tambahan.": "Prices cover events up to {h} hours from the start time. Longer events add {x} per extra day.",
   "Sesi login berakhir setelah 12 jam. Silakan login lagi.": "Your session ended after 12 hours. Please sign in again.",
   "Kode acara tidak ditemukan.": "Event code not found.",
   "Email Anda tidak ada di daftar undangan acara ini.": "Your email isn't on this event's guest list.",

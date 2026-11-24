@@ -31,6 +31,7 @@ drop function if exists
   can_upload(text), can_view(text), owns_path(text), viewable_paths(text[]),
   create_event(text, int, int, boolean),
   create_event(text, int, int, boolean, text), create_event(text, int, int, boolean, text, boolean, int),
+  create_event(text, int, int, boolean, text, boolean, int, timestamptz, timestamptz),
   set_event(uuid, text, boolean, timestamptz, timestamptz, int, boolean),
   set_event(uuid, jsonb),
   rotate_code(uuid), get_invites(uuid), set_invites(uuid, text[]),

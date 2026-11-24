@@ -802,12 +802,17 @@ $$;
 
 drop function if exists create_event(text, int, int, boolean);
 drop function if exists create_event(text, int, int, boolean, text);
+drop function if exists create_event(text, int, int, boolean, text, boolean, int);
+-- p_starts_at/p_ends_at: jadwal acara (wizard), supaya acara lebih dari event_base_hours
+-- (biaya hari tambahan) langsung tersimpan sebagai draf sampai dibayar
 create or replace function create_event(p_name text, p_max_shots int default 30,
                              p_max_members int default 60,
                              p_invite_only boolean default false,
                              p_film text default null,
                              p_unlimited boolean default false,
-                             p_keep_days int default 30)
+                             p_keep_days int default 30,
+                             p_starts_at timestamptz default null,
+                             p_ends_at timestamptz default null)
 returns uuid
 language plpgsql security definer set search_path = public as $$
 declare v_id uuid; v_try int := 0; s app_settings%rowtype; r user_roles%rowtype; v_gate jsonb;
@@ -845,9 +850,13 @@ begin
     raise exception 'PESERTA_MELEBIHI_BATAS';
   end if;
   if p_film is not null and not valid_film(p_film) then raise exception 'FILM_TIDAK_DIKENAL'; end if;
+  if p_starts_at is not null and p_ends_at is not null and p_ends_at <= p_starts_at then
+    raise exception 'JADWAL_TIDAK_VALID';
+  end if;
   -- Pembayaran aktif: acara berbayar tersimpan sebagai draf sampai lunas; gratis dibatasi per akun
   if s.payments_enabled and coalesce(r.role, '') <> 'superadmin' then
-    if (price_quote_raw(p_max_members, p_max_shots, v_unl)->>'total')::int + keep_fee(v_keep) > 0 then
+    if (price_quote_raw(p_max_members, p_max_shots, v_unl)->>'total')::int + keep_fee(v_keep)
+       + extra_day_fee(event_extra_days(p_starts_at, p_ends_at)) > 0 then
       v_pay := 'draft';
     elsif (select count(*) from events e where e.owner_id = auth.uid() and e.pay_status = 'free'
               and open_now(e)) >= s.free_events_per_user then
@@ -857,9 +866,10 @@ begin
   loop
     begin
       insert into events (owner_id, name, join_code, max_shots, max_members, invite_only, film, pay_status,
-                          creator_email, unlimited, keep_days)
+                          creator_email, unlimited, keep_days, starts_at, ends_at)
       values (auth.uid(), trim(p_name), gen_code(), p_max_shots, p_max_members, p_invite_only,
-              coalesce(p_film, s.default_film), v_pay, my_verified_email(), v_unl, v_keep)
+              coalesce(p_film, s.default_film), v_pay, my_verified_email(), v_unl, v_keep,
+              p_starts_at, p_ends_at)
       returning id into v_id;
       exit;
     exception when unique_violation then
@@ -961,6 +971,14 @@ begin
   end if;
   if e.starts_at is not null and e.ends_at is not null and e.ends_at <= e.starts_at then
     raise exception 'JADWAL_TIDAK_VALID';
+  end if;
+  -- Acara aktif: jadwal yang diubah tidak boleh melebihi hari yang sudah dibayar
+  -- (event_base_hours + extra_days_paid hari); tambah hari lewat Upgrade acara
+  if s.payments_enabled and not v_admin and e.pay_status <> 'draft'
+     and exists (select 1 from events o where o.id = p_event
+                  and (o.starts_at is distinct from e.starts_at or o.ends_at is distinct from e.ends_at))
+     and event_extra_days(e.starts_at, e.ends_at) > e.extra_days_paid then
+    raise exception 'DURASI_PERLU_PEMBAYARAN';
   end if;
 
   if p_patch ? 'film' then
@@ -1349,6 +1367,8 @@ begin
     keep_max_days       = coalesce((p_patch->>'keep_max_days')::int, keep_max_days),
     reschedule_per_day  = coalesce((p_patch->>'reschedule_per_day')::int, reschedule_per_day),
     reschedule_same_day = coalesce((p_patch->>'reschedule_same_day')::int, reschedule_same_day),
+    event_base_hours    = coalesce((p_patch->>'event_base_hours')::int, event_base_hours),
+    extra_day_price     = coalesce((p_patch->>'extra_day_price')::int, extra_day_price),
     pay_channels        = case when jsonb_typeof(p_patch->'pay_channels') = 'array'
                                then array(select x from jsonb_array_elements_text(p_patch->'pay_channels') with ordinality t(x, i)
                                           group by x order by min(i))
@@ -2507,6 +2527,12 @@ alter table app_settings
 alter table app_settings
   add column if not exists reschedule_per_day int not null default 3890 check (reschedule_per_day between 0 and 100000000),
   add column if not exists reschedule_same_day int not null default 1890 check (reschedule_same_day between 0 and 100000000);
+-- Durasi acara: gratis sampai event_base_hours dari waktu mulai; tiap tambahan 24 jam (dibulatkan
+-- ke atas) dikenai extra_day_price. events.extra_days_paid = hari tambahan yang sudah dibayar.
+alter table app_settings
+  add column if not exists event_base_hours int not null default 24 check (event_base_hours between 1 and 720),
+  add column if not exists extra_day_price int not null default 25000 check (extra_day_price between 0 and 100000000);
+alter table events add column if not exists extra_days_paid int not null default 0 check (extra_days_paid >= 0);
 
 create table if not exists promo_codes (
   code         text primary key check (code ~ '^[A-Z0-9_-]{3,30}$'),
@@ -2600,6 +2626,11 @@ alter table app_settings
       "shopeepay": {"pct": 2, "flat": 0, "incl": true}, "va": {"pct": 0, "flat": 4000, "incl": false}}'
     check (valid_pay_fees(pay_fees));
 alter table orders add column if not exists pay_fee int not null default 0 check (pay_fee >= 0);
+-- Hari tambahan: extra_days = total hari tambahan acara setelah pesanan ini lunas,
+-- extra_day_fee = yang ditagih di pesanan ini (selisih dari events.extra_days_paid)
+alter table orders
+  add column if not exists extra_days int not null default 0 check (extra_days >= 0),
+  add column if not exists extra_day_fee int not null default 0 check (extra_day_fee >= 0);
 
 -- Biaya layanan pembayaran untuk nominal p_base dengan metode p_method. Nominal ditagih T supaya
 -- T − biaya Midtrans(T) ≥ p_base: T = (p_base + flat×k) / (1 − pct×k), k = 1 + PPN bila tarif
@@ -2660,6 +2691,21 @@ language sql stable security definer set search_path = public as $$
     from app_settings s;
 $$;
 
+-- Hari tambahan untuk jadwal mulai–selesai: 0 sampai event_base_hours, lalu per 24 jam dibulatkan
+-- ke atas. Tanpa jadwal lengkap atau pembayaran mati = 0.
+create or replace function event_extra_days(p_start timestamptz, p_end timestamptz) returns int
+language sql stable security definer set search_path = public as $$
+  select case when not s.payments_enabled or p_start is null or p_end is null or p_end <= p_start then 0
+              else greatest(0, ceil((extract(epoch from p_end - p_start) / 3600 - s.event_base_hours) / 24))::int end
+    from app_settings s;
+$$;
+create or replace function extra_day_fee(p_days int) returns int
+language sql stable security definer set search_path = public as $$
+  select case when not s.payments_enabled or coalesce(p_days, 0) <= 0 then 0
+              else p_days * s.extra_day_price end
+    from app_settings s;
+$$;
+
 -- Pengaturan harga untuk halaman harga publik, wizard, dan pembayaran (juga tanpa login)
 create or replace function price_settings() returns jsonb
 language sql stable security definer set search_path = public as $$
@@ -2673,6 +2719,7 @@ language sql stable security definer set search_path = public as $$
     'price_unlimited', s.price_unlimited, 'keep_free_days', s.keep_free_days, 'keep_per_day', s.keep_per_day,
     'keep_flat_days', s.keep_flat_days, 'keep_flat', s.keep_flat, 'keep_max_days', s.keep_max_days,
     'reschedule_per_day', s.reschedule_per_day, 'reschedule_same_day', s.reschedule_same_day,
+    'event_base_hours', s.event_base_hours, 'extra_day_price', s.extra_day_price,
     'pay_channels', s.pay_channels, 'pay_fee_to_buyer', s.pay_fee_to_buyer,
     'pay_fee_tax_pct', s.pay_fee_tax_pct, 'pay_fees', s.pay_fees, 'shots_cap', shots_cap())
     from app_settings s;
@@ -2742,6 +2789,7 @@ returns jsonb
 language plpgsql stable security definer set search_path = public as $$
 declare q jsonb; e events%rowtype; v_credit int := 0; v_sub int; v_disc int := 0; v_err text;
         v_keep int; v_keep_fee int; v_keep_credit int := 0; v_paid boolean := false; v_resched int := 0;
+        v_extra int := 0; v_extra_due int := 0;
 begin
   q := price_quote_raw(p_guests, p_shots, p_unlimited);
   if p_event is not null then
@@ -2751,6 +2799,12 @@ begin
       if e.pay_status = 'paid' then v_credit := e.price_basis; end if;
       v_keep_credit := e.keep_basis;
       if p_ends_at is not null then v_resched := reschedule_fee(e.ends_at, p_ends_at); end if;
+    end if;
+    -- Hari tambahan di luar event_base_hours, dikurangi yang sudah dibayar
+    if found and can_manage(p_event) then
+      v_extra := greatest(e.extra_days_paid, event_extra_days(e.starts_at,
+                   case when v_paid then coalesce(p_ends_at, e.ends_at) else e.ends_at end));
+      v_extra_due := extra_day_fee(v_extra - e.extra_days_paid);
     end if;
   end if;
   v_keep := coalesce(p_keep_days, e.keep_days, 30);
@@ -2772,10 +2826,12 @@ begin
                                  'keep_due', greatest(0, v_keep_fee - v_keep_credit),
                                  'ends_at', case when v_paid then p_ends_at end, 'old_ends_at', e.ends_at,
                                  'reschedule_fee', v_resched,
-                                 'amount', v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched,
+                                 'extra_days', v_extra, 'extra_days_paid', coalesce(e.extra_days_paid, 0),
+                                 'extra_day_fee', v_extra_due,
+                                 'amount', v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched + v_extra_due,
                                  -- Biaya layanan pembayaran per metode yang hidup (ditambahkan ke amount)
                                  'pay_fees', (select coalesce(jsonb_object_agg(m, pay_fee(
-                                     v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched, m)), '{}')
+                                     v_sub - v_disc + greatest(0, v_keep_fee - v_keep_credit) + v_resched + v_extra_due, m)), '{}')
                                    from unnest(array['qris', 'gopay', 'shopeepay', 'va']) m
                                   where pay_method_enabled((select pay_channels from app_settings), m)));
 end $$;
@@ -2803,7 +2859,7 @@ begin
    where id = p_order;
   if o.event_id is not null then
     select * into e from events where id = o.event_id for update;
-    if (o.list_price > 0 or o.keep_total > 0) and coalesce(e.creator_email, '') <> '' then
+    if (o.list_price > 0 or o.keep_total > 0 or o.extra_day_fee > 0) and coalesce(e.creator_email, '') <> '' then
       insert into user_roles (email, role, added_by, event_limit, storage_limit_mb)
       values (e.creator_email, 'creator', o.user_id, null, s.creator_storage_mb)
       on conflict (email) do nothing;
@@ -2819,10 +2875,16 @@ begin
       unlimited   = unlimited or o.unlimited,
       keep_days   = greatest(keep_days, coalesce(o.keep_days, keep_days)),
       keep_basis  = greatest(keep_basis, o.keep_total),
-      ends_at     = coalesce(o.ends_at, ends_at),
+      -- Acara baru tanpa jadwal selesai: dibatasi event_base_hours + hari tambahan dari mulai
+      -- (atau dari saat lunas bila belum ada waktu mulai)
+      ends_at     = coalesce(o.ends_at, ends_at,
+                             case when o.kind = 'new' then coalesce(starts_at, now())
+                               + make_interval(hours => s.event_base_hours + 24 * greatest(extra_days_paid, o.extra_days)) end),
       purge_at    = coalesce(o.ends_at, ends_at, starts_at, created_at)
                     + make_interval(days => greatest(keep_days, coalesce(o.keep_days, keep_days))),
-      pay_status  = case when o.list_price = 0 and o.keep_total = 0 and pay_status <> 'paid' then 'free' else 'paid' end,
+      extra_days_paid = greatest(extra_days_paid, o.extra_days),
+      pay_status  = case when o.list_price = 0 and o.keep_total = 0 and o.extra_day_fee = 0 and pay_status <> 'paid'
+                         then 'free' else 'paid' end,
       price_basis = greatest(price_basis, o.list_price),
       needs_review = needs_review
         or (not o.unlimited and o.guests >= s.review_guests
@@ -2835,7 +2897,8 @@ begin
           jsonb_build_object('order', o.id, 'amount', o.amount, 'kind', o.kind, 'guests', o.guests,
                              'shots', o.shots, 'name', o.event_name, 'via', coalesce(p_type, o.payment_type),
                              'unlimited', o.unlimited, 'keep_days', o.keep_days,
-                             'ends_at', o.ends_at, 'reschedule_fee', o.reschedule_fee));
+                             'ends_at', o.ends_at, 'reschedule_fee', o.reschedule_fee,
+                             'extra_days', o.extra_days, 'extra_day_fee', o.extra_day_fee));
   return true;
 end $$;
 
@@ -2858,7 +2921,7 @@ declare
   v_code text := nullif(upper(trim(coalesce(p_promo, ''))), ''); v_gate jsonb; v_id text;
   v_method text := nullif(lower(trim(coalesce(p_method, ''))), '');
   v_unl boolean; v_keep int; v_keep_total int; v_keep_due int;
-  v_ends timestamptz; v_resched int := 0; v_base int; v_fee int;
+  v_ends timestamptz; v_resched int := 0; v_base int; v_fee int; v_extra int; v_extra_due int;
 begin
   perform assert_not_banned();
   select * into s from app_settings;
@@ -2901,7 +2964,7 @@ begin
       v_resched := reschedule_fee(e.ends_at, v_ends);
     end if;
     if v_unl = e.unlimited and v_g = e.max_members and v_r = e.max_shots and v_keep <= e.keep_days
-       and v_ends is null then
+       and v_ends is null and event_extra_days(e.starts_at, e.ends_at) <= e.extra_days_paid then
       raise exception 'TIDAK_ADA_PERUBAHAN';
     end if;
     if v_keep < e.keep_days then v_keep := e.keep_days; v_keep_total := keep_fee(v_keep); end if;
@@ -2920,14 +2983,17 @@ begin
   if v_code is not null and v_unl then raise exception 'PROMO_TIDAK_BERLAKU'; end if;
   if v_code is not null and v_sub > 0 then v_disc := promo_discount(v_code, v_sub); end if;
   if v_disc = 0 then v_code := null; end if;
-  v_base := v_sub - v_disc + v_keep_due + v_resched;
+  -- Hari tambahan menurut jadwal (jadwal selesai baru bila diubah lewat pesanan ini)
+  v_extra := greatest(e.extra_days_paid, event_extra_days(e.starts_at, coalesce(v_ends, e.ends_at)));
+  v_extra_due := extra_day_fee(v_extra - e.extra_days_paid);
+  v_base := v_sub - v_disc + v_keep_due + v_resched + v_extra_due;
   v_fee := pay_fee(v_base, v_method);
 
   select * into o from orders
    where event_id = p_event and status = 'pending' and expires_at > now() + interval '1 minute'
      and guests = v_g and shots = v_r and amount = v_base + v_fee and pay_fee = v_fee
      and unlimited = v_unl and keep_days is not distinct from v_keep
-     and ends_at is not distinct from v_ends
+     and ends_at is not distinct from v_ends and extra_days = v_extra
      and coalesce(pay_method, '') = coalesce(v_method, '')
      and coalesce(promo_code, '') = coalesce(v_code, '')
    order by created_at desc limit 1;
@@ -2940,11 +3006,12 @@ begin
     end loop;
     insert into orders (id, event_id, user_id, event_name, kind, guests, shots, list_price, credit,
                         promo_code, promo_discount, amount, expires_at, pay_method,
-                        unlimited, keep_days, keep_fee, keep_total, ends_at, reschedule_fee, pay_fee)
+                        unlimited, keep_days, keep_fee, keep_total, ends_at, reschedule_fee, pay_fee,
+                        extra_days, extra_day_fee)
     values (v_id, p_event, auth.uid(), e.name, v_kind, v_g, v_r, v_list, v_credit,
             v_code, v_disc, v_base + v_fee,
             now() + make_interval(mins => s.payment_window_min), v_method,
-            v_unl, v_keep, v_keep_due, v_keep_total, v_ends, v_resched, v_fee)
+            v_unl, v_keep, v_keep_due, v_keep_total, v_ends, v_resched, v_fee, v_extra, v_extra_due)
     returning * into o;
     if o.amount = 0 then
       perform apply_order_paid(o.id, 'tanpa_biaya');
@@ -3042,7 +3109,7 @@ begin
                       or o.event_name ilike '%' || p_search || '%')),
     'rows', coalesce((select jsonb_agg(r) from (
         select o.id, o.event_id, o.event_name, o.kind, o.guests, o.shots, o.list_price, o.credit,
-               o.unlimited, o.keep_days, o.keep_fee,
+               o.unlimited, o.keep_days, o.keep_fee, o.extra_days, o.extra_day_fee,
                o.promo_code, o.promo_discount, o.amount, o.pay_fee, o.pay_method, o.status, o.payment_type, o.midtrans_status,
                o.created_at, o.paid_at, o.expires_at, pr.name as user_name, u.email::text as user_email
           from orders o
@@ -3140,7 +3207,7 @@ grant execute on function
   admin_creator_requests(text), admin_resolve_creator_request(bigint, boolean, text),
   claim_downloads(uuid, uuid[]),
   can_upload(text), can_view(text), owns_path(text),
-  create_event(text, int, int, boolean, text, boolean, int), set_event(uuid, jsonb), set_cover(uuid, text),
+  create_event(text, int, int, boolean, text, boolean, int, timestamptz, timestamptz), set_event(uuid, jsonb), set_cover(uuid, text),
   get_roll(uuid, uuid), rotate_code(uuid), get_invites(uuid), set_invites(uuid, text[]),
   hide_photo(uuid, boolean), block_member(uuid, uuid, boolean),
   release_pending(uuid, uuid), list_members(uuid), owner_paths(uuid), delete_event(uuid),
@@ -3155,6 +3222,7 @@ grant execute on function
   admin_capacity(), capacity_tick(), review_event(uuid),
   price_settings(), price_quote_raw(int, int, boolean), price_quote(int, int, text, uuid, boolean, int, timestamptz),
   shots_cap(), keep_fee(int), reschedule_fee(timestamptz, timestamptz),
+  event_extra_days(timestamptz, timestamptz), extra_day_fee(int),
   start_order(uuid, int, int, text, text, boolean, int, timestamptz), order_status(text), event_orders(uuid),
   admin_orders(text, text, int, int), admin_promos(), admin_save_promo(jsonb),
   admin_set_pay_status(uuid, text), valid_slug(text), slug_available(text, uuid), resolve_slug(text)

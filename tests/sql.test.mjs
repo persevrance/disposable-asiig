@@ -4,7 +4,7 @@
 import { PGlite } from "@electric-sql/pglite";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { quote, keepFee, shotsCap, payFee } from "../src/price.js";
+import { quote, keepFee, shotsCap, payFee, extraDays } from "../src/price.js";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (f) => readFileSync(`${root}/supabase/${f}`, "utf8");
@@ -775,6 +775,55 @@ ok(finF.rows[0].pay_fee === fo3.pay_fee && finF.summary.fees_30d >= fo3.pay_fee,
 await expectErr("admin", `select admin_set_settings($1)`, [{ pay_fees: { qris: { pct: 50, flat: 0, incl: false } } }], "pay_fees_check");
 await as("admin", `select admin_set_settings($1)`, [{ pay_fee_to_buyer: false }]);
 ok((await db.query(`select pay_fee(100000, 'va') f`)).rows[0].f === 0, "fee off = 0");
+
+// ---- Durasi acara: gratis 24 jam dari mulai, lebih dari itu biaya per hari tambahan ----
+const H = 3600e3, T0 = Date.now() + 48 * H;
+const iso = (h) => new Date(T0 + h * H).toISOString();
+const dcfg = (await as("host", `select price_settings() p`))[0].p;
+ok(dcfg.event_base_hours === 24 && dcfg.extra_day_price === 25000, "durasi default 24 jam, Rp25.000/hari");
+for (const [h, want] of [[1, 0], [24, 0], [24.02, 1], [48, 1], [48.5, 2], [72, 2], [100, 4]]) {
+  const got = (await db.query(`select event_extra_days($1, $2) d`, [iso(0), iso(h)])).rows[0].d;
+  ok(got === want && extraDays(dcfg, iso(0), iso(h)) === want, `${h} jam = ${want} hari tambahan (sql = js)`);
+}
+ok((await db.query(`select event_extra_days($1, null) d`, [iso(0)])).rows[0].d === 0, "tanpa jadwal selesai = 0");
+// Ukuran gratis tapi 30 jam: langsung draf, tagihan = 1 hari tambahan
+const xd = (await as("host", `select create_event('Dua hari', 24, 5, false, null, false, 30, $1, $2) id`, [iso(0), iso(30)]))[0].id;
+const xdRow = (await db.query(`select pay_status, starts_at, ends_at from events where id = $1`, [xd])).rows[0];
+ok(xdRow.pay_status === "draft" && xdRow.ends_at.getTime() === T0 + 30 * H, "ukuran gratis + 30 jam = draf, jadwal tersimpan");
+await expectErr("host", `select create_event('Mundur', 24, 5, false, null, false, 30, $1, $2)`, [iso(5), iso(1)], "JADWAL_TIDAK_VALID");
+const xq = (await as("host", `select price_quote(5, 24, null, $1) q`, [xd]))[0].q;
+ok(xq.total === 0 && xq.extra_days === 1 && xq.extra_day_fee === 25000 && xq.amount === 25000, `price_quote hari tambahan ${xq.amount}`);
+// Draf bebas diubah: 50 jam = 2 hari
+await as("host", `select set_event($1, $2)`, [xd, { ends_at: iso(50) }]);
+const xo = (await as("host", `select start_order($1, null, null, null, 'qris') o`, [xd]))[0].o;
+ok(xo.amount === 50000 && xo.extra_days === 2 && xo.extra_day_fee === 50000, `start_order menagih 2 hari tambahan ${xo.amount}`);
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [xo.id, xo.amount]);
+const xp = (await db.query(`select pay_status, extra_days_paid from events where id = $1`, [xd])).rows[0];
+ok(xp.pay_status === "paid" && xp.extra_days_paid === 2, "lunas: extra_days_paid = 2, status paid");
+// Acara aktif: memajukan waktu mulai (memperpanjang durasi) ditolak; memperpendek boleh
+await expectErr("host", `select set_event($1, $2)`, [xd, { starts_at: iso(-30) }], "DURASI_PERLU_PEMBAYARAN");
+await as("host", `select set_event($1, $2)`, [xd, { starts_at: iso(5) }]);
+ok(true, "jadwal dalam hari yang sudah dibayar boleh diubah");
+// Upgrade: perpanjang selesai ke 90 jam dari mulai (85 jam dari mulai baru) = 3 hari, bayar 1 hari + ubah jadwal
+const xu = (await as("host", `select start_order($1, null, null, null, 'qris', null, null, $2) o`, [xd, iso(90)]))[0].o;
+ok(xu.kind === "upgrade" && xu.extra_days === 3 && xu.extra_day_fee === 25000 && xu.amount === 25000 + xu.reschedule_fee,
+   `upgrade perpanjang: +1 hari tambahan + ubah jadwal ${xu.amount}`);
+const xuq = (await as("host", `select price_quote(5, 24, null, $1, false, null, $2) q`, [xd, iso(90)]))[0].q;
+ok(xuq.extra_day_fee === 25000 && xuq.amount === xu.amount, "price_quote upgrade = start_order");
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [xu.id, xu.amount]);
+ok((await db.query(`select extra_days_paid from events where id = $1`, [xd])).rows[0].extra_days_paid === 3, "upgrade lunas: extra_days_paid = 3");
+// Draf tanpa jadwal selesai: saat lunas dibatasi 24 jam dari mulai
+const xn = (await as("host", `select create_event('Tanpa selesai', 24, 50) id`))[0].id;
+await as("host", `select set_event($1, $2)`, [xn, { starts_at: iso(0) }]);
+const xno = (await as("host", `select start_order($1, null, null, null, 'qris') o`, [xn]))[0].o;
+ok(xno.extra_day_fee === 0, "tanpa jadwal selesai: tanpa hari tambahan");
+await db.query(`select midtrans_notify($1, 'settlement', null, 'qris', $2)`, [xno.id, xno.amount]);
+ok((await db.query(`select ends_at from events where id = $1`, [xn])).rows[0].ends_at.getTime() === T0 + 24 * H, "lunas tanpa jadwal selesai: selesai = mulai + 24 jam");
+// Pembayaran mati: tanpa batas durasi
+await as("admin", `select admin_set_settings($1)`, [{ extra_day_price: 30000, event_base_hours: 12 }]);
+ok((await db.query(`select event_extra_days($1, $2) d, extra_day_fee(2) f`, [iso(0), iso(13)])).rows[0].f === 60000, "tarif dan batas jam bisa diubah");
+await as("admin", `select admin_set_settings($1)`, [{ extra_day_price: 25000, event_base_hours: 24 }]);
+for (const id of [xd, xn]) await as("admin", `select delete_event($1)`, [id]);
 await as("admin", `select delete_event($1)`, [dm]);
 
 // ---- Harga v3: masa simpan foto, batas jepretan per rentang harga, Unlimited ----

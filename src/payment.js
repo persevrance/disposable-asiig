@@ -142,6 +142,7 @@ export function mountPayment(host, ev, opts = {}) {
           ${q.promo_discount ? `<div class="minus"><span>Kode promo ${esc(promo.toUpperCase())}</span><span>−${rp(q.promo_discount)}</span></div>` : ""}
           ${q.keep_fee ? `<div><span>Simpan foto ${q.keep_days} hari <small>(${q.keep_days >= cfg.keep_flat_days ? "paket" : `${q.keep_days - cfg.keep_free_days} hari × ${rp(cfg.keep_per_day)}`})</small></span><span>${rp(q.keep_fee)}</span></div>` : `<div><span>Simpan foto ${q.keep_days} hari</span><span>Gratis</span></div>`}
           ${q.keep_credit ? `<div class="minus"><span>Masa simpan sudah dibayar</span><span>−${rp(Math.min(q.keep_credit, q.keep_fee))}</span></div>` : ""}
+          ${q.extra_day_fee ? `<div><span>Hari tambahan <small>(${q.extra_days - (q.extra_days_paid || 0)} hari, acara lebih dari ${cfg.event_base_hours ?? 24} jam)</small></span><span>${rp(q.extra_day_fee)}</span></div>` : ""}
           ${q.reschedule_fee ? `<div><span>Ubah jadwal selesai <small>(ke ${esc(fmtDate(q.ends_at))})</small></span><span>${rp(q.reschedule_fee)}</span></div>` : ""}
           <div class="pay-fee-line"${feeOf(method) ? "" : " hidden"}>${feeLine(method)}</div>
           <div class="pay-total"><span>Total</span><b class="pay-total-num">${rp(totalOf(method))}</b></div>
@@ -372,7 +373,7 @@ export async function openUpgrade(ev, { members = null, onPaid } = {}) {
             ${st.ends ? `<button type="button" class="btn small ghost" data-act="ends-reset">Batal ubah</button>` : ""}
           </div>
           ${bad ? `<p class="pay-err" role="alert">${bad}</p>` : ""}
-          <small class="hint">Sekarang: ${ev.ends_at ? esc(fmtDate(ev.ends_at)) : "tanpa jadwal selesai"}. Geser tanggal ${rp(cfg.reschedule_per_day ?? 3890)} per hari; ganti jam di hari yang sama ${rp(cfg.reschedule_same_day ?? 1890)}.</small>
+          <small class="hint">Sekarang: ${ev.ends_at ? esc(fmtDate(ev.ends_at)) : "tanpa jadwal selesai"}. Geser tanggal ${rp(cfg.reschedule_per_day ?? 3890)} per hari; ganti jam di hari yang sama ${rp(cfg.reschedule_same_day ?? 1890)}. Acara lebih dari ${cfg.event_base_hours ?? 24} jam dari waktu mulai ditambah ${rp(cfg.extra_day_price ?? 25000)} per hari tambahan.</small>
         </div>
         <div class="pay-card pay-lines soft">
           <div><span>${st.unl ? "Unlimited" : `Paket (${st.g} × ${st.r})`}</span><span>${q.total ? rp(q.total) : "Gratis"}</span></div>

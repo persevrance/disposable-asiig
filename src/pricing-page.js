@@ -74,6 +74,7 @@ export async function renderPricing(setView, { loggedIn }) {
         <div class="card"><b>${t("Aturan kecil")}</b>
           <p>${t("Gratis untuk {g} tamu dengan roll sampai {r}.", { g: cfg.free_guests, r: cfg.free_shots })}</p>
           <p>${t("Pembayaran minimum {m}, dibulatkan ke atas per Rp1.000.", { m: rp(cfg.min) })}</p>
+          <p>${t("Harga untuk acara sampai {h} jam dari waktu mulai. Lebih dari itu {x} per hari tambahan.", { h: cfg.event_base_hours ?? 24, x: rp(cfg.extra_day_price ?? 25000) })}</p>
           <p>${t("Semua fitur termasuk di setiap acara.")}</p></div>
         <div class="card pr-unl"><b>${t("Unlimited tamu & potretan")}</b>
           <span class="pr-unl-price">${rp(cfg.price_unlimited)}</span>

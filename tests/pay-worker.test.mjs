@@ -86,6 +86,13 @@ calls = [];
 const items = calls.find((c) => c.url.includes("/snap/v1/transactions")).body.item_details;
 ok(items.length === 2 && items[0].price === 89100 && items[1].price === 4600 && items.reduce((a, i) => a + i.price, 0) === 93700 && b.pay_fee === 4600, "pay_fee as separate Snap item");
 order = { ...order, snap_token: null, amount: 89100, pay_fee: 0 };
+// Hari tambahan disebut di nama item Snap
+order = { ...order, snap_token: null, pay_method: "qris", extra_days: 2, extra_day_fee: 50000 };
+calls = [];
+[s, b] = await call("/api/pay/checkout", { event_id: "e1", method: "qris" }, { Authorization: "Bearer user-jwt" });
+const xname = calls.find((c) => c.url.includes("/snap/v1/transactions")).body.item_details[0].name;
+ok(/\+2 hari/.test(xname) && xname.length <= 50 && b.extra_day_fee === 50000, `hari tambahan di nama item ("${xname}")`);
+order = { ...order, snap_token: null, extra_days: 0, extra_day_fee: 0 };
 // Tanpa metode: memakai rahasia MIDTRANS_ENABLED_PAYMENTS
 order = { ...order, snap_token: null, pay_method: null };
 calls = [];

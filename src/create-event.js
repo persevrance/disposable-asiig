@@ -11,7 +11,7 @@ import { duplicateEvent, cardData, inviteLink } from "./owner.js";
 import { downloadQrCard } from "./qrcard.js";
 import { creationClosedDialog } from "./admin.js";
 import { priceSettings, mountPayment } from "./payment.js";
-import { quote, rp, keepFee, shotsCap } from "./price.js";
+import { quote, rp, keepFee, shotsCap, extraDays, extraDayFee } from "./price.js";
 import { el, esc, toast, fmtBytes, confirmDialog, actionSheet, copyText, ICON, fromLocalInput, fmtRange } from "./ui.js";
 
 const DRAFT = "createDraft";
@@ -69,6 +69,10 @@ export async function renderCreate(setView, { me } = {}) {
   // Masa simpan foto: gratis sampai keep_free_days, lalu per hari / paket (keepFee); maks. keep_max_days
   const pc = Object.assign({ keep_free_days: 30, keep_per_day: 3000, keep_flat_days: 60, keep_flat: 200000, keep_max_days: 90, price_unlimited: 999000 }, price || {});
   const feeOf = (d) => (paid ? keepFee(pc, d) : 0);
+  // Durasi acara: gratis sampai event_base_hours dari mulai, lebih dari itu biaya per hari tambahan
+  const baseHours = pc.event_base_hours ?? 24;
+  const extraOf = () => (paid ? extraDays(pc, fromLocalInput(D.starts), fromLocalInput(D.ends)) : 0);
+  const extraFeeOf = () => extraDayFee(pc, extraOf());
   const canUnlimited = paid && !small;
   const defFilm = FILMS[settings.default_film] ? settings.default_film : "asli";
 
@@ -196,7 +200,8 @@ export async function renderCreate(setView, { me } = {}) {
         <label>Mulai<input type="datetime-local" name="starts" required aria-required="true" value="${esc(D.starts)}" /></label>
         <label>Selesai<input type="datetime-local" name="ends" required aria-required="true" value="${esc(D.ends)}" /></label>
       </div>
-      <p class="hint cr-tight">Kamera berhenti otomatis saat acara selesai.</p>
+      <p class="hint cr-tight">Kamera berhenti otomatis saat acara selesai.${paid ? ` Termasuk ${baseHours} jam dari waktu mulai; lebih dari itu ${rp(pc.extra_day_price ?? 25000)} per hari tambahan.` : ""}</p>
+      ${extraOf() ? `<p class="cr-extra" role="status"><b>+${extraOf()} hari tambahan · ${rp(extraFeeOf())}</b><small>Acara lebih dari ${baseHours} jam. Tiap tambahan 24 jam (dibulatkan ke atas) ${rp(pc.extra_day_price ?? 25000)}.</small></p>` : ""}
       <div class="cr-toggles">${sw("lockStart", "Kamera aktif saat acara dimulai", D.starts ? `Sebelum ${hhmm(fromLocalInput(D.starts))}, tamu yang sudah bergabung melihat hitung mundur` : "Butuh waktu mulai. Sebelum itu tamu melihat hitung mundur")}</div>
       <fieldset class="cr-radios"><legend>Kapan album dibuka?</legend>
         ${OPEN_MODES.map((m) => `
@@ -312,7 +317,8 @@ export async function renderCreate(setView, { me } = {}) {
     if (!D.slugTouched && !D.slug && D.name) D.slug = slugify(D.name);
     const q = paid ? quote(price, D.guests, D.shots, D.unlimited) : null;
     const kFee = feeOf(D.keepDays);
-    const total = (q?.total || 0) + kFee;
+    const xDays = extraOf(), xFee = extraFeeOf();
+    const total = (q?.total || 0) + kFee + xFee;
     const rev = revealIso();
     const openText = D.open === "instant" ? "Langsung terlihat" : D.open === "roll" ? "Per gulungan" : D.open === "delay" ? `Cuci film ${D.delayH} jam` : rev ? `${dayMon(rev)}, ${hhmm(rev)}` : "Setelah acara";
     frame("Sampul dan tautan", `
@@ -339,6 +345,7 @@ export async function renderCreate(setView, { me } = {}) {
         <div><span>Kamera</span><span>${D.unlimited ? "Potretan tanpa batas" : `${D.shots} potretan`} · ${esc(FILMS[D.film]?.name || "")}</span></div>
         <div><span>Tamu</span><span>${D.unlimited ? "Unlimited tamu & potretan" : `${D.guests} tamu`}${q ? ` · ${q.total ? rp(q.total) : "Gratis"}` : ""}</span></div>
         <div><span>Simpan foto</span><span>${D.keepDays} hari · ${kFee ? rp(kFee) : "Gratis"}</span></div>
+        ${xDays ? `<div><span>Hari tambahan</span><span>${xDays} hari · ${rp(xFee)}</span></div>` : ""}
         ${paid ? `<div class="cr-sum-total"><span>Total</span><b>${total ? rp(total) : "Gratis"}</b></div>` : ""}
       </div>`,
     { nextLabel: total ? `Lanjut bayar ${rp(total)}` : "Buat acara" });
@@ -430,6 +437,7 @@ export async function renderCreate(setView, { me } = {}) {
         p_name: D.name.trim(), p_max_shots: D.shots, p_max_members: D.guests,
         p_invite_only: D.inviteOnly, p_film: D.film,
         p_unlimited: Boolean(D.unlimited && canUnlimited), p_keep_days: D.keepDays,
+        p_starts_at: fromLocalInput(D.starts), p_ends_at: fromLocalInput(D.ends),
       });
     } catch (e) { toast(friendly(e), 6000); btn.disabled = false; btn.textContent = "Coba lagi"; return; }
     try { sessionStorage.removeItem(DRAFT); } catch { /* abaikan */ }

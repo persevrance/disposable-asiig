@@ -35,6 +35,16 @@ export function rescheduleFee(cfg, oldEnd, newEnd) {
   return days ? days * perDay : sameDay;
 }
 
+// Hari tambahan acara, sama dengan event_extra_days() di database: gratis sampai event_base_hours
+// dari waktu mulai, lalu tiap 24 jam (dibulatkan ke atas) satu hari tambahan.
+export function extraDays(cfg, start, end) {
+  if (!cfg.payments_enabled || !start || !end) return 0;
+  const hours = (new Date(end).getTime() - new Date(start).getTime()) / 3600e3;
+  if (!(hours > 0)) return 0;
+  return Math.max(0, Math.ceil((hours - (cfg.event_base_hours ?? 24)) / 24));
+}
+export const extraDayFee = (cfg, days) => (cfg.payments_enabled && days > 0 ? days * (cfg.extra_day_price ?? 25000) : 0);
+
 // Biaya layanan pembayaran (biaya Midtrans + PPN) yang dibebankan ke pembeli, sama dengan pay_fee()
 // di database: total T supaya T − biaya Midtrans(T) ≥ base, dibulatkan ke atas per Rp100.
 // Hanya untuk simulasi di panel Keuangan; nominal sungguhan dihitung server (price_quote / start_order).
