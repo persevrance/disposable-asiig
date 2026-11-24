@@ -114,13 +114,6 @@ export async function duplicateEvent(ev) {
 }
 
 export async function renderPanel(root, status, { reload, home }) {
-  // Batas tanggal hapus = (selesai / mulai / dibuat) + masa simpan yang dibayar (server ikut membatasi)
-  const keepBase = new Date(status.ends_at || status.starts_at || Date.now());
-  const keepLimit = toLocalInput(
-    new Date(
-      keepBase.getTime() + (status.keep_days || 30) * 86400e3,
-    ).toISOString(),
-  ).slice(0, 10);
   const theme = status.collage_theme || {};
   const link = inviteLink(status);
   const tabKey = `panelTab:${status.event_id}`;
@@ -286,8 +279,13 @@ export async function renderPanel(root, status, { reload, home }) {
             <summary>Pengaturan lanjutan</summary>
             <label class="check"><input type="checkbox" name="reveal" ${status.reveal_at ? "checked" : ""}/> Mode cuci film: semua foto tampil bersamaan pada</label>
             <input type="datetime-local" name="reveal_at" aria-label="Waktu cuci film" value="${toLocalInput(status.reveal_at)}" />
-            <label style="margin-top:.75rem">Rencana hapus foto <input type="date" name="purge_at" value="${status.purge_at ? toLocalInput(status.purge_at).slice(0, 10) : ""}" ${status.is_admin ? "" : `max="${keepLimit}"`} /></label>
-            <p class="hint">${status.is_admin ? "" : `Masa simpan ${status.keep_days || 30} hari: paling lambat ${keepLimit}. Lebih lama dari itu lewat Upgrade.`}</p>
+            ${
+              // Rencana hapus foto hanya untuk superadmin; untuk pembuat acara server mengaturnya
+              // otomatis = (selesai / mulai / dibuat) + masa simpan (set_event)
+              status.is_admin
+                ? `<label style="margin-top:.75rem">Rencana hapus foto <input type="date" name="purge_at" value="${status.purge_at ? toLocalInput(status.purge_at).slice(0, 10) : ""}" /></label>`
+                : ""
+            }
             <label class="check"><input type="checkbox" name="invite_only" ${status.invite_only ? "checked" : ""}/> Hanya email di daftar undangan</label>
             <textarea name="invites" rows="4" placeholder="Satu email per baris" aria-label="Daftar email undangan" ${status.invite_only ? "" : "hidden"}></textarea>
             ${
@@ -644,11 +642,12 @@ export async function renderPanel(root, status, { reload, home }) {
       show_instantly: f.show_instantly.checked,
       allow_film_choice: f.allow_film_choice.checked,
       reveal_at: reveal,
-      purge_at: f.purge_at.value
-        ? new Date(f.purge_at.value + "T00:00").toISOString()
-        : null,
       invite_only: f.invite_only.checked,
     };
+    if (f.purge_at)
+      patch.purge_at = f.purge_at.value
+        ? new Date(f.purge_at.value + "T00:00").toISOString()
+        : null;
     // Tema kolase: semua ornamen dicentang = tanpa batasan; ornamen bawaan selalu ikut diizinkan
     const allowed = [
       ...form.querySelectorAll('[name="cl_allowed"]:checked'),
