@@ -257,12 +257,7 @@ async function renderHome() {
     bindThemeSwitch(box);
     box.querySelector('a[href="#/admin"]')?.addEventListener("click", close);
     box.querySelector('[data-act="privacy"]').onclick = () => { close(); openPrivacy(); };
-    box.querySelector('[data-act="logout"]').onclick = async () => {
-      close();
-      forgetJoined();
-      await clearThumbCache();
-      await supabase.auth.signOut();
-    };
+    box.querySelector('[data-act="logout"]').onclick = () => { close(); logout(); };
   };
   view.querySelector("form.home-join").onsubmit = (e) => {
     e.preventDefault();
@@ -477,6 +472,46 @@ async function route() {
   return renderHome();
 }
 
+// ---------- Keluar, dan batas sesi login 12 jam ----------
+async function logout() {
+  forgetJoined();
+  await clearThumbCache();
+  await supabase.auth.signOut();
+}
+
+const SESSION_MAX_MS = 12 * 60 * 60 * 1000;
+let expiryTimer = 0, expiring = false;
+// Waktu login asli: klaim amr di access token (tetap sama walau token di-refresh),
+// cadangannya user.last_sign_in_at
+function loginTime(s) {
+  try {
+    const part = s.access_token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const ts = (JSON.parse(atob(part)).amr || []).map((a) => Number(a.timestamp)).filter((n) => n > 0);
+    if (ts.length) return Math.min(...ts) * 1000;
+  } catch { /* token tidak terbaca: pakai cadangan */ }
+  const at = Date.parse(s?.user?.last_sign_in_at || "");
+  return Number.isFinite(at) ? at : null;
+}
+// Keluar otomatis bila sudah login 12 jam atau lebih; kalau belum, jadwalkan pemeriksaan berikutnya.
+// Dipanggil saat mulai, saat sesi berubah, dan saat tab kembali terlihat (timer tidur saat HP terkunci).
+async function checkSessionAge() {
+  clearTimeout(expiryTimer);
+  const at = session && loginTime(session);
+  if (!at || expiring) return false;
+  const left = at + SESSION_MAX_MS - Date.now();
+  if (left > 0) {
+    expiryTimer = setTimeout(checkSessionAge, Math.min(left + 1000, 2 ** 31 - 1));
+    return false;
+  }
+  expiring = true;
+  try {
+    await flushQueue().catch(() => {});   // kirim dulu potretan yang masih antre selagi sesi masih ada
+    await logout();
+    toast(t("Sesi login berakhir setelah 12 jam. Silakan login lagi."), 6000);
+  } finally { expiring = false; }
+  return true;
+}
+
 // ---------- Mulai ----------
 async function boot() {
   if (!configured) {
@@ -487,15 +522,16 @@ async function boot() {
   await resolveSlugPath();
   const { data } = await supabase.auth.getSession();
   session = data.session;
+  if (await checkSessionAge()) session = null;
   supabase.auth.onAuthStateChange((event, s) => {
     const changed = Boolean(s) !== Boolean(session) || s?.user?.id !== session?.user?.id;
     session = s;
-    if (changed) route();
+    if (changed) { checkSessionAge(); route(); }
   });
   window.addEventListener("hashchange", route);
   window.addEventListener("online", () => session && flushQueue());
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && session) flushQueue();
+    if (document.visibilityState === "visible" && session) checkSessionAge().then((out) => out || flushQueue());
   });
   await route();
   if (session) { await loadSettings(); flushQueue(); }
