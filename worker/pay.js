@@ -77,7 +77,10 @@ async function checkout(req, env, h, jwt, body) {
     expiry: { unit: "minute", duration: order.window_min || 15 },
     callbacks: { finish: `${origin}/#/e/${order.event_id}/panel` },
   };
-  const enabled = METHOD_PAYMENTS[order.pay_method]
+  // Virtual account: hanya bank yang dinyalakan di Keuangan → Metode pembayaran (start_order)
+  const channels = Array.isArray(order.pay_channels) ? order.pay_channels : null;
+  const picked = METHOD_PAYMENTS[order.pay_method];
+  const enabled = (picked && channels && order.pay_method === "va" ? picked.filter((c) => channels.includes(c)) : picked)
     || String(env.MIDTRANS_ENABLED_PAYMENTS || "").split(",").map((s) => s.trim()).filter(Boolean);
   if (enabled.length) payload.enabled_payments = enabled;
   const res = await fetch(`${snapBase(env)}/snap/v1/transactions`, {

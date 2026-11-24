@@ -9,7 +9,7 @@ import { pingAlbum } from "./realtime.js";
 import { kickNotify, setVapidKey, joinCreationWaitlist } from "./push.js";
 import { downloadQrCard } from "./qrcard.js";
 import { renderReports } from "./moderation.js";
-import { openPayment } from "./payment.js";
+import { openPayment, PAY_CHANNELS, DEFAULT_PAY_CHANNELS } from "./payment.js";
 import { quote, rp } from "./price.js";
 import {
   el, esc, toast, fmtDate, fmtBytes, confirmDialog, typeToConfirm, actionSheet, modal, copyText, ICON,
@@ -805,6 +805,7 @@ async function keuangan(body) {
   const S = fin.summary;
   const st = { status: "all", q: "", offset: 0, tiers: cfg.price_roll_tiers.map((x) => x.slice()), disc: cfg.price_discounts.map((x) => x.slice()) };
   const webhook = `${location.origin}/api/pay/webhook`;
+  const chans = new Set(Array.isArray(cfg.pay_channels) ? cfg.pay_channels : DEFAULT_PAY_CHANNELS);
 
   const view = el(`
     <div class="finance">
@@ -834,6 +835,17 @@ async function keuangan(body) {
         </div>
         <p class="hint">Server Key dan Signature Secret Key disimpan sebagai rahasia Worker, bukan di sini. Isi <b>Payment Notification URL</b> di dasbor Midtrans (Settings → Payment) dengan:</p>
         <div class="copy-row"><code>${esc(webhook)}</code><button type="button" class="btn small" data-act="copy-hook">${ICON.copy} Salin</button></div>
+      </section>
+
+      <section class="card" aria-labelledby="h-chan">
+        <h3 id="h-chan">Metode pembayaran</h3>
+        <p class="hint">Yang hidup tampil di layar Pembayaran. Nyalakan hanya metode yang sudah aktif di dasbor Midtrans (Payment Methods); yang belum aktif akan gagal saat dibayar. Virtual account tampil bila minimal satu bank hidup.</p>
+        <div class="chan-groups">${[...new Set(PAY_CHANNELS.map((c) => c.group))].map((g) => `
+          <fieldset class="chan-group"><legend>${esc(g)}</legend><div class="auto-rules">
+            ${PAY_CHANNELS.filter((c) => c.group === g).map((c) => `
+              <div class="auto-rule"><span><b>${esc(c.name)}</b></span>
+                <button type="button" class="switch bare" role="switch" data-chan="${c.id}" aria-checked="${chans.has(c.id)}" aria-label="${esc(c.name)}"><span class="knob"></span></button></div>`).join("")}
+          </div></fieldset>`).join("")}</div>
       </section>
 
       <div class="price-grid">
@@ -943,6 +955,17 @@ async function keuangan(body) {
     b.setAttribute("aria-checked", String(on));
     try { await rpc("admin_set_settings", { p_patch: { [b.dataset.flag]: on } }); toast("Tersimpan."); }
     catch (err) { b.setAttribute("aria-checked", String(!on)); toast(friendly(err)); }
+  }));
+  // Toggle metode pembayaran: simpan seluruh daftar kanal yang hidup
+  view.querySelectorAll("[data-chan]").forEach((b) => (b.onclick = async () => {
+    const id = b.dataset.chan, on = !chans.has(id);
+    if (!on && chans.size === 1) return toast("Minimal satu metode pembayaran harus aktif.");
+    const flip = (v) => { v ? chans.add(id) : chans.delete(id); b.setAttribute("aria-checked", String(v)); };
+    flip(on);   // langsung, supaya klik cepat di toggle lain memakai daftar terbaru
+    try {
+      await rpc("admin_set_settings", { p_patch: { pay_channels: PAY_CHANNELS.map((c) => c.id).filter((c) => chans.has(c)) } });
+      toast(`${PAY_CHANNELS.find((c) => c.id === id).name} ${on ? "diaktifkan" : "dinonaktifkan"}.`);
+    } catch (err) { flip(!on); toast(friendly(err)); }
   }));
   view.querySelector(".mid-form").onsubmit = async (e) => {
     e.preventDefault();

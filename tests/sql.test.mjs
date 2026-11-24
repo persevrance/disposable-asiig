@@ -733,6 +733,19 @@ const mv = (await as("host", `select start_order($1, null, null, null, 'va') o`,
 ok(mv.id !== mq.id && mv.pay_method === "va", "other method creates new order");
 ok((await db.query(`select status from orders where id = $1`, [mq.id])).rows[0].status === "expired", "previous method order expired");
 await expectErr("host", `select start_order($1, null, null, null, 'bitcoin')`, [dm], "METODE_TIDAK_DIKENAL");
+// Toggle metode pembayaran (Keuangan): default tanpa ShopeePay dan BCA; yang mati ditolak
+ok(JSON.stringify((await as("host", `select price_settings() p`))[0].p.pay_channels) === '["qris","gopay","bni_va","bri_va","permata_va","cimb_va","echannel"]', "pay_channels default");
+await expectErr("host", `select start_order($1, null, null, null, 'shopeepay')`, [dm], "METODE_NONAKTIF");
+await as("admin", `select admin_set_settings($1)`, [{ pay_channels: ["gopay", "bni_va"] }]);
+await expectErr("host", `select start_order($1, null, null, null, 'qris')`, [dm], "METODE_NONAKTIF");
+const mva = (await as("host", `select start_order($1, null, null, null, 'va') o`, [dm]))[0].o;
+ok(JSON.stringify(mva.pay_channels) === '["gopay","bni_va"]', "start_order returns pay_channels for worker");
+await as("admin", `select admin_set_settings($1)`, [{ pay_channels: ["gopay"] }]);
+await expectErr("host", `select start_order($1, null, null, null, 'va')`, [dm], "METODE_NONAKTIF");
+await expectErr("admin", `select admin_set_settings($1)`, [{ pay_channels: [] }], "pay_channels_check");
+await expectErr("admin", `select admin_set_settings($1)`, [{ pay_channels: ["bitcoin"] }], "pay_channels_check");
+await expectErr("host", `select admin_set_settings($1)`, [{ pay_channels: ["qris"] }], "");
+await as("admin", `select admin_set_settings($1)`, [{ pay_channels: ["qris", "gopay", "bni_va", "bri_va", "permata_va", "cimb_va", "echannel"] }]);
 await as("admin", `select delete_event($1)`, [dm]);
 
 // ---- Harga v3: masa simpan foto, batas jepretan per rentang harga, Unlimited ----

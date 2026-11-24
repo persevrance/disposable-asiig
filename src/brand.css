@@ -742,6 +742,8 @@ html.dark .tile img { background: #1a2233; }
 .auto-rule + .auto-rule { border-top: 1px solid var(--line); }
 .auto-rule > span { display: grid; gap: 2px; flex: 1; }
 .auto-rule small { color: var(--muted); font-size: .82rem; }
+.chan-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 1rem; }
+.chan-groups .auto-rule { padding: .35rem 0; }
 .queue-table td.row { flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 720px) {
   .mode-radios { width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }

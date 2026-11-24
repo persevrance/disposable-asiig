@@ -1349,6 +1349,10 @@ begin
     keep_max_days       = coalesce((p_patch->>'keep_max_days')::int, keep_max_days),
     reschedule_per_day  = coalesce((p_patch->>'reschedule_per_day')::int, reschedule_per_day),
     reschedule_same_day = coalesce((p_patch->>'reschedule_same_day')::int, reschedule_same_day),
+    pay_channels        = case when jsonb_typeof(p_patch->'pay_channels') = 'array'
+                               then array(select x from jsonb_array_elements_text(p_patch->'pay_channels') with ordinality t(x, i)
+                                          group by x order by min(i))
+                               else pay_channels end,
     photo_mb_estimate   = coalesce((p_patch->>'photo_mb_estimate')::numeric, photo_mb_estimate),
     email_enabled       = coalesce((p_patch->>'email_enabled')::boolean, email_enabled),
     email_daily_cap     = coalesce((p_patch->>'email_daily_cap')::int, email_daily_cap),
@@ -2554,6 +2558,19 @@ alter table orders
   add column if not exists reschedule_fee int not null default 0 check (reschedule_fee >= 0);
 alter table orders add column if not exists pay_method text
   check (pay_method is null or pay_method in ('qris', 'gopay', 'shopeepay', 'va'));
+-- Kanal Midtrans yang dinyalakan superadmin (Dashboard → Keuangan → Metode pembayaran).
+-- Metode di layar Pembayaran hanya muncul bila kanalnya hidup; Virtual account muncul bila
+-- minimal satu bank hidup, dan popup Snap hanya menampilkan bank yang hidup.
+alter table app_settings add column if not exists pay_channels text[] not null
+  default array['qris', 'gopay', 'bni_va', 'bri_va', 'permata_va', 'cimb_va', 'echannel']
+  check (cardinality(pay_channels) >= 1 and pay_channels <@ array['qris', 'gopay', 'shopeepay',
+         'bca_va', 'bni_va', 'bri_va', 'permata_va', 'cimb_va', 'echannel']);
+create or replace function pay_method_enabled(p_channels text[], p_method text) returns boolean
+language sql immutable as $$
+  select case when p_method = 'va'
+              then p_channels && array['bca_va', 'bni_va', 'bri_va', 'permata_va', 'cimb_va', 'echannel']
+              else p_method = any(p_channels) end;
+$$;
 create index if not exists orders_event on orders (event_id, created_at desc);
 create index if not exists orders_status on orders (status, created_at desc);
 alter table promo_codes enable row level security;
@@ -2606,7 +2623,7 @@ language sql stable security definer set search_path = public as $$
     'price_unlimited', s.price_unlimited, 'keep_free_days', s.keep_free_days, 'keep_per_day', s.keep_per_day,
     'keep_flat_days', s.keep_flat_days, 'keep_flat', s.keep_flat, 'keep_max_days', s.keep_max_days,
     'reschedule_per_day', s.reschedule_per_day, 'reschedule_same_day', s.reschedule_same_day,
-    'shots_cap', shots_cap())
+    'pay_channels', s.pay_channels, 'shots_cap', shots_cap())
     from app_settings s;
 $$;
 
@@ -2793,6 +2810,9 @@ begin
   if v_method is not null and v_method not in ('qris', 'gopay', 'shopeepay', 'va') then
     raise exception 'METODE_TIDAK_DIKENAL';
   end if;
+  if v_method is not null and not pay_method_enabled(s.pay_channels, v_method) then
+    raise exception 'METODE_NONAKTIF';
+  end if;
   select * into e from events where id = p_event for update;
   if not found then raise exception 'ACARA_TIDAK_ADA'; end if;
   if e.owner_id <> auth.uid() and not is_superadmin() then raise exception 'BUKAN_PEMILIK'; end if;
@@ -2874,7 +2894,8 @@ begin
     end if;
   end if;
   return to_jsonb(o) - 'user_id' || jsonb_build_object('window_min', s.payment_window_min,
-                                                       'production', s.midtrans_production);
+                                                       'production', s.midtrans_production,
+                                                       'pay_channels', s.pay_channels);
 end $$;
 
 -- Edge Function create-order (service role): simpan token Snap

@@ -69,6 +69,16 @@ for (const [method, want] of [["qris", ["other_qris"]], ["gopay", ["gopay"]], ["
   const sn2 = calls.find((c) => c.url.includes("/snap/v1/transactions"));
   ok(so2.body.p_method === method && JSON.stringify(sn2.body.enabled_payments) === JSON.stringify(want) && b.pay_method === method, `method ${method} -> ${want.join(",")}`);
 }
+// Virtual account hanya membuka bank yang dinyalakan (pay_channels dari start_order)
+order = { ...order, snap_token: null, pay_method: "va", pay_channels: ["qris", "bni_va", "echannel"] };
+calls = [];
+[s, b] = await call("/api/pay/checkout", { event_id: "e1", method: "va" }, { Authorization: "Bearer user-jwt" });
+ok(JSON.stringify(calls.find((c) => c.url.includes("/snap/v1/transactions")).body.enabled_payments) === '["bni_va","echannel"]' && !("pay_channels" in b), "va filtered by pay_channels, not exposed");
+order = { ...order, snap_token: null, pay_method: "gopay" };
+calls = [];
+await call("/api/pay/checkout", { event_id: "e1", method: "gopay" }, { Authorization: "Bearer user-jwt" });
+ok(JSON.stringify(calls.find((c) => c.url.includes("/snap/v1/transactions")).body.enabled_payments) === '["gopay"]', "non-va unaffected by pay_channels");
+delete order.pay_channels;
 // Tanpa metode: memakai rahasia MIDTRANS_ENABLED_PAYMENTS
 order = { ...order, snap_token: null, pay_method: null };
 calls = [];

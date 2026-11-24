@@ -58,16 +58,37 @@ const PAY_LABEL = {
   echannel: "Mandiri Bill", credit_card: "Kartu kredit", cstore: "Gerai retail", akulaku: "Akulaku", tanpa_biaya: "Tanpa biaya",
 };
 // Metode yang bisa dipilih di layar Pembayaran (dipetakan ke enabled_payments di worker/pay.js).
-// ShopeePay disembunyikan: belum diajukan di Midtrans produksi. Worker dan database masih
-// menerimanya, jadi untuk membukanya lagi cukup kembalikan baris ini:
-//   { id: "shopeepay", name: "ShopeePay", desc: "Buka aplikasi ShopeePay" },
+// Yang tampil hanya yang kanalnya dinyalakan superadmin (Keuangan → Metode pembayaran,
+// app_settings.pay_channels); Virtual account tampil bila minimal satu bank hidup.
 const METHODS = [
   { id: "qris", name: "QRIS", desc: "Scan dari semua e-wallet & m-banking" },
   { id: "gopay", name: "GoPay", desc: "Buka aplikasi GoPay" },
-  { id: "va", name: "Virtual account", desc: "BNI, BRI, Permata, CIMB, Mandiri" },
+  { id: "shopeepay", name: "ShopeePay", desc: "Buka aplikasi ShopeePay" },
+  { id: "va", name: "Virtual account", desc: "" },
 ];
+// Kanal Midtrans untuk tiap metode, juga dipakai panel Keuangan untuk daftar toggle
+export const PAY_CHANNELS = [
+  { id: "qris", name: "QRIS", group: "E-money / QRIS" },
+  { id: "gopay", name: "GoPay", group: "E-money / QRIS" },
+  { id: "shopeepay", name: "ShopeePay", group: "E-money / QRIS" },
+  { id: "bca_va", name: "BCA", group: "Virtual account" },
+  { id: "bni_va", name: "BNI", group: "Virtual account" },
+  { id: "bri_va", name: "BRI", group: "Virtual account" },
+  { id: "permata_va", name: "Permata", group: "Virtual account" },
+  { id: "cimb_va", name: "CIMB Niaga", group: "Virtual account" },
+  { id: "echannel", name: "Mandiri", group: "Virtual account" },
+];
+export const DEFAULT_PAY_CHANNELS = ["qris", "gopay", "bni_va", "bri_va", "permata_va", "cimb_va", "echannel"];
+// Metode yang aktif menurut price_settings().pay_channels, dengan keterangan bank VA yang hidup
+function activeMethods(cfg) {
+  const on = new Set(Array.isArray(cfg?.pay_channels) ? cfg.pay_channels : DEFAULT_PAY_CHANNELS);
+  const banks = PAY_CHANNELS.filter((c) => c.group === "Virtual account" && on.has(c.id)).map((c) => c.name.split(" ")[0]);
+  return METHODS.flatMap((m) => (m.id === "va"
+    ? (banks.length ? [{ ...m, desc: banks.join(", ") }] : [])
+    : (on.has(m.id) ? [m] : [])));
+}
 const METHOD_KEY = "payMethod";
-const loadMethod = () => { try { const v = localStorage.getItem(METHOD_KEY); return METHODS.some((m) => m.id === v) ? v : "qris"; } catch { return "qris"; } };
+const loadMethod = () => { try { return localStorage.getItem(METHOD_KEY) || "qris"; } catch { return "qris"; } };
 const saveMethod = (v) => { try { localStorage.setItem(METHOD_KEY, v); } catch { /* abaikan */ } };
 const methodName = (id) => METHODS.find((m) => m.id === id)?.name || "";
 const metaLine = (ev) => [fmtRange(ev.starts_at, ev.ends_at), `${ev.max_shots} potretan`].filter(Boolean).join(" · ");
@@ -93,6 +114,9 @@ export function mountPayment(host, ev, opts = {}) {
         priceSettings(),
       ]);
     } catch (e) { host.innerHTML = `<p class="hint">${esc(friendly(e))}</p>`; return; }
+    const methods = activeMethods(cfg);
+    if (!methods.some((m) => m.id === method)) method = methods[0]?.id || null;
+    const noMethod = Boolean(q.amount) && !methods.length;
     host.innerHTML = `
       <div class="pay">
         <div class="pay-head">
@@ -122,9 +146,10 @@ export function mountPayment(host, ev, opts = {}) {
           </form>
           ${q.promo_error ? `<p class="pay-err" role="alert">${esc(friendly(q.promo_error))}</p>` : ""}
         </div>
-        ${q.amount ? `<div class="pay-methods">
+        ${noMethod ? `<p class="pay-err" role="alert">Belum ada metode pembayaran yang aktif. Coba lagi nanti atau hubungi kami.</p>` : ""}
+        ${q.amount && methods.length ? `<div class="pay-methods">
           <b id="pay-m-label">Metode pembayaran</b>
-          <div class="pay-method-grid" role="radiogroup" aria-labelledby="pay-m-label">${METHODS.map((m) => `
+          <div class="pay-method-grid" role="radiogroup" aria-labelledby="pay-m-label">${methods.map((m) => `
             <button type="button" class="pay-method-opt" role="radio" data-method="${m.id}" aria-checked="${m.id === method}" tabindex="${m.id === method ? 0 : -1}">
               <i aria-hidden="true"></i><span><b>${m.name}</b><small>${m.desc}</small></span></button>`).join("")}
           </div>
@@ -134,7 +159,7 @@ export function mountPayment(host, ev, opts = {}) {
           ? "Perubahan berlaku begitu pembayaran terkonfirmasi. Tamu yang sudah masuk tidak terganggu."
           : "Acara tersimpan sebagai draf. Begitu pembayaran terkonfirmasi, acara langsung aktif dan QR siap dibagikan."}</span></p>
         <div class="pay-actions">
-          <button type="button" class="btn primary" data-act="pay">${q.amount ? `Bayar ${rp(q.amount)} dengan ${methodName(method)}` : "Aktifkan tanpa biaya"}</button>
+          <button type="button" class="btn primary" data-act="pay"${noMethod ? " disabled" : ""}>${q.amount ? `Bayar ${rp(q.amount)} dengan ${methodName(method)}` : "Aktifkan tanpa biaya"}</button>
           <p class="hint">Dengan membayar, kamu menyetujui <a href="/syarat.html" target="_blank" rel="noopener">Syarat layanan</a> dan <a href="/pengembalian-dana.html" target="_blank" rel="noopener">Kebijakan pengembalian dana</a>.</p>
         </div>
       </div>`;
@@ -158,7 +183,7 @@ export function mountPayment(host, ev, opts = {}) {
         const d = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
         if (!d) return;
         e.preventDefault();
-        const ids = METHODS.map((m) => m.id);
+        const ids = methods.map((m) => m.id);
         pick(ids[(ids.indexOf(method) + d + ids.length) % ids.length], true);
       };
     }
@@ -173,6 +198,8 @@ export function mountPayment(host, ev, opts = {}) {
       waiting();
     } catch (e) {
       toast(friendly(e), 6000);
+      // Metode baru saja dimatikan admin: muat ulang daftar metode
+      if (String(e?.message || "").includes("METODE_NONAKTIF")) { await priceSettings(true).catch(() => null); return summary(); }
       btn.disabled = false; btn.textContent = "Coba lagi";
     }
   }
